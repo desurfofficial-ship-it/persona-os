@@ -37,8 +37,8 @@ export interface ExtractedClaim {
 }
 
 export interface Contradiction {
-  a: { quote: string; itemId: string; date: string };
-  b: { quote: string; itemId: string; date: string };
+  a: { quote: string; itemId: string; date: string; type?: string };
+  b: { quote: string; itemId: string; date: string; type?: string };
   why: string;
   severity: "high" | "medium" | "low";
   resolution: string;
@@ -160,8 +160,8 @@ export function deterministicContradictions(items: ScanItem[]): Contradiction[] 
 
   const push = (A: { item: ScanItem; quote: string; slot: string }, B: { item: ScanItem; quote: string; slot: string }) => {
     out.push({
-      a: { quote: A.quote.slice(0, 200), itemId: A.item.id, date: A.item.createdAt },
-      b: { quote: B.quote.slice(0, 200), itemId: B.item.id, date: B.item.createdAt },
+      a: { quote: A.quote.slice(0, 200), itemId: A.item.id, date: A.item.createdAt, type: A.item.type },
+      b: { quote: B.quote.slice(0, 200), itemId: B.item.id, date: B.item.createdAt, type: B.item.type },
       why: `These two posts take opposite positions on the same fact (${A.slot}). Followers notice this first.`,
       severity: A.slot === "diet" || A.slot === "alcohol" ? "high" : "medium",
       resolution:

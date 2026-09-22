@@ -66,8 +66,37 @@ export default function FromPostsPage() {
 
       if (insertError) throw insertError;
 
-      // Keep the loop going: persona created → first generation immediately.
       const newId = (created as any)?.[0]?.id;
+
+      // Keep the user's REAL posts. They are the most valuable consistency
+      // evidence the product has: the Consistency Engine scans them for
+      // contradictions against everything generated later, and the voice
+      // curator can import them as gold samples. Already published, so
+      // they land as posted drafts of type "imported".
+      const pastedPosts = posts
+        .split(/\n\s*\n/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 3)
+        .slice(0, 20);
+      if (newId && pastedPosts.length > 0) {
+        // One insert per post — works on both the local shim and real Supabase.
+        // Failure here must never block persona creation.
+        for (const content of pastedPosts) {
+          const { error: rowError } = await supabase.from("content_drafts").insert({
+            persona_id: newId,
+            user_id: user.id,
+            type: "imported",
+            content,
+            posted: true,
+          });
+          if (rowError) {
+            console.error("Imported post could not be saved:", rowError);
+            break;
+          }
+        }
+      }
+
+      // Keep the loop going: persona created → first generation immediately.
       router.push(
         newId ? `/dashboard/generate?persona=${newId}&first=1` : "/dashboard/generate?first=1"
       );
@@ -112,6 +141,11 @@ export default function FromPostsPage() {
               placeholder="Paste real posts here...\n\nPost 1\n\nPost 2\n\nPost 3"
               className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
             />
+            <p className="text-xs text-zinc-500 mt-2">
+              These posts are saved as your persona&apos;s history — the Consistency Engine
+              cross-checks everything you generate against them, so old claims and new ones never
+              quietly drift apart.
+            </p>
           </div>
 
           <button

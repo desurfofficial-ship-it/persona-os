@@ -156,3 +156,23 @@ Stage Summary:
 - All four pillars now exist and are verified against the user's spec wording; biggest new build is the cross-post Consistency Engine (the literal spec item "flags contradictions across posts/scripts").
 - Supabase migration note: content_drafts needs new jsonb column `metrics` (prisma equivalent shipped); pages still use the same supabase-js surface so the real deployment needs no page changes.
 - Next ICP round should attack the new surfaces: scan false-positive rate, metrics entry friction, queue guilt.
+
+---
+Task ID: 8
+Agent: Super Z (main agent)
+Task: "Go" — Round 3 of the Break→Fix→Harden→ICP loop, attacking the four new pillar surfaces (consistency scan, metrics entry, scheduling queue, vault search).
+
+Work Log:
+- Repo state repaired: local checkout was stale on main; fetched + checked out four-pillars (9d9a8ab). Found src/lib/local-session.ts existed ONLY in the running outer copy (outer /home/z/my-project/src is the live app; persona-os/ is the repo mirror — verified byte-identical apart from local-* backend routes).
+- BREAK pass over all four pillars, 9 real breaks found: (1) Consistency Engine tells users to "fix the draft" but no draft edit capability existed anywhere; (2) contradiction cards had no path to the drafts; (3) from-posts DISCARDED pasted posts after persona creation — real post history never entered the scan pool (the engine's core value); (4) generate-page "Check it" navigated away to /check (slow loop); (5) metric inputs type=number: "12,500" parsed to 12, "1.2K" to 1; (6) empty metrics form could save all-zero junk rows skewing avgViews; (7) vault upload silently disabled with no personas; (8) draft card = 8-button wall on mobile + badge text wrapping; (9) repo didn't compile standalone (local-session.ts gitignored via local-* rule).
+- FIXES SHIPPED: parseCount() lenient parser in metrics.ts (commas/k/m/b, junk→null) wired to text inputs + Save disabled until any value > 0; inline draft Edit (textarea in card, optimistic save, DB persisted); ConsistencyPanel cards now link "Find & edit these drafts →" to /dashboard/drafts?q=<quote> and drafts page reads ?q= to prefill search; from-posts persists pasted posts as posted=true type="imported" drafts (up to 20, sequential inserts shim-safe, failure never blocks persona creation) + UI note; inline check chip on generate cards (same /api/check engine, verdict + top-3 breaks on-card, Full report deep link retained); vault no-persona empty state with "Build a persona" CTA; draft card actions restructured (Plan day / Mark Posted / Log performance / Edit primary, ⋯ overflow menu for Improve/Copy&open X/Copy&open LinkedIn/Copy/Delete) + badges whitespace-nowrap + header stacks on mobile.
+- ICP feedback fixes: contradiction sides now carry draft type ("your real post" / "X post" / "caption"...) shown on cards; scan response includes scannedAt, panel renders "Scanned X ago · Edited or added anything since? Re-scan"; deep-link empty state says "you may have already edited or fixed the wording" with Clear search & filters button.
+- Tests: scripts/test-round3.ts 24/24 (parseCount 15, paste-split 5, imported-in-scan-pool 4 incl. vegan-imported-vs-steak-generated flag + clean control); regressions 33/33 + 45/45; tsc clean; eslint clean.
+- Browser-verified end-to-end: persona from pasted posts → 4 imported drafts in DB; contradictory steak generation → inline check "Needs changes · 90/100" on-card; scan 30/100 catching vegan-vs-ribs across imported+generated; deep link filtered drafts to exact quote; ⋯ menu items; inline edit persisted to DB ("reward through" wording swap); "12,500"→12500 + "1.2K"→1200 in DB metrics; Performance panel "1 logged · avg 12.5K views"; scan-age note; fixed-it empty state + clear; mobile 390px screenshots download/round3-drafts-mobile2.png (fixed), desktop round3-drafts-desktop.png.
+- Committed 953a838 + 49f1954 (gitignore exception for local-session.ts), pushed four-pillars:four-pillars, PAT scrubbed from remote config.
+
+Stage Summary:
+- The consistency loop is now CLOSED end-to-end: real posts in the pool → contradictions flagged with type labels → one click to the exact drafts → edit in place → re-scan honest about staleness.
+- Metrics entry no longer lies about numbers; generation checks stay on-card; mobile drafts are scannable.
+- Next round should attack: auto-tag coverage for imported drafts, scan progress/streaming UX, per-platform metric logging from the queue, and the remaining ICP wants (scrub-undo for polish, thread composer, scheduled auto-generate).
+- PAT rotation reminder re-issued (PAT used for push this session).

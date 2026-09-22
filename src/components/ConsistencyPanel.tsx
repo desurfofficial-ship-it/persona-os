@@ -4,8 +4,8 @@ import { useState } from "react";
 import { authedFetch } from "@/lib/supabase";
 
 interface Contradiction {
-  a: { quote: string; itemId: string; date: string };
-  b: { quote: string; itemId: string; date: string };
+  a: { quote: string; itemId: string; date: string; type?: string };
+  b: { quote: string; itemId: string; date: string; type?: string };
   why: string;
   severity: "high" | "medium" | "low";
   resolution: string;
@@ -17,6 +17,7 @@ interface ScanResult {
   contradictions: Contradiction[];
   scanned: number;
   scannedPosted?: number;
+  scannedAt?: string;
   note?: string;
 }
 
@@ -34,6 +35,32 @@ function scoreColor(score: number): string {
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  imported: "your real post",
+  x_post: "X post",
+  linkedin_post: "LinkedIn post",
+  caption: "caption",
+  script: "script",
+  story_arc: "story arc",
+  image_prompt: "image prompt",
+};
+
+function typeLabel(type?: string): string {
+  if (!type) return "content";
+  return TYPE_LABELS[type] || type.replace(/_/g, " ");
+}
+
+function scanAge(iso?: string): string | null {
+  if (!iso) return null;
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.round(hrs / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 export default function ConsistencyPanel({ personaId }: { personaId: string }) {
@@ -106,6 +133,12 @@ export default function ConsistencyPanel({ personaId }: { personaId: string }) {
           {result.note && (
             <p className="text-sm text-zinc-500 mb-3">{result.note}</p>
           )}
+          {result.scannedAt && (
+            <p className="text-xs text-zinc-500 mb-3">
+              Scanned {scanAge(result.scannedAt)} · {result.scanned} pieces of content. Edited or
+              added anything since? Re-scan — results don&apos;t update themselves.
+            </p>
+          )}
           {result.contradictions.length === 0 ? (
             <div className="flex items-center gap-3 bg-green-900/20 border border-green-800/50 rounded-lg p-4">
               <span className="text-green-400 text-lg">✓</span>
@@ -133,7 +166,8 @@ export default function ConsistencyPanel({ personaId }: { personaId: string }) {
                       {c.severity} · {c.source === "deterministic" ? "exact match" : "contextual"}
                     </span>
                     <span className="text-[10px] opacity-70">
-                      {fmtDate(c.a.date)} vs {fmtDate(c.b.date)}
+                      {typeLabel(c.a.type)} · {fmtDate(c.a.date)} vs {typeLabel(c.b.type)} ·{" "}
+                      {fmtDate(c.b.date)}
                     </span>
                   </div>
                   <div className="grid sm:grid-cols-2 gap-2 mb-2">
@@ -150,6 +184,13 @@ export default function ConsistencyPanel({ personaId }: { personaId: string }) {
                       <span className="font-medium">Fix:</span> {c.resolution}
                     </p>
                   )}
+                  {/* Close the loop: jump into drafts pre-filtered to this quote. */}
+                  <a
+                    href={`/dashboard/drafts?q=${encodeURIComponent(c.a.quote.split(" ").slice(0, 6).join(" "))}`}
+                    className="inline-block mt-2 text-xs underline opacity-80 hover:opacity-100"
+                  >
+                    Find &amp; edit these drafts →
+                  </a>
                 </div>
               ))}
             </div>

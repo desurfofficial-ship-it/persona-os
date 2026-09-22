@@ -46,6 +46,25 @@ export interface PerformanceSummary {
   platforms: PlatformRollup[];
 }
 
+/**
+ * Lenient count parser — creators paste numbers the way platforms show them:
+ * "12,500", "1.2K", "3.4M", " 980 " all parse. Returns null when the string
+ * holds no digits at all (so an untouched field can stay untouched).
+ */
+export function parseCount(raw: string | number | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "number") return Number.isFinite(raw) && raw >= 0 ? Math.round(raw) : null;
+  const s = raw.trim().toLowerCase();
+  if (!s) return null;
+  const m = s.match(/^([\d.,]+)\s*(k|m|b)?$/);
+  if (!m) return null;
+  const numericPart = m[1].replace(/,/g, "");
+  const n = Number(numericPart);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const mult = m[2] === "k" ? 1_000 : m[2] === "m" ? 1_000_000 : m[2] === "b" ? 1_000_000_000 : 1;
+  return Math.round(n * mult);
+}
+
 export function parseMetrics(raw: unknown): DraftMetrics | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
