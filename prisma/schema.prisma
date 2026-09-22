@@ -110,6 +110,8 @@ model GoalAlert {
   dedupeKey String   @unique
   /// Draft id when the trigger auto-generated content for the persona.
   draftId   String?
+  /// Set when the user has seen the alert (unread badge + auto mark-read).
+  readAt    DateTime?
   createdAt DateTime @default(now())
 
   @@index([userId])

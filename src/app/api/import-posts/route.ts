@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { userFromRequest } from "@/lib/local-session";
 
 /**
  * Read-only post import: best-effort fetch of a public profile's recent posts
@@ -89,6 +90,12 @@ async function fetchWithTimeout(url: string, ms: number): Promise<string | null>
 }
 
 export async function POST(req: NextRequest) {
+  // Agent-family routes are never public: AI quota belongs to signed-in users.
+  const authUserId = userFromRequest(req);
+  if (!authUserId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
   let rawUrl = "";
   try {
     ({ url: rawUrl } = await req.json());

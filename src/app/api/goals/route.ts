@@ -91,6 +91,40 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ goal });
 }
 
+export async function PATCH(req: NextRequest) {
+  const userId = await resolveUserId(req);
+  if (!userId) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  let body: { id?: string; status?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const id = body.id || "";
+  const status = (body.status || "").toLowerCase();
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  if (!new Set(["active", "paused"]).has(status)) {
+    return NextResponse.json({ error: "status must be active or paused" }, { status: 400 });
+  }
+
+  const goal = await db.contentGoal.findFirst({ where: { id, userId } });
+  if (!goal) return NextResponse.json({ error: "Goal not found" }, { status: 404 });
+
+  // Resuming clears the failure slate and schedules the next check now,
+  // so a paused goal never sits on a stale next_check_at from weeks ago.
+  const updated = await db.contentGoal.update({
+    where: { id },
+    data: {
+      status,
+      ...(status === "active" ? { failureCount: 0, nextCheckAt: new Date() } : {}),
+    },
+  });
+
+  return NextResponse.json({ goal: updated });
+}
+
 export async function DELETE(req: NextRequest) {
   const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });

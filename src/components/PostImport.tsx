@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { authedFetch } from "@/lib/supabase";
 
 /**
  * Read-only profile import panel: paste an X / LinkedIn profile URL, we try
@@ -32,7 +33,7 @@ export default function PostImport({ onAddPosts }: Props) {
     setAdded(false);
 
     try {
-      const res = await fetch("/api/import-posts", {
+      const res = await authedFetch("/api/import-posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
