@@ -44,6 +44,15 @@ yarn-error.log*
 next-env.d.ts
 local-*
 !src/lib/local-session.ts
+# Preview backend routes — unignored so the repo runs standalone in the
+# sandbox preview. A real deployment never mounts them (Supabase Auth/DB/
+# Storage replace all three), but they are part of the working product.
+!src/app/api/local-auth/
+!src/app/api/local-auth/**
+!src/app/api/local-db/
+!src/app/api/local-db/**
+!src/app/api/local-storage/
+!src/app/api/local-storage/**
 .claude
 .z-ai-config
 *.log

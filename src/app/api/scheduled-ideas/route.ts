@@ -19,6 +19,11 @@ import type { VoiceSample } from "@/types/persona";
  * draft is written the first time the user opens the app on/after the due
  * day — the dashboard triggers this endpoint automatically when the user
  * has auto-write enabled, or via the "Draft it now" button.
+ *
+ * PATCH: edit the idea BEFORE its due day — reword the topic, move the day,
+ * or toggle auto-write off (write it yourself when it lands in Drafts).
+ * Only untouched ideas (no content yet) are editable; once drafted it's a
+ * normal draft and the drafts-page editor takes over.
  */
 export async function POST(req: NextRequest) {
   const userId = userFromRequest(req);
@@ -131,4 +136,72 @@ export async function POST(req: NextRequest) {
     console.error("scheduled-ideas draft error:", err);
     return NextResponse.json({ error: message.slice(0, 200) }, { status: 502 });
   }
+}
+
+/** Edit an untouched idea: reword the topic, move the day, or turn auto-write off. */
+export async function PATCH(req: NextRequest) {
+  const userId = userFromRequest(req);
+  if (!userId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  let body: { ideaId?: string; topic?: string; plannedFor?: string | null; autoFill?: boolean };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const ideaId = body.ideaId || "";
+  if (!ideaId) return NextResponse.json({ error: "ideaId required" }, { status: 400 });
+
+  const idea = await db.contentDraft.findFirst({ where: { id: ideaId, userId } });
+  if (!idea) return NextResponse.json({ error: "Idea not found" }, { status: 404 });
+  if (idea.type !== "scheduled_idea" || idea.content.trim()) {
+    return NextResponse.json(
+      { error: "This idea is already drafted — edit it on the Drafts page" },
+      { status: 409 }
+    );
+  }
+
+  const data: { topic?: string; plannedFor?: Date | null; autoFill?: boolean } = {};
+
+  if (body.topic !== undefined) {
+    const topic = body.topic.trim();
+    if (!topic) return NextResponse.json({ error: "topic cannot be empty" }, { status: 400 });
+    if (topic.length > 500) return NextResponse.json({ error: "topic too long (500 max)" }, { status: 400 });
+    data.topic = topic;
+  }
+
+  if (body.plannedFor !== undefined) {
+    if (body.plannedFor === null || body.plannedFor === "") {
+      data.plannedFor = null;
+    } else {
+      const parsed = new Date(body.plannedFor);
+      if (Number.isNaN(parsed.getTime())) {
+        return NextResponse.json({ error: "plannedFor must be an ISO date" }, { status: 400 });
+      }
+      data.plannedFor = parsed;
+    }
+  }
+
+  if (body.autoFill !== undefined) {
+    data.autoFill = Boolean(body.autoFill);
+  }
+
+  if (!Object.keys(data).length) {
+    return NextResponse.json({ error: "nothing to update" }, { status: 400 });
+  }
+
+  const updated = await db.contentDraft.update({ where: { id: idea.id }, data });
+
+  return NextResponse.json({
+    ok: true,
+    idea: {
+      id: updated.id,
+      topic: updated.topic,
+      planned_for: updated.plannedFor,
+      auto_fill: updated.autoFill,
+    },
+  });
 }

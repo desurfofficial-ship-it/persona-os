@@ -19,12 +19,16 @@ export function stripAllNumbering(posts: string[]): string[] {
 }
 
 /**
- * Re-apply "i/N " numbering only when it still fits inside `limit`.
+ * Re-apply "i/N " numbering only when it still fits inside `limit`, and only
+ * when the platform actually numbers its threads (`numbered`): X threads are
+ * numbered 1/, 2/, …; LinkedIn has no native threading, so long posts split
+ * into clean unnumbered parts the user pastes one after another.
  * Mirrors splitThread's overflow rule: if the tag would push a post over
  * the limit, that post ships untagged rather than truncated.
  */
-export function renumber(posts: string[], limit: number): string[] {
+export function renumber(posts: string[], limit: number, numbered = true): string[] {
   if (posts.length <= 1) return posts.map(stripNumbering);
+  if (!numbered) return posts.map(stripNumbering);
   const n = posts.length;
   return posts.map((p, i) => {
     const clean = stripNumbering(p);
