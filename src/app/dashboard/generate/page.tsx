@@ -26,6 +26,7 @@ function GenerateContent() {
   const [results, setResults] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -78,7 +79,6 @@ function GenerateContent() {
 
         allResults.push(data.content);
 
-        // Save each as draft
         const {
           data: { user },
         } = await supabase.auth.getUser();
@@ -97,6 +97,47 @@ function GenerateContent() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleQuickRewrite = async (index: number, instruction: string) => {
+    if (!selectedPersona) return;
+    setRewritingIndex(index);
+
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona: selectedPersona,
+          type,
+          topic: `${instruction}\n\nOriginal:\n${results[index]}`,
+          model,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Rewrite failed");
+
+      const newResults = [...results];
+      newResults[index] = data.content;
+      setResults(newResults);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from("content_drafts").insert({
+          persona_id: selectedPersona.id,
+          user_id: user.id,
+          type,
+          content: data.content,
+        });
+      }
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRewritingIndex(null);
     }
   };
 
@@ -196,7 +237,9 @@ function GenerateContent() {
             disabled={loading || !selectedPersona}
             className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
           >
-            {loading ? `Generating ${variations > 1 ? variations + " variations" : "..."}` : "Generate"}
+            {loading
+              ? `Generating ${variations > 1 ? variations + " variations" : "..."}`
+              : "Generate"}
           </button>
 
           {error && (
@@ -207,19 +250,44 @@ function GenerateContent() {
 
           {results.map((result, idx) => (
             <div key={idx} className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-              <div className="flex justify-between items-center mb-3">
+              <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                 <h3 className="font-medium">
                   {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
                 </h3>
-                <button
-                  onClick={() => navigator.clipboard.writeText(result)}
-                  className="text-xs text-zinc-400 hover:text-white"
-                >
-                  Copy
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
+                    disabled={rewritingIndex === idx}
+                    className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    Shorter
+                  </button>
+                  <button
+                    onClick={() => handleQuickRewrite(idx, "Make this longer and more detailed")}
+                    disabled={rewritingIndex === idx}
+                    className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    Longer
+                  </button>
+                  <button
+                    onClick={() =>
+                      handleQuickRewrite(idx, "Make this more aggressive and high-energy")
+                    }
+                    disabled={rewritingIndex === idx}
+                    className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    More Punch
+                  </button>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(result)}
+                    className="text-xs text-zinc-400 hover:text-white px-2 py-1"
+                  >
+                    Copy
+                  </button>
+                </div>
               </div>
               <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed">
-                {result}
+                {rewritingIndex === idx ? "Rewriting..." : result}
               </pre>
             </div>
           ))}
@@ -231,7 +299,11 @@ function GenerateContent() {
 
 export default function GeneratePage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>}>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>
+      }
+    >
       <GenerateContent />
     </Suspense>
   );

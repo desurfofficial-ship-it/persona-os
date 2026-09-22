@@ -92,7 +92,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // Reload
     const { data } = await supabase
       .from("personas")
       .select("*")
@@ -128,6 +127,9 @@ export default function DashboardPage() {
             <a href="/dashboard/series" className="text-zinc-400 hover:text-white">
               Series
             </a>
+            <a href="/dashboard/ideas" className="text-zinc-400 hover:text-white">
+              Ideas
+            </a>
             <a href="/dashboard/check" className="text-zinc-400 hover:text-white">
               Check
             </a>
@@ -143,34 +145,41 @@ export default function DashboardPage() {
           </nav>
         </header>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-12">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-12">
           <a
             href="/dashboard/generate"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
-            <h2 className="font-semibold mb-1">Generate</h2>
-            <p className="text-zinc-400 text-xs sm:text-sm">AI content</p>
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">Generate</h2>
+            <p className="text-zinc-400 text-xs">AI content</p>
           </a>
           <a
             href="/dashboard/series"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
-            <h2 className="font-semibold mb-1">Series</h2>
-            <p className="text-zinc-400 text-xs sm:text-sm">Multi-day plans</p>
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">Series</h2>
+            <p className="text-zinc-400 text-xs">Multi-day plans</p>
+          </a>
+          <a
+            href="/dashboard/ideas"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
+          >
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">Ideas</h2>
+            <p className="text-zinc-400 text-xs">Topic lists</p>
           </a>
           <a
             href="/dashboard/check"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
-            <h2 className="font-semibold mb-1">Check</h2>
-            <p className="text-zinc-400 text-xs sm:text-sm">Consistency</p>
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">Check</h2>
+            <p className="text-zinc-400 text-xs">Consistency</p>
           </a>
           <a
             href="/dashboard/personas/new"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
-            <h2 className="font-semibold mb-1">New Persona</h2>
-            <p className="text-zinc-400 text-xs sm:text-sm">Create</p>
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">New Persona</h2>
+            <p className="text-zinc-400 text-xs">Create</p>
           </a>
         </div>
 
@@ -203,7 +212,7 @@ export default function DashboardPage() {
                   className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition group relative"
                 >
                   <a href={`/dashboard/personas/${persona.id}`} className="block">
-                    <h3 className="text-lg font-semibold mb-2 pr-16">{persona.name}</h3>
+                    <h3 className="text-lg font-semibold mb-2 pr-20">{persona.name}</h3>
                     <p className="text-sm text-zinc-400 line-clamp-3 mb-3">
                       {persona.backstory || "No backstory."}
                     </p>
