@@ -70,3 +70,48 @@ model Asset {
   @@index([userId])
   @@index([personaId])
 }
+
+/// OpenMuse-style Goals & Tracking adapted for Persona OS:
+/// recurring public-page checks (e.g. TikTok tag pages) that raise
+/// deduplicated alerts and can auto-generate content for the persona.
+model ContentGoal {
+  id         String    @id @default(uuid())
+  personaId  String
+  userId     String
+  title      String
+  /// daily | weekly
+  recurrence String    @default("weekly")
+  checkUrl   String
+  /// active | paused | done
+  status     String    @default("active")
+  /// SHA-256 of the normalized page text from the last successful check.
+  lastStateHash String?
+  /// Short human-readable excerpt of the last snapshot (for the UI).
+  lastStateSample String?
+  lastCheckedAt DateTime?
+  /// Earliest time the next check is allowed (driven by recurrence + backoff).
+  nextCheckAt DateTime?
+  /// Consecutive failures — drives exponential backoff and auto-pause at 5.
+  failureCount Int     @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([personaId])
+}
+
+/// One alert per (goal, detected change). dedupeKey prevents re-alerting on
+/// the same snapshot hash until the page changes again.
+model GoalAlert {
+  id        String   @id @default(uuid())
+  goalId    String
+  userId    String
+  title     String
+  body      String
+  dedupeKey String   @unique
+  /// Draft id when the trigger auto-generated content for the persona.
+  draftId   String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([goalId])
+}
