@@ -5,6 +5,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
+const MODELS = [
+  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini (Fast & Cheap)" },
+  { id: "anthropic/claude-3.5-haiku", name: "Claude 3.5 Haiku" },
+  { id: "google/gemini-flash-1.5", name: "Gemini Flash" },
+  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B" },
+];
+
 function GenerateContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -14,6 +21,7 @@ function GenerateContent() {
   const [selectedId, setSelectedId] = useState(preselectedId || "");
   const [type, setType] = useState<"caption" | "script" | "story_arc" | "image_prompt">("caption");
   const [topic, setTopic] = useState("");
+  const [model, setModel] = useState("openai/gpt-4o-mini");
   const [result, setResult] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +65,7 @@ function GenerateContent() {
           persona: selectedPersona,
           type,
           topic,
+          model,
         }),
       });
 
@@ -68,7 +77,7 @@ function GenerateContent() {
 
       setResult(data.content);
 
-      // Optionally save the draft
+      // Save draft
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -98,7 +107,7 @@ function GenerateContent() {
         </div>
 
         <div className="space-y-6">
-          {/* Persona selector */}
+          {/* Persona */}
           <div>
             <label className="block text-sm text-zinc-400 mb-2">Persona</label>
             <select
@@ -106,6 +115,9 @@ function GenerateContent() {
               onChange={(e) => setSelectedId(e.target.value)}
               className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
             >
+              {personas.length === 0 && (
+                <option value="">No personas yet</option>
+              )}
               {personas.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -144,6 +156,22 @@ function GenerateContent() {
             </div>
           </div>
 
+          {/* Model */}
+          <div>
+            <label className="block text-sm text-zinc-400 mb-2">Model (OpenRouter)</label>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
+            >
+              {MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Topic */}
           <div>
             <label className="block text-sm text-zinc-400 mb-2">
@@ -167,7 +195,13 @@ function GenerateContent() {
 
           {error && (
             <div className="p-4 bg-red-900/40 border border-red-700 rounded-lg text-red-200 text-sm">
-              {error}
+              <p className="font-medium mb-1">Error</p>
+              <p>{error}</p>
+              {error.toLowerCase().includes("key") || error.toLowerCase().includes("auth") ? (
+                <p className="mt-2 text-red-300">
+                  Make sure OPENROUTER_API_KEY is set in your .env.local and you restarted the server.
+                </p>
+              ) : null}
             </div>
           )}
 
@@ -195,7 +229,13 @@ function GenerateContent() {
 
 export default function GeneratePage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>}>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-zinc-400">
+          Loading...
+        </div>
+      }
+    >
       <GenerateContent />
     </Suspense>
   );

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
-    const { persona, type, topic } = await req.json();
+    const { persona, type, topic, model } = await req.json();
 
     if (!persona || !type) {
       return NextResponse.json({ error: "Missing persona or type" }, { status: 400 });
@@ -44,10 +44,11 @@ STRICT RULES:
         userPrompt = `Generate content of type "${type}"${topic ? ` about ${topic}` : ""}.`;
     }
 
-    // Priority: OpenRouter > OpenAI > Anthropic
     const openrouterKey = process.env.OPENROUTER_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
     const anthropicKey = process.env.ANTHROPIC_API_KEY;
+
+    const selectedModel = model || "openai/gpt-4o-mini";
 
     if (openrouterKey) {
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -59,7 +60,7 @@ STRICT RULES:
           "X-Title": "Persona OS",
         },
         body: JSON.stringify({
-          model: "openai/gpt-4o-mini",
+          model: selectedModel,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -128,15 +129,9 @@ STRICT RULES:
       });
     }
 
-    // No key → simulated so UI still works
-    const simulated = `[Simulated ${type} — ${persona.name}]
-
-${userPrompt}
-
----
-Add OPENROUTER_API_KEY to .env.local for real generation.`;
-
-    return NextResponse.json({ content: simulated });
+    return NextResponse.json({
+      content: `[Simulated ${type} — ${persona.name}]\n\n${userPrompt}\n\n---\nAdd OPENROUTER_API_KEY to .env.local and restart the server for real generation.`,
+    });
   } catch (err: any) {
     console.error(err);
     return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
