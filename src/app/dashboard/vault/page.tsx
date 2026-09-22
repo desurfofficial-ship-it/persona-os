@@ -23,6 +23,7 @@ export default function VaultPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState("");
+  const [filterPersonaId, setFilterPersonaId] = useState("all");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +62,11 @@ export default function VaultPage() {
     loadData();
   }, [router]);
 
+  const filteredAssets =
+    filterPersonaId === "all"
+      ? assets
+      : assets.filter((a) => a.persona_id === filterPersonaId);
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedPersonaId) return;
@@ -74,7 +80,6 @@ export default function VaultPage() {
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Upload to Supabase Storage
       const fileExt = file.name.split(".").pop();
       const fileName = `${user.id}/${Date.now()}.${fileExt}`;
 
@@ -83,10 +88,12 @@ export default function VaultPage() {
         .upload(fileName, file);
 
       if (uploadError) {
-        // If bucket doesn't exist, give clear instructions
-        if (uploadError.message.includes("Bucket not found") || uploadError.message.includes("not found")) {
+        if (
+          uploadError.message.includes("Bucket not found") ||
+          uploadError.message.includes("not found")
+        ) {
           throw new Error(
-            'Storage bucket "assets" not found. Go to Supabase → Storage → New bucket → name it "assets" → make it Public → then try again.'
+            'Storage bucket "assets" not found. Go to Supabase → Storage → New bucket → name it "assets" → make it Public.'
           );
         }
         throw uploadError;
@@ -121,14 +128,12 @@ export default function VaultPage() {
     if (!confirm("Delete this asset?")) return;
 
     try {
-      // Optional: delete from storage too
       if (url) {
         const path = url.split("/assets/")[1];
         if (path) {
           await supabase.storage.from("assets").remove([path]);
         }
       }
-
       await supabase.from("assets").delete().eq("id", id);
       setAssets((prev) => prev.filter((a) => a.id !== id));
     } catch (err: any) {
@@ -145,22 +150,20 @@ export default function VaultPage() {
   }
 
   return (
-    <div className="min-h-screen p-8">
+    <div className="min-h-screen p-6 sm:p-8">
       <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
-              ← Dashboard
-            </a>
-            <h1 className="text-2xl font-bold">Asset Vault</h1>
-          </div>
+        <div className="flex items-center gap-4 mb-8">
+          <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
+            ← Dashboard
+          </a>
+          <h1 className="text-2xl font-bold">Asset Vault</h1>
         </div>
 
-        {/* Upload section */}
+        {/* Upload */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 mb-8">
           <h2 className="font-medium mb-4">Upload Asset</h2>
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
-            <div className="flex-1">
+            <div className="flex-1 w-full">
               <label className="block text-sm text-zinc-400 mb-2">Attach to Persona</label>
               <select
                 value={selectedPersonaId}
@@ -201,14 +204,31 @@ export default function VaultPage() {
           )}
         </div>
 
-        {/* Assets grid */}
-        {assets.length === 0 ? (
+        {/* Filter */}
+        <div className="flex items-center gap-3 mb-6">
+          <span className="text-sm text-zinc-400">Filter:</span>
+          <select
+            value={filterPersonaId}
+            onChange={(e) => setFilterPersonaId(e.target.value)}
+            className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+          >
+            <option value="all">All Personas</option>
+            {personas.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Grid */}
+        {filteredAssets.length === 0 ? (
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
-            <p className="text-zinc-400">No assets yet. Upload your first image or video above.</p>
+            <p className="text-zinc-400">No assets yet.</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {assets.map((asset) => (
+            {filteredAssets.map((asset) => (
               <div
                 key={asset.id}
                 className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden group relative"

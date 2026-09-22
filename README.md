@@ -2,31 +2,29 @@
 
 AI-powered creative infrastructure for creators and founders.
 
-Build, maintain, and generate high-quality content for coherent digital identities / personas.
+Build coherent digital identities and generate high-quality content that never breaks character.
 
-## Core Features (MVP)
+## Features
 
-- **Persona Profile**: Create a character with backstory, visual style, tone, lifestyle pillars, and content rules.
-- **Consistency Engine**: Flags contradictions across posts and scripts (coming next).
-- **Content Generation**: AI captions, scripts, story arcs, and image prompts that stay in-character (coming next).
-- **Asset Vault**: Private library of photos, videos, and generated content tied to the persona.
+- **Persona Profiles** — Backstory, tone, lifestyle pillars, content rules, forbidden topics
+- **AI Content Engine** — Captions, scripts, story arcs, image prompts (via OpenRouter)
+- **Asset Vault** — Upload and organize photos/videos per persona
+- **Content Drafts** — History of everything you’ve generated
+- **Model Selector** — GPT-4o Mini, Claude Haiku, Gemini Flash, Llama 3.1
 
 ## Tech Stack
 
-- Next.js 15 + TypeScript
-- Tailwind CSS
-- Supabase (auth, database, storage)
-- AI: OpenAI / Anthropic (next)
+- Next.js 15 + TypeScript + Tailwind
+- Supabase (Auth + Database + Storage)
+- OpenRouter (AI)
 
 ## Setup
 
 1. Clone the repo
 2. Copy `.env.local.example` → `.env.local`
-3. The Supabase credentials are already filled for our project.
-4. Run the SQL schema:
-   - Go to [Supabase SQL Editor](https://supabase.com/dashboard/project/zcbvcaglsrnzrxuozzll/sql)
-   - Paste the contents of `supabase/schema.sql` and run it.
-5. (Recommended) In Supabase Auth settings, temporarily disable "Confirm email" for faster testing.
+3. Fill in your Supabase keys + `OPENROUTER_API_KEY`
+4. Run the SQL in `supabase/schema.sql` inside Supabase SQL Editor
+5. Create a public Storage bucket named `assets`
 6. Install & run:
 
 ```bash
@@ -34,16 +32,15 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000
+## Project Structure
 
-- `/login` → create account or sign in
-- `/dashboard` → main app
-- `/dashboard/personas/new` → create your first persona
-
-## Project Status
-
-Private alpha. Software-first. Physical immersive sessions are Phase 2.
+- `/dashboard` — Main app
+- `/dashboard/personas/new` — Create persona
+- `/dashboard/personas/[id]` — View / edit persona
+- `/dashboard/generate` — AI content generation
+- `/dashboard/vault` — Asset management
+- `/dashboard/drafts` — Generated content history
 
 ---
 
-Built by the Persona OS team.
+Built fast. Iterating daily.
