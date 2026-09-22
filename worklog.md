@@ -239,3 +239,21 @@ Stage Summary:
 - The user's instinct to skip review was right to flag: the integration was committed correctly to GitHub but the live sandbox had silently lost its untracked preview backend — sign-in, all data, and vault saves were dead until this session restored them. The repo is now self-contained so a fresh clone runs the preview out of the box.
 - All four queued ICP wants shipped and verified. Remaining known backlog: scan progress streaming, per-platform metric logging from the queue is done, thread composer covers X+LinkedIn (Threads/Instagram could reuse the toggle), and the agent page could gain a goals history view.
 - PAT rotation reminder re-issued (PAT used for one push this session; also exposed in chat history — rotate it).
+
+---
+Task ID: 12
+Agent: Super Z (main agent)
+Task: "Preview" — restore the sandbox after another reset, verify the unreviewed OpenMuse integration end-to-end, hand over a working preview.
+
+Work Log:
+- Sandbox had reset again: dev server down, but ALL code survived (unlike Task 11's wipe — the Task 11 .gitignore exceptions held). Verified presence of all critical files: local-session.ts, local-auth/db/storage routes, vault/upload, copilotkit route, goals + goals/check, usePersonaAgent, browserWorker, generate agent workspace, studio.
+- Database intact (db/custom.db, 126KB) — user's real account adindahjosiah8@gmail.com plus all test accounts present.
+- Restarted dev server (Ready in 1317ms; NODE_OPTIONS max-old-space 2048 held from Task 10).
+- End-to-end verification in real browser (demo@persona-os.app): sign-in -> dashboard 200 -> agent workspace renders full 3-column layout (persona selector with 2 personas, 4 content-type cards, 4 model pills with coral selected ring, live preview rail, Content Calendar Automation panel).
+- LIVE AGENT RUN: sent "Write one caption about slow mornings, then save it to drafts" with Claude Haiku + Caption + The Disciplined Founder -> agent responded in-character -> saveToDrafts tool chip fired -> "Saved to drafts as caption (437e24a2-5251-4cb6-b5d8-b54631e73295)" -> database row confirmed with EXACT same id, type caption, in-character content ("The most productive days start not with urgency, but with intention...") zero forbidden topics. Screenshot /tmp/agent-test-1.png shows the full working flow.
+- Goals API healthy: GET /api/goals returns {goals:[],alerts:[]} with bearer auth (demo user has none yet; Task 10 flow creates them via the panel).
+
+Stage Summary:
+- Preview is LIVE and the entire OpenMuse agent layer (research -> generate -> saveToDrafts -> drafts DB) verified working after the reset. No fixes were needed this session — Task 11's hardening held.
+- CopilotKit devtools notification bubble appears in dev mode only (dismissable, does not affect the app).
+- PAT rotation reminder: the GitHub PAT remains exposed in chat history — rotate it at github.com/settings/tokens.
