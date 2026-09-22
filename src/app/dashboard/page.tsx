@@ -69,6 +69,9 @@ export default function DashboardPage() {
             <a href="/dashboard" className="text-white">
               Dashboard
             </a>
+            <a href="/dashboard/generate" className="text-zinc-400 hover:text-white">
+              Generate
+            </a>
             <a href="/dashboard/personas/new" className="text-zinc-400 hover:text-white">
               + New Persona
             </a>
@@ -105,9 +108,10 @@ export default function DashboardPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {personas.map((persona) => (
-                <div
+                <a
                   key={persona.id}
-                  className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-600 transition"
+                  href={`/dashboard/personas/${persona.id}`}
+                  className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-600 transition block"
                 >
                   <h3 className="text-lg font-semibold mb-2">{persona.name}</h3>
                   <p className="text-sm text-zinc-400 line-clamp-3 mb-4">
@@ -130,20 +134,25 @@ export default function DashboardPage() {
                       ))}
                     </div>
                   )}
-                </div>
+                </a>
               ))}
             </div>
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-60">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-            <h2 className="text-lg font-semibold mb-2">Asset Vault</h2>
-            <p className="text-zinc-400 text-sm">Coming next</p>
-          </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <a
+            href="/dashboard/generate"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-600 transition"
+          >
             <h2 className="text-lg font-semibold mb-2">AI Generate</h2>
-            <p className="text-zinc-400 text-sm">Coming next</p>
+            <p className="text-zinc-400 text-sm">
+              Create captions, scripts, story arcs & image prompts that stay in character
+            </p>
+          </a>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 opacity-60">
+            <h2 className="text-lg font-semibold mb-2">Asset Vault</h2>
+            <p className="text-zinc-400 text-sm">Coming soon</p>
           </div>
         </div>
       </div>
