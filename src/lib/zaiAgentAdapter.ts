@@ -48,6 +48,7 @@ Rules:
 - One step per response. Never call the same client tool twice in a row with identical args.
 - When tool results or research are already present for a part of the request, move on (next tool or answer) instead of repeating.
 - Never invent tool names outside the provided list.
+- FORBIDDEN TOPICS: if the persona context lists forbidden topics, the REPLY must not contain those words or close variants — rephrase around them completely, in character.
 - Keep the REPLY in the persona's voice when a persona is given. Never mention being an AI.`;
 
 const MAX_STEPS = 5;
@@ -277,7 +278,7 @@ async function runPlannerLoop(
     const { json, rest } = extractJson(raw);
 
     if (!json) {
-      return { kind: "text", text: raw.trim() || "I could not plan that request — try rephrasing it." };
+      return { kind: "text", text: stripPlanJson(raw.trim()) || "I could not plan that request — try rephrasing it." };
     }
 
     if (json.step === "research" && json.query && researchUsed < MAX_RESEARCH) {
@@ -309,7 +310,7 @@ async function runPlannerLoop(
     }
 
     // step === "answer" (or an unusable tool call) — stream the REPLY.
-    const reply = (json.reply || rest.replace(/^[\s]*REPLY:\s*/i, "")).trim();
+    const reply = stripPlanJson((json.reply || rest.replace(/^[\s]*REPLY:\s*/i, "")).trim());
     const text = reply || "Done — anything else for this persona?";
     const id = crypto.randomUUID();
     emit({ type: "text-start", id });
@@ -324,6 +325,53 @@ async function runPlannerLoop(
     kind: "text",
     text: "I hit my step budget before finishing — ask me to continue and I'll pick up where I stopped.",
   };
+}
+
+/** Remove any leftover plan-JSON objects from a user-visible reply. */
+function stripPlanJson(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "{") {
+      // Find the matching close brace.
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let end = -1;
+      for (let j = i; j < text.length; j++) {
+        const ch = text[j];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escape = true;
+          continue;
+        }
+        if (ch === '"') inString = !inString;
+        if (inString) continue;
+        if (ch === "{") depth++;
+        if (ch === "}") {
+          depth--;
+          if (depth === 0) {
+            end = j;
+            break;
+          }
+        }
+      }
+      if (end !== -1) {
+        const candidate = text.slice(i, end + 1);
+        if (!candidate.includes('"step"')) {
+          out += candidate; // ordinary JSON the reply legitimately contains
+        }
+        i = end + 1;
+        continue;
+      }
+    }
+    out += text[i];
+    i++;
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function chunkText(text: string): string[] {
