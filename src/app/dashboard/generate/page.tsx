@@ -52,23 +52,24 @@ const CHARCOAL = "#2B2724";
 
 interface GoalRow {
   id: string;
-  persona_id: string;
+  personaId: string;
   title: string;
   recurrence: string;
-  check_url: string;
+  checkUrl: string;
   status: string;
-  next_check_at?: string | null;
-  last_checked_at?: string | null;
-  failure_count?: number;
+  nextCheckAt?: string | null;
+  lastCheckedAt?: string | null;
+  failureCount?: number;
+  lastStateSample?: string | null;
 }
 
 interface AlertRow {
   id: string;
-  goal_id: string;
+  goalId: string;
   title: string;
   body: string;
-  draft_id?: string | null;
-  created_at: string;
+  draftId?: string | null;
+  createdAt: string;
 }
 
 interface Notice {
@@ -93,6 +94,34 @@ function timeAgo(iso?: string | null): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** Human label for a FUTURE timestamp — timeAgo says "just now" for those. */
+function timeUntil(iso?: string | null): string {
+  if (!iso) return "not scheduled";
+  const diff = new Date(iso).getTime() - Date.now();
+  if (diff <= 0) return "due now";
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `due in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `due in ${hours}h`;
+  return `due in ${Math.floor(hours / 24)}d`;
+}
+
+/**
+ * The composer tags every prompt `[Model:…] [Type:…] [Persona:…]` so the wire
+ * transcript shows exactly what the agent was asked — but users should never
+ * see the raw tags (or the persona UUID). Strip them for display only.
+ */
+function stripMeta(text: string): string {
+  return text
+    .replace(/\s*\[(?:Model|Type|Persona):[^\]]*\]/g, "")
+    .trim();
+}
+
+/** Collapse full UUIDs to 8 chars — tool results read better in small cards. */
+function shortUuids(text: string): string {
+  return text.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, (m) => `${m.slice(0, 8)}…`);
 }
 
 export default function AgentPage() {
@@ -199,7 +228,7 @@ function AgentWorkspace({
   const callbacks = useMemo(
     () => ({
       onDraftSaved: (draftId: string, preview: string) =>
-        pushNotice(`Draft saved ${draftId ? "" : ""}→ /dashboard/drafts · “${preview}…”`),
+        pushNotice(`Draft saved → /dashboard/drafts · “${preview}…”`),
       onAssetSaved: (_assetId: string, fileName: string) => pushNotice(`Asset saved to vault → ${fileName}`),
       onGoalCreated: (_goalId: string, title: string) => {
         pushNotice(`Goal created → ${title}`);
@@ -428,8 +457,11 @@ function AgentWorkspace({
             {lastMessages.map((m, i) => {
               const raw = m as unknown as { role?: string; content?: unknown; id?: string };
               const role = raw.role;
-              const content = typeof raw.content === "string" ? raw.content : "";
+              const rawContent = typeof raw.content === "string" ? raw.content : "";
               const isUser = role === "user";
+              // Display-only: drop the wire tags, shorten ids. The full text
+              // stays in the transcript (center pane keeps it raw too).
+              const content = isUser ? stripMeta(rawContent) : shortUuids(rawContent);
               return (
                 <div
                   key={raw.id || i}
@@ -459,7 +491,7 @@ function AgentWorkspace({
           )}
         </div>
 
-        <GoalsPanel activePersona={activePersona} pushNotice={pushNotice} refreshSignal={goalsRefresh} />
+        <GoalsPanel activePersona={activePersona} personas={personas} pushNotice={pushNotice} refreshSignal={goalsRefresh} />
       </aside>
     </div>
   );
@@ -553,7 +585,8 @@ function CopilotChatPane({
             );
           }
           const isUser = m.role === "user";
-          const content = typeof m.content === "string" ? m.content : "";
+          // Wire tags are for the runtime + audit; humans get the clean prompt.
+          const content = isUser ? stripMeta(typeof m.content === "string" ? m.content : "") : shortUuids(typeof m.content === "string" ? m.content : "");
           return (
             <div key={m.id || i} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               <div
@@ -586,10 +619,12 @@ function CopilotChatPane({
 
 function GoalsPanel({
   activePersona,
+  personas,
   pushNotice,
   refreshSignal,
 }: {
   activePersona: Persona | null;
+  personas: Persona[];
   pushNotice: (text: string) => void;
   refreshSignal: number;
 }) {
@@ -738,9 +773,12 @@ function GoalsPanel({
                 aria-label="Goal persona"
               >
                 <option value="">Persona…</option>
-                {activePersona && (
-                  <option value={activePersona.id}>{activePersona.name}</option>
-                )}
+                {personas.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                    {p.id === activePersona?.id ? " (active)" : ""}
+                  </option>
+                ))}
               </select>
             </div>
             <input
@@ -767,21 +805,27 @@ function GoalsPanel({
 
           {goals.length > 0 && (
             <div className="space-y-2">
-              {goals.map((g) => (
+              {goals.map((g) => {
+                const goalAlerts = alerts.filter((a) => a.goalId === g.id);
+                return (
                 <div key={g.id} className="rounded-xl border p-3" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-xs font-medium truncate" style={{ color: CHARCOAL }}>
                         {g.title}
                       </p>
-                      <p className="text-[10px] mt-0.5" style={{ color: "#8A8177" }}>
-                        {g.recurrence} · {hostOf(g.check_url)} · checked {timeAgo(g.last_checked_at)}
-                        {g.failure_count ? ` · ${g.failure_count} failures` : ""}
+                      <p className="text-[10px] mt-0.5 truncate" style={{ color: "#8A8177" }} title={g.checkUrl}>
+                        {g.recurrence} · {hostOf(g.checkUrl) || "invalid url"} · checked {timeAgo(g.lastCheckedAt)}
+                        {g.failureCount ? ` · ${g.failureCount} failures` : ""}
                       </p>
                       <p className="text-[10px] mt-0.5" style={{ color: g.status === "active" ? "#2F6B37" : "#B3261E" }}>
-                        {g.status}
-                        {g.next_check_at ? ` · next ${timeAgo(g.next_check_at) === "just now" ? "due now" : "due soon"}` : ""}
+                        {g.status} · {timeUntil(g.nextCheckAt)}
                       </p>
+                      {g.lastStateSample && (
+                        <p className="text-[10px] mt-1 leading-snug" style={{ color: "#8A8177" }}>
+                          Last snapshot: “{g.lastStateSample.slice(0, 80)}{g.lastStateSample.length > 80 ? "..." : ""}”
+                        </p>
+                      )}
                     </div>
                     <div className="flex flex-col gap-1 shrink-0">
                       <button
@@ -803,30 +847,76 @@ function GoalsPanel({
                       </button>
                     </div>
                   </div>
+                  {goalAlerts.length > 0 && (
+                    <div className="mt-2 pt-2 border-t space-y-1" style={{ borderColor: "#F4E8DC" }}>
+                      {goalAlerts.slice(0, 3).map((a) => (
+                        <div key={a.id} className="text-[10px] leading-snug" style={{ color: "#8A8177" }}>
+                          <span style={{ color: ACCENT }}>⚡ {timeAgo(a.createdAt)}</span> — {a.body}
+                          {a.draftId && (
+                            <Link
+                              href={`/dashboard/drafts?q=${encodeURIComponent(g.title.slice(0, 30))}`}
+                              className="underline ml-1"
+                              style={{ color: ACCENT }}
+                            >
+                              open the auto-draft →
+                            </Link>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
+          {/* ---- Goal history: the full alert timeline across all goals ---- */}
           {alerts.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "#8A8177" }}>
-                Recent alerts
+                Goal history — {alerts.length} alert{alerts.length === 1 ? "" : "s"}, newest first
               </p>
-              {alerts.slice(0, 5).map((a) => (
-                <div key={a.id} className="rounded-lg px-2.5 py-1.5 text-[11px]" style={{ background: "#FFF3EC" }}>
-                  <span className="font-medium">{a.title}</span>
-                  <span className="block" style={{ color: "#8A8177" }}>
-                    {a.body}
-                  </span>
-                  {a.draft_id && (
-                    <Link href="/dashboard/drafts" className="underline block mt-0.5" style={{ color: ACCENT }}>
-                      Open the auto-draft →
-                    </Link>
-                  )}
-                </div>
-              ))}
+              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                {alerts.slice(0, 15).map((a) => {
+                  const goal = goals.find((g) => g.id === a.goalId);
+                  return (
+                    <div key={a.id} className="rounded-lg px-2.5 py-1.5 text-[11px]" style={{ background: "#FFF3EC" }}>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium truncate" style={{ color: CHARCOAL }}>
+                          {a.title}
+                        </span>
+                        <span className="shrink-0 text-[9px]" style={{ color: "#8A8177" }}>
+                          {timeAgo(a.createdAt)}
+                        </span>
+                      </div>
+                      <span className="block" style={{ color: "#8A8177" }}>
+                        {a.body}
+                      </span>
+                      <span className="block mt-0.5 text-[9px] uppercase tracking-wider" style={{ color: "#B08968" }}>
+                        {goal ? `${goal.recurrence} · ${hostOf(goal.checkUrl)}` : "goal removed"}
+                      </span>
+                      {a.draftId && (
+                        <Link
+                          href="/dashboard/drafts"
+                          className="underline block mt-0.5"
+                          style={{ color: ACCENT }}
+                        >
+                          Open the auto-draft →
+                        </Link>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
+          )}
+
+          {open && goals.length === 0 && alerts.length === 0 && (
+            <p className="text-[11px]" style={{ color: "#8A8177" }}>
+              No goals yet. Create one above — the first check runs immediately to record a baseline,
+              then the schedule takes over. Every detected change lands here with the draft it produced.
+            </p>
           )}
         </div>
       )}

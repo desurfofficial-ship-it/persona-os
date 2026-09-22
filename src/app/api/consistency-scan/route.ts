@@ -16,6 +16,14 @@ import {
  *
  * Scans ALL of a persona's posts/scripts against EACH OTHER (not just the
  * persona rules): deterministic claim pair detection + one LLM semantic pass.
+ *
+ * Two response modes:
+ *  - Default: JSON (back-compat for any caller).
+ *  - `Accept: text/event-stream`: Server-Sent Events carrying REAL progress —
+ *    stage events fire as each layer actually starts, an info event reports
+ *    what Layer 1 found the moment it lands, and the full result arrives as
+ *    the `result` event. The panel renders honest progress instead of a
+ *    timed guess.
  */
 
 function parseJsonLoose(content: string): Record<string, unknown> | null {
@@ -40,57 +48,66 @@ function parseJsonLoose(content: string): Record<string, unknown> | null {
   return null;
 }
 
-export async function POST(req: NextRequest) {
-  const userId = userFromRequest(req);
-  if (!userId) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-  }
+interface ScanPayload {
+  score: number;
+  contradictions: Contradiction[];
+  scanned: number;
+  scannedPosted: number;
+  scannedAt: string;
+  note?: string;
+}
 
-  let personaId = "";
-  try {
-    ({ personaId } = await req.json());
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-  if (!personaId) {
-    return NextResponse.json({ error: "personaId required" }, { status: 400 });
-  }
+/** Progress events the stream mode emits, in real execution order. */
+type ScanEvent =
+  | { type: "stage"; stage: string; label: string; pct: number }
+  | { type: "info"; layer1Found: number }
+  | { type: "result"; payload: ScanPayload }
+  | { type: "error"; error: string };
 
-  const persona = await db.persona.findFirst({ where: { id: personaId, userId } });
-  if (!persona) {
-    return NextResponse.json({ error: "Persona not found" }, { status: 404 });
-  }
-
-  const draftRows = await db.contentDraft.findMany({
-    where: { personaId, userId },
-    orderBy: { createdAt: "desc" },
-    take: 120,
-  });
-
-  const items: ScanItem[] = draftRows.map((d) => ({
-    id: d.id,
-    content: d.content,
-    type: d.type,
-    posted: d.posted,
-    createdAt: d.createdAt.toISOString(),
-  }));
+/**
+ * The full scan, calling `emit` as real work happens. Returns the final
+ * payload so both response modes share one implementation — no drift.
+ */
+async function performScan(
+  persona: {
+    name: string;
+    backstory: string | null;
+    toneOfVoice: string | null;
+    lifestylePillars: unknown;
+    contentRules: unknown;
+    forbiddenTopics: unknown;
+  },
+  items: ScanItem[],
+  emit: (event: ScanEvent) => void
+): Promise<ScanPayload> {
+  const scannedAt = new Date().toISOString();
+  const scannedPosted = items.filter((i) => i.posted).length;
 
   if (items.length < 2) {
-    return NextResponse.json({
+    const payload: ScanPayload = {
       score: 100,
       contradictions: [],
       scanned: items.length,
+      scannedPosted,
+      scannedAt,
       note: "Need at least 2 pieces of content to scan for contradictions.",
-    });
+    };
+    emit({ type: "result", payload });
+    return payload;
   }
 
+  emit({ type: "stage", stage: "reading", label: "Reading your posts and scripts…", pct: 15 });
+
   // Layer 1: deterministic pairs (instant, free, precise).
+  emit({ type: "stage", stage: "layer1", label: "Layer 1 — exact-claim matching across everything…", pct: 35 });
   const deterministic = deterministicContradictions(items);
   const deterministicPairs = new Set(
     deterministic.map((c) => [c.a.quote, c.b.quote].sort().join("||"))
   );
+  emit({ type: "info", layer1Found: deterministic.length });
 
   // Layer 2: one LLM semantic pass over compressed evidence.
+  emit({ type: "stage", stage: "layer2", label: "Layer 2 — semantic read-through in context…", pct: 65 });
   const personaJson = JSON.stringify({
     name: persona.name,
     backstory: persona.backstory?.slice(0, 600),
@@ -210,13 +227,109 @@ RULES:
     console.error("consistency LLM scan failed (deterministic results still ship):", err);
   }
 
+  emit({ type: "stage", stage: "scoring", label: "Scoring and writing fixes…", pct: 90 });
   const contradictions = [...deterministic, ...llmContradictions].slice(0, 12);
 
-  return NextResponse.json({
+  const payload: ScanPayload = {
     score: consistencyScore(contradictions),
     contradictions,
     scanned: items.length,
-    scannedPosted: items.filter((i) => i.posted).length,
-    scannedAt: new Date().toISOString(),
+    scannedPosted,
+    scannedAt,
+  };
+  emit({ type: "result", payload });
+  return payload;
+}
+
+export async function POST(req: NextRequest) {
+  const userId = userFromRequest(req);
+  if (!userId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  let personaId = "";
+  try {
+    ({ personaId } = await req.json());
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (!personaId) {
+    return NextResponse.json({ error: "personaId required" }, { status: 400 });
+  }
+
+  const persona = await db.persona.findFirst({ where: { id: personaId, userId } });
+  if (!persona) {
+    return NextResponse.json({ error: "Persona not found" }, { status: 404 });
+  }
+
+  const draftRows = await db.contentDraft.findMany({
+    where: { personaId, userId },
+    orderBy: { createdAt: "desc" },
+    take: 120,
   });
+
+  const items: ScanItem[] = draftRows.map((d) => ({
+    id: d.id,
+    content: d.content,
+    type: d.type,
+    posted: d.posted,
+    createdAt: d.createdAt.toISOString(),
+  }));
+
+  const personaForScan = {
+    name: persona.name,
+    backstory: persona.backstory,
+    toneOfVoice: persona.toneOfVoice,
+    lifestylePillars: persona.lifestylePillars,
+    contentRules: persona.contentRules,
+    forbiddenTopics: persona.forbiddenTopics,
+  };
+
+  // --- Stream mode: real progress over SSE ---------------------------------
+  if ((req.headers.get("accept") || "").includes("text/event-stream")) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        let closed = false;
+        const send = (event: ScanEvent) => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          } catch {
+            closed = true;
+          }
+        };
+        try {
+          await performScan(personaForScan, items, send);
+        } catch (err) {
+          send({ type: "error", error: err instanceof Error ? err.message : "Scan failed" });
+        } finally {
+          closed = true;
+          try {
+            controller.close();
+          } catch {
+            // already closed by the client disconnecting — nothing to do
+          }
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
+  // --- JSON mode (back-compat) ---------------------------------------------
+  try {
+    const payload = await performScan(personaForScan, items, () => {});
+    return NextResponse.json(payload);
+  } catch (err) {
+    console.error("consistency scan failed:", err);
+    return NextResponse.json({ error: "Scan failed" }, { status: 500 });
+  }
 }

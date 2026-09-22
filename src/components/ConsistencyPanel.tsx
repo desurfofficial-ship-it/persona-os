@@ -63,52 +63,117 @@ function scanAge(iso?: string): string | null {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
-/** Progress labels mirroring the scan's real execution order. */
-const STAGES = [
-  "Reading your posts and scripts…",
-  "Layer 1 — exact-claim matching across everything…",
-  "Layer 2 — semantic read-through in context…",
-  "Scoring and writing fixes…",
-];
+/** Stage ids the scan route emits over SSE, in real execution order. */
+const STAGE_ORDER = ["reading", "layer1", "layer2", "scoring"] as const;
+const FALLBACK_LABELS: Record<string, string> = {
+  reading: "Reading your posts and scripts…",
+  layer1: "Layer 1 — exact-claim matching across everything…",
+  layer2: "Layer 2 — semantic read-through in context…",
+  scoring: "Scoring and writing fixes…",
+};
+
+type ScanEvent =
+  | { type: "stage"; stage: string; label: string; pct: number }
+  | { type: "info"; layer1Found: number }
+  | { type: "result"; payload: ScanResult }
+  | { type: "error"; error: string };
 
 export default function ConsistencyPanel({ personaId }: { personaId: string }) {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [stage, setStage] = useState(0);
+  const [stageIdx, setStageIdx] = useState(0);
+  const [stageLabel, setStageLabel] = useState(FALLBACK_LABELS.reading);
+  const [pct, setPct] = useState(5);
+  const [layer1Found, setLayer1Found] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
 
-  // Honest staged progress: the two engine layers really do run in this
-  // order, so the labels track the work instead of faking a spinner.
+  // Elapsed ticker only — the STAGES themselves arrive as real SSE events
+  // from /api/consistency-scan, timed to actual work instead of a guess.
   useEffect(() => {
     if (!scanning) {
-      setStage(0);
+      setStageIdx(0);
       setElapsed(0);
+      setPct(5);
+      setLayer1Found(null);
+      setStageLabel(FALLBACK_LABELS.reading);
       return;
     }
-    const stageTimer = setInterval(
-      () => setStage((s) => (s < STAGES.length - 1 ? s + 1 : s)),
-      6000
-    );
     const tick = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => {
-      clearInterval(stageTimer);
       clearInterval(tick);
     };
   }, [scanning]);
 
+  const applyEvent = (event: ScanEvent) => {
+    if (event.type === "stage") {
+      const idx = STAGE_ORDER.indexOf(event.stage as (typeof STAGE_ORDER)[number]);
+      setStageIdx(idx >= 0 ? idx : stageIdx);
+      setStageLabel(event.label || FALLBACK_LABELS[event.stage] || stageLabel);
+      setPct(event.pct);
+    } else if (event.type === "info") {
+      setLayer1Found(event.layer1Found);
+    } else if (event.type === "result") {
+      setPct(100);
+      setResult(event.payload);
+    } else if (event.type === "error") {
+      throw new Error(event.error);
+    }
+  };
+
   const runScan = async () => {
     setScanning(true);
     setError(null);
+    setResult(null);
     try {
       const res = await authedFetch("/api/consistency-scan", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ personaId }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Scan failed");
-      setResult(data);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Scan failed");
+      }
+
+      // Stream mode: real stage events as each layer runs.
+      if ((res.headers.get("content-type") || "").includes("text/event-stream") && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let gotResult = false;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sep = buffer.indexOf("\n\n");
+          while (sep !== -1) {
+            const chunk = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            sep = buffer.indexOf("\n\n");
+            const dataLine = chunk.split("\n").find((l) => l.startsWith("data: "));
+            if (!dataLine) continue;
+            let event: ScanEvent;
+            try {
+              event = JSON.parse(dataLine.slice(6));
+            } catch {
+              continue;
+            }
+            try {
+              applyEvent(event);
+            } catch (err: any) {
+              throw new Error(err.message);
+            }
+            if (event.type === "result") gotResult = true;
+          }
+        }
+        if (!gotResult) throw new Error("Scan ended without a result");
+      } else {
+        // JSON fallback (route without stream support).
+        const data = await res.json();
+        setResult(data);
+        setPct(100);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -154,15 +219,20 @@ export default function ConsistencyPanel({ personaId }: { personaId: string }) {
         <div className="space-y-2" role="status" aria-live="polite">
           <div className="flex items-center gap-2">
             <span className="w-3.5 h-3.5 border-2 border-zinc-600 border-t-white rounded-full animate-spin shrink-0" />
-            <p className="text-sm text-zinc-300">{STAGES[stage]}</p>
+            <p className="text-sm text-zinc-300">{stageLabel}</p>
             <span className="text-xs text-zinc-600 tabular-nums ml-auto">{elapsed}s</span>
           </div>
           <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
             <div
               className="h-full bg-emerald-600 transition-all duration-700"
-              style={{ width: `${((stage + 1) / STAGES.length) * 100}%` }}
+              style={{ width: `${pct}%` }}
             />
           </div>
+          {layer1Found !== null && stageIdx >= 2 && (
+            <p className="text-[11px] text-emerald-400">
+              Layer 1 found {layer1Found} exact-claim pair{layer1Found === 1 ? "" : "s"} — the semantic read is checking for the subtler flips.
+            </p>
+          )}
           <p className="text-[11px] text-zinc-600">
             Big libraries take up to a minute — you can keep working, the result lands here.
           </p>

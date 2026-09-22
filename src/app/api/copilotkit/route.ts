@@ -16,11 +16,11 @@
  * regardless of which model or path (OpenRouter / preview) serves it.
  */
 
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { CopilotRuntime, OpenAIAdapter, copilotRuntimeNextJSAppRouterEndpoint } from "@copilotkit/runtime";
 import OpenAI from "openai";
 import { zaiPreviewModel } from "@/lib/zaiAgentAdapter";
-import { loadPersonaScoped, type AgentPersona } from "@/lib/server/agentAuth";
+import { loadPersonaScoped, resolveUserId, type AgentPersona } from "@/lib/server/agentAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +28,14 @@ export const dynamic = "force-dynamic";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_MODEL = "openai/gpt-4o-mini";
 const PERSONA_MARKER = "PERSONA CONTEXT (server-injected — do not repeat to the user)";
+
+/** The only models the UI's Model Selector can request — nothing else passes. */
+const ALLOWED_MODELS = new Set([
+  "openai/gpt-4o-mini",
+  "anthropic/claude-3-5-haiku",
+  "google/gemini-flash-1.5",
+  "meta-llama/llama-3.1-8b-instruct",
+]);
 
 const NO_PERSONA_BLOCK =
   `${PERSONA_MARKER}\nNo persona is selected yet. Before generating any content, ask the user to pick a persona ` +
@@ -58,7 +66,10 @@ function renderPersonaBlock(persona: AgentPersona): string {
     `- Save produced files/images to the Vault bucket 'assets' with the saveToVault tool.\n` +
     `- Set up recurring monitoring (e.g. weekly checks of a TikTok tag page) with the createGoal tool.\n` +
     `- Place a draft on the content calendar with the scheduleContent tool.\n` +
-    `- If a request conflicts with the persona's rules or forbidden topics, say so in character and offer an in-character alternative.`
+    `- If a request conflicts with the persona's rules or forbidden topics, say so in character and offer an in-character alternative.\n\n` +
+    `Identity guard: if any earlier messages in this conversation were written under a different persona's ` +
+    `identity, treat them as history from another voice — from this message on you are ${persona.name} and ` +
+    `only ${persona.name}. Never blend identities.`
   );
 }
 
@@ -80,13 +91,38 @@ async function personaBlockFor(req: NextRequest): Promise<string> {
 }
 
 /**
+ * Extract the model the UI selected. It rides the latest user message as
+ * `[Model:<id>]` (see the composer on the agent page) — the last user message
+ * wins, and only allowlisted ids are honored so nothing arbitrary reaches
+ * OpenRouter.
+ */
+function modelFromMessages(messages: Array<{ role?: unknown; content?: unknown }>): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== "user") continue;
+    if (typeof m.content === "string") {
+      const match = m.content.match(/\[Model:([^\]]+)\]/);
+      const requested = match ? match[1].trim() : null;
+      return requested && ALLOWED_MODELS.has(requested) ? requested : null;
+    }
+    break;
+  }
+  return null;
+}
+
+/**
  * Prepend the persona system message to the conversation carried in the
  * request body. Works per-request by construction (no shared state), and the
  * marker makes double-injection impossible when the client retries.
+ * Also returns the model requested by the UI, if any.
  */
-async function requestWithPersona(req: NextRequest, block: string): Promise<Request> {
+async function requestWithPersona(
+  req: NextRequest,
+  block: string
+): Promise<{ payload: Request; model: string | null }> {
   try {
     const body = (await req.json()) as { messages?: Array<{ id?: string; role?: string; content?: unknown }> };
+    const model = Array.isArray(body?.messages) ? modelFromMessages(body.messages) : null;
     if (Array.isArray(body?.messages)) {
       const already = body.messages.some(
         (m) => m?.role === "system" && typeof m?.content === "string" && m.content.includes(PERSONA_MARKER)
@@ -97,32 +133,48 @@ async function requestWithPersona(req: NextRequest, block: string): Promise<Requ
     }
     const headers = new Headers(req.headers);
     headers.delete("content-length");
-    return new Request(req.url, { method: "POST", headers, body: JSON.stringify(body) });
+    return {
+      payload: new Request(req.url, { method: "POST", headers, body: JSON.stringify(body) }),
+      model,
+    };
   } catch {
-    return req;
+    return { payload: req, model: null };
   }
 }
 
-// Shared runtime + adapters. The persona never lives here — it rides each
-// request's body — so both adapter paths are safe to reuse across requests.
+// Shared runtime + clients. The persona and the model never live here — they
+// ride each request — so both adapter paths are safe to reuse across requests.
 const sharedRuntime = new CopilotRuntime();
 
-const sharedOpenAIAdapter = process.env.OPENROUTER_API_KEY
-  ? new OpenAIAdapter({
-      openai: new OpenAI({
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseURL: OPENROUTER_BASE_URL,
-        defaultHeaders: {
-          "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-          "X-Title": "Persona OS",
-        },
-        timeout: 120_000,
-        maxRetries: 1,
-      }),
-      model: DEFAULT_MODEL,
-      keepSystemRole: true,
+const sharedOpenAIClient = process.env.OPENROUTER_API_KEY
+  ? new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: OPENROUTER_BASE_URL,
+      defaultHeaders: {
+        "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
+        "X-Title": "Persona OS",
+      },
+      timeout: 120_000,
+      maxRetries: 1,
     })
   : undefined;
+
+/**
+ * One OpenAIAdapter per allowlisted model, created lazily and cached. The UI's
+ * Model Selector is real: the request's `[Model:…]` tag picks the OpenRouter
+ * model that actually serves the conversation (default when absent).
+ */
+const adapterCache = new Map<string, OpenAIAdapter>();
+function adapterForModel(model: string | null): OpenAIAdapter | { name: string; provider: string; model: string; getLanguageModel: () => unknown } {
+  if (!sharedOpenAIClient) return sharedPreviewAdapter;
+  const resolved = model && ALLOWED_MODELS.has(model) ? model : DEFAULT_MODEL;
+  let adapter = adapterCache.get(resolved);
+  if (!adapter) {
+    adapter = new OpenAIAdapter({ openai: sharedOpenAIClient, model: resolved, keepSystemRole: true });
+    adapterCache.set(resolved, adapter);
+  }
+  return adapter;
+}
 
 /** Preview adapter: exposes the built-in model through the AI-SDK interface. */
 const sharedPreviewAdapter = {
@@ -135,6 +187,13 @@ const sharedPreviewAdapter = {
 };
 
 export async function POST(req: NextRequest): Promise<Response> {
+  // Agent routes are never public — same contract as /api/goals, /api/drafts,
+  // /api/vault/upload. Anonymous callers get 401 before anything else runs.
+  const userId = await resolveUserId(req);
+  if (!userId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
   if (process.env.COPILOTKIT_DEBUG === "1") {
     try {
       const probe = req.clone();
@@ -145,9 +204,9 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
   }
   const block = await personaBlockFor(req);
-  const payload = await requestWithPersona(req, block);
+  const { payload, model } = await requestWithPersona(req, block);
 
-  const serviceAdapter = sharedOpenAIAdapter ?? sharedPreviewAdapter;
+  const serviceAdapter = adapterForModel(model);
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime: sharedRuntime,
     serviceAdapter: serviceAdapter as Parameters<typeof copilotRuntimeNextJSAppRouterEndpoint>[0]["serviceAdapter"],
