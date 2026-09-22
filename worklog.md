@@ -135,3 +135,24 @@ Stage Summary:
 - Generation is now: gold exemplars + measured DNA in -> structural variants -> quality gate -> polish (non-regressing) -> voice-ranked out; image prompts render to real vault assets.
 - Remaining ICP wants queued for next round: per-sample reorder (drag), scrub-undo for polish (restore pre-polish), platform-aware thread composer UI, scheduled auto-generate.
 - PAT rotation reminder re-issued (PAT used for push this session).
+
+---
+Task ID: 7
+Agent: Super Z (main agent)
+Task: User asked for verified status of all four pillars (Consistency Engine / Content Gen & Consistency Layer / Asset Vault / Basic Analytics & Scheduling) and demanded they be built to spec.
+
+Work Log:
+- Honest audit: Content Gen = built (Engine v2.5). Consistency Engine cross-post scan = MISSING. Vault search/mood-tags = MISSING. Performance metrics + due-today queue = MISSING.
+- Consistency Engine: lib/consistency.ts (deterministic claim extraction — identity/possession/habit/exclusion/numeric — with 12 slot rules + 5 opposite-pair maps; Layer A sentence-level claim pairs; Layer B sentence-level content pairs with CONDITIONAL/EVOLUTION guards so hypotheticals and transformation stories never block or false-positive); /api/consistency-scan (auth-gated, Layer 1 deterministic + Layer 2 LLM semantic scan over compressed evidence pack of 30 items x 400 chars, duplicate-quote filter, consistency score 100/-20/-12/-6 floor 10); ConsistencyPanel on persona page (score, severity-colored pair cards a-vs-b with quotes/dates/why/fix, clean state).
+- Analytics: ContentDraft.metrics Json (db push + DRAFT_COLS), lib/metrics.ts (parseMetrics, computePerformance: totals/avg/engagement%/per-platform rollup/best performer, compactNumber), drafts page "Log performance" inline form (auto-invites right after first Mark Posted), persona-page PerformancePanel with honest "you log the numbers" note.
+- Scheduling: lib/calendar.ts dueQueue + isOverdue; dashboard "Due today" strip (overdue flagged, mark-posted, snooze-to-tomorrow, optimistic clear).
+- Vault: search box (tags/persona/content), quick-tag chips (luxury/casual/professional/night/beach/office/gym/travel), auto-tag prompt upgraded to return mood + location, tag cap 6->8.
+- BREAKING BUG FOUND BY VERIFICATION: 4 client call sites (auto-tag, render-image, delete-account, new consistency-scan) hit auth-gated routes WITHOUT Bearer token -> silent 401s. Fixed with shared authedFetch() exported from supabase.ts; patched all call sites.
+- Round fixes from live browser testing: stale Prisma client hid metrics column (server restart), LLM flagged duplicate drafts as contradictions (identical-quote filter), deterministic layer missed vegan-vs-steak when post contained "I'd give up steak" hypothetical (sentence-level claimSentences with conditional/evolution guards + regression tests).
+- Tests: scripts/test-consistency.ts 33/33 (new); scripts/test-engine.ts 45/45 (no regressions); tsc clean; eslint clean; browser-verified end-to-end (scan 36/100 with exact+contextual cards, performance 23.6K views/7.9%/best-performer, due-today mark-posted clears queue, vault search + quick chips, mobile 390px screenshots in download/).
+- Committed 9d9a8ab, pushed to repo branch four-pillars (remote main diverged as before; PAT scrubbed from remote config after push).
+
+Stage Summary:
+- All four pillars now exist and are verified against the user's spec wording; biggest new build is the cross-post Consistency Engine (the literal spec item "flags contradictions across posts/scripts").
+- Supabase migration note: content_drafts needs new jsonb column `metrics` (prisma equivalent shipped); pages still use the same supabase-js surface so the real deployment needs no page changes.
+- Next ICP round should attack the new surfaces: scan false-positive rate, metrics entry friction, queue guilt.
