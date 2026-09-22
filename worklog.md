@@ -45,3 +45,22 @@ Stage Summary:
 - All four ICP "want most" items shipped: dead-simple first-run, one-tap copy & open platform, posted-aware generation, cleaner mobile quick-post experience.
 - Sandbox backend remains the local shim (SQLite/localStorage auth) — feature code is portable to the real Supabase app since pages use the same supabase-js surface.
 - Round-3 files for upstream merge: src/app/dashboard/start/page.tsx, src/lib/{share,duplicate,momentum}.ts, dashboard/page.tsx, dashboard/generate/page.tsx, drafts/page.tsx, personas/[id]/page.tsx, personas/from-posts/page.tsx, api/generate/route.ts.
+
+---
+Task ID: 3
+Agent: Super Z (main agent)
+Task: Round 4 + 5 red-team dossier — 10x (Break -> Fix -> Harden -> rewritten ICP verdict), consolidated Fix Sprint, then start over with 5 fresh cycles; deliver as docx archive.
+
+Work Log:
+- Loaded docx skill chain in full: SKILL.md -> routes/create.md -> references/{docx-js-core,design-system,common-rules,toc}.md -> scenes/report.md.
+- Anchored the dossier in the real v0.4 baseline from Task 2 (start wizard, posted-aware generation w/ sensitivity, copyAndOpen, make-all-formats, momentum strip) so every attack targets shipped features.
+- Authored 15 cycles in 5 attack layers: voice quality (C1), posting last mile (C2), winner suppression (C3), field drift (C4), series guilt (C5), vault dead-end (C6), two-voices (C7), unit economics (C8), privacy/trust (C9), week-3 retention (C10); then fresh-start: positioning (C11), authenticity/legal (C12), analytics integrity (C13), platform risk/moat (C14), roadmap bloat/30-day plan (C15). Each with Love/Hate/Wants-improved verdict.
+- Consolidated Fix Sprint: 7 fixes ranked by frequency x pain into two 2-week sprints (import, calendar, switcher, trust page; vault loop, welcome-back, pattern insights, fair-use pricing) + 5 explicit deferrals with reasons.
+- Generated docx per skill: R1 cover recipe + DM-1 palette, Profile A formal fonts (Times New Roman), 3-section architecture (cover margin-0 / TOC Roman / body Arabic start-1), real TableOfContents + refresh hint, fix-sprint Table 1 (PERCENTAGE widths, tableHeader, cantSplit), numbered kill-criteria list (unique reference).
+- Post-processing: add_toc_placeholders.py --auto (exit 0, 21 headings); custom scripts/postprocess_round45.py removed empty <w:pgNumType/> and patched footer instrText (footer1 -> PAGE \* ROMAN, footer2 -> PAGE \* arabic).
+- postcheck.py: 9/9 passed, 0 errors, 0 warnings (fixed initial 280-vs-312 table line-spacing warning). Content integrity verified: all 15 cycles + 15 full ICP verdicts, ~5,400 words, no markdown/undefined artifacts.
+
+Stage Summary:
+- Deliverable: /home/z/my-project/download/Persona-OS-Red-Team-Report-Rounds-4-5.docx (full dossier, TOC + field codes ready).
+- Decisions embedded for next execution round: Sprint 1 = X/LinkedIn read-only import, week calendar, persona switcher (<=3) with active-voice badge, trust page + export/delete; Sprint 2 = vault-to-generate loop + auto-tags, welcome-back (absence-as-content), pattern insights v1, fair-use pricing page. Native posting API / Notion-Docs export / OCR / SOC2 / team seats explicitly deferred with dates.
+- Kill criteria pre-agreed per feature; next red team should attack the new surface after Sprints 1-2 ship.
