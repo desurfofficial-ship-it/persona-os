@@ -89,3 +89,25 @@ Stage Summary:
 - All 7 Fix Sprint items shipped and browser-verified; the preview backend is now committed to the repo so sandbox resets no longer strand the shim.
 - UI contract with the real Supabase deployment unchanged (same supabase-js surface; only additions: planned_for column, planned_for in drafts select, assetContext in generate body).
 - Explicit PAT-rotation reminder delivered to user (PAT appeared in chat + was used for push).
+
+---
+Task ID: 5
+Agent: Super Z (main agent)
+Task: "Content generation must be harden and improved like it was developed by a multi billion dollar company" + 10x (Break -> Fix -> Harden -> ICP feedback), fix review, then 5 fresh rounds.
+
+Work Log:
+- Audited generation stack: single-shot prompt wrapper, no variations/voice/platform/quality layers; legacy callers identified (ideas/series/drafts/persona-sample use {content} shape).
+- Built Generation Engine v2 (5 new libs): voice.ts (deterministic Voice DNA: rhythm, emoji policy, casing, punctuation habits, first-person density, hook styles, signature words + voiceMatchScore), quality.ts (idempotent meta-wrapper stripper, 26-rule cliche scrubber, AI-tell detector, forbidden-topic scan, Jaccard repetition risk, platform fit, composite gate), platforms.ts (X/LinkedIn/IG/Threads specs incl. fold positions + hashtag policy + robust numbered thread splitter with word-chunk fallback), generation.ts (provider chain OpenRouter->OpenAI->Anthropic->built-in with 45s timeouts, 2 retries each, per-variant structural strategies w/ per-strategy temperature, corrective regeneration, composite ranking), voiceSamples.ts (shared client fetch).
+- generate route v2: parallel variants via Promise.allSettled (partial results ship), strategyOffset rotation, blocked-variant silent corrective retry, ranked VariantResult[], legacy {content} preserved.
+- check route v2: structured JSON (score/verdict/matches/breaks[quote|why|fix]/rewrites) merging deterministic pre-passes with LLM analysis + measured voiceScore.
+- generate page v2: platform picker (4), variant count, Voice DNA chip (progressive LEARNING->checkmark), ranked cards (BEST MATCH badge, voice match %, chars/limit, repetition flags, why line), in-place regenerate, over-limit thread preview with per-post copy, platform-matched copy&open, staged loading, sticky mobile bar, Check-it integration.
+- check page rewritten for structured report (verdict badge, quote-level breaks, strikethrough rewrites) — fixed the break where old page read removed {content} field.
+- ideas/series/drafts-improve/persona-sample now send voiceSamples (fingerprint everywhere).
+- Landing copy rewritten to engine truths (Voice DNA, 3 structures/4 platforms, quality gate).
+- scripts/test-engine.ts: 38/38 passing (caught + fixed 7 real defects: order-dependent wrapper stripping, quote-unwrap replacement, sentence regex losing unpunctuated text, AI-tell misses, test path bugs).
+- Browser-verified end-to-end (desktop 1440 + mobile 390): signup -> start wizard persona build -> generate 3 ranked variants (100/86/81 voice match) -> partial-results notice fired in real session -> regenerate -> Voice DNA activation after reload -> check page (score/verdict/5 breaks/voice match 74% from 7 samples). Screenshots saved to download/.
+- tsc clean, eslint clean. Committed 5137c74, pushed to repo branch generation-engine-v2 (no force-push to main; PAT scrubbed from remote config).
+
+Stage Summary:
+- Generation is now a multi-layer engine: measured voice fingerprint in, structural variants out, every output gated (meta-strip -> cliche scrub -> AI-tell/forbidden/repetition/fit checks -> voice-match ranking). 15-round Break->Fix->Harden->ICP dossier delivered in chat; remaining ICP wants queued: voice-sample curation, 3-more-of-this-one, scrub undo, inline check chip, per-platform batch, image-gen from prompts.
+- PAT rotation reminder re-issued to user (PAT appeared in chat again this session).

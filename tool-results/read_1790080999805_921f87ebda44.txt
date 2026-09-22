@@ -1,0 +1,784 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useEffect, useState, useRef, Suspense, type RefObject } from "react";
+     4→     4→import { useRouter, useSearchParams } from "next/navigation";
+     5→     5→import { supabase } from "@/lib/supabase";
+     6→     6→import type { Persona } from "@/types/persona";
+     7→     7→import { copyAndOpen, copyToClipboard } from "@/lib/share";
+     8→     8→import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
+     9→     9→import {
+    10→    10→  findSimilarPosts,
+    11→    11→  formatPostedDate,
+    12→    12→  sensitivityLabel,
+    13→    13→  type PostedPost,
+    14→    14→  type Sensitivity,
+    15→    15→  type SimilarPost,
+    16→    16→} from "@/lib/duplicate";
+    17→    17→
+    18→    18→const MODELS = [
+    19→    19→  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini (Fast)" },
+    20→    20→  { id: "anthropic/claude-3.5-haiku", name: "Claude 3.5 Haiku" },
+    21→    21→  { id: "google/gemini-flash-1.5", name: "Gemini Flash" },
+    22→    22→  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B" },
+    23→    23→];
+    24→    24→
+    25→    25→const SENSITIVITY_KEY = "persona-os-dup-sensitivity";
+    26→    26→
+    27→    27→type ContentType = "caption" | "script" | "story_arc" | "image_prompt";
+    28→    28→
+    29→    29→interface AssetCtx {
+    30→    30→  id: string;
+    31→    31→  persona_id: string;
+    32→    32→  type: string;
+    33→    33→  url: string | null;
+    34→    34→  content: string | null;
+    35→    35→  tags: string[];
+    36→    36→}
+    37→    37→
+    38→    38→interface FormatResult {
+    39→    39→  label: string;
+    40→    40→  type: ContentType;
+    41→    41→  content: string;
+    42→    42→}
+    43→    43→
+    44→    44→function GenerateContent() {
+    45→    45→  const router = useRouter();
+    46→    46→  const searchParams = useSearchParams();
+    47→    47→  const preselectedId = searchParams.get("persona");
+    48→    48→  const isFirstRun = searchParams.get("first") === "1";
+    49→    49→  const assetParam = searchParams.get("asset");
+    50→    50→  const isWelcomeBack = searchParams.get("welcome") === "1";
+    51→    51→
+    52→    52→  const WELCOME_PROMPT =
+    53→    53→    "I've been quiet for a few days — write an honest come-back post about where I've been and what I learned in the gap. No apology theater, just real.";
+    54→    54→
+    55→    55→  const [personas, setPersonas] = useState<Persona[]>([]);
+    56→    56→  const [selectedId, setSelectedId] = useState(preselectedId || "");
+    57→    57→  const [type, setType] = useState<ContentType>("caption");
+    58→    58→  const [topic, setTopic] = useState("");
+    59→    59→  const [model, setModel] = useState("openai/gpt-4o-mini");
+    60→    60→  const [variations, setVariations] = useState(1);
+    61→    61→  const [results, setResults] = useState<string[]>([]);
+    62→    62→  const [loading, setLoading] = useState(false);
+    63→    63→  const [error, setError] = useState<string | null>(null);
+    64→    64→  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
+    65→    65→  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+    66→    66→
+    67→    67→  // Posted-aware state
+    68→    68→  const [postedPosts, setPostedPosts] = useState<PostedPost[]>([]);
+    69→    69→  const [sensitivity, setSensitivity] = useState<Sensitivity>("medium");
+    70→    70→
+    71→    71→  // Vault asset context (write-for-this-asset loop)
+    72→    72→  const [assetCtx, setAssetCtx] = useState<AssetCtx | null>(null);
+    73→    73→
+    74→    74→  // Make all formats state: per result index → generated formats
+    75→    75→  const [allFormats, setAllFormats] = useState<Record<number, FormatResult[]>>({});
+    76→    76→  const [makingAll, setMakingAll] = useState<number | null>(null);
+    77→    77→
+    78→    78→  // Sticky mobile generate bar
+    79→    79→  const generateBtnRef = useRef<HTMLButtonElement>(null);
+    80→    80→  const [showStickyBar, setShowStickyBar] = useState(false);
+    81→    81→
+    82→    82→  useEffect(() => {
+    83→    83→    const stored = window.localStorage.getItem(SENSITIVITY_KEY);
+    84→    84→    if (stored === "low" || stored === "medium" || stored === "high") {
+    85→    85→      setSensitivity(stored);
+    86→    86→    }
+    87→    87→  }, []);
+    88→    88→
+    89→    89→  const changeSensitivity = (s: Sensitivity) => {
+    90→    90→    setSensitivity(s);
+    91→    91→    window.localStorage.setItem(SENSITIVITY_KEY, s);
+    92→    92→  };
+    93→    93→
+    94→    94→  useEffect(() => {
+    95→    95→    const load = async () => {
+    96→    96→      const {
+    97→    97→        data: { user },
+    98→    98→      } = await supabase.auth.getUser();
+    99→    99→      if (!user) {
+   100→   100→        router.push("/login");
+   101→   101→        return;
+   102→   102→      }
+   103→   103→
+   104→   104→      const { data } = await supabase
+   105→   105→        .from("personas")
+   106→   106→        .select("*")
+   107→   107→        .eq("user_id", user.id)
+   108→   108→        .order("created_at", { ascending: false });
+   109→   109→
+   110→   110→      setPersonas(data || []);
+   111→   111→      if (preselectedId) {
+   112→   112→        setSelectedId(preselectedId);
+   113→   113→        setActivePersonaId(preselectedId);
+   114→   114→      } else {
+   115→   115→        // Default to the user's active voice when there is one.
+   116→   116→        const active = getActivePersonaId();
+   117→   117→        if (active && data?.some((p) => p.id === active)) setSelectedId(active);
+   118→   118→        else if (data && data.length > 0) setSelectedId(data[0].id);
+   119→   119→      }
+   120→   120→    };
+   121→   121→    load();
+   122→   122→  }, [router, preselectedId]);
+   123→   123→
+   124→   124→  // Load already-posted content for the selected persona (for repeat-avoidance)
+   125→   125→  useEffect(() => {
+   126→   126→    if (!selectedId) return;
+   127→   127→    let cancelled = false;
+   128→   128→
+   129→   129→    const loadPosted = async () => {
+   130→   130→      const { data } = await supabase
+   131→   131→        .from("content_drafts")
+   132→   132→        .select("id, content, created_at")
+   133→   133→        .eq("persona_id", selectedId)
+   134→   134→        .eq("posted", true)
+   135→   135→        .order("created_at", { ascending: false })
+   136→   136→        .limit(20);
+   137→   137→
+   138→   138→      if (!cancelled) setPostedPosts((data || []) as PostedPost[]);
+   139→   139→    };
+   140→   140→    loadPosted();
+   141→   141→
+   142→   142→    return () => {
+   143→   143→      cancelled = true;
+   144→   144→    };
+   145→   145→  }, [selectedId]);
+   146→   146→
+   147→   147→  // Welcome-back prefill: absence as content.
+   148→   148→  useEffect(() => {
+   149→   149→    if (isWelcomeBack) setTopic(WELCOME_PROMPT);
+   150→   150→  }, [isWelcomeBack]);
+   151→   151→
+   152→   152→  // Load vault asset context when arriving from "Write for this".
+   153→   153→  useEffect(() => {
+   154→   154→    if (!assetParam) return;
+   155→   155→    let cancelled = false;
+   156→   156→
+   157→   157→    const loadAsset = async () => {
+   158→   158→      const {
+   159→   159→        data: { user },
+   160→   160→      } = await supabase.auth.getUser();
+   161→   161→      if (!user) return;
+   162→   162→
+   163→   163→      const { data } = await supabase
+   164→   164→        .from("assets")
+   165→   165→        .select("id, persona_id, type, url, content, tags")
+   166→   166→        .eq("id", assetParam)
+   167→   167→        .eq("user_id", user.id)
+   168→   168→        .limit(1);
+   169→   169→
+   170→   170→      const asset = (data || [])[0] as AssetCtx | undefined;
+   171→   171→      if (!cancelled && asset) {
+   172→   172→        setAssetCtx(asset);
+   173→   173→        if (asset.persona_id) setSelectedId(asset.persona_id);
+   174→   174→      }
+   175→   175→    };
+   176→   176→    loadAsset();
+   177→   177→
+   178→   178→    return () => {
+   179→   179→      cancelled = true;
+   180→   180→    };
+   181→   181→  }, [assetParam]);
+   182→   182→
+   183→   183→  // Sticky bar: show when the main Generate button scrolls out of view
+   184→   184→  useEffect(() => {
+   185→   185→    const el = generateBtnRef.current;
+   186→   186→    if (!el) return;
+   187→   187→    const observer = new IntersectionObserver(
+   188→   188→      ([entry]) => setShowStickyBar(!entry.isIntersecting),
+   189→   189→      { threshold: 0 }
+   190→   190→    );
+   191→   191→    observer.observe(el);
+   192→   192→    return () => observer.disconnect();
+   193→   193→  }, []);
+   194→   194→
+   195→   195→  const selectedPersona = personas.find((p) => p.id === selectedId);
+   196→   196→
+   197→   197→  // Live duplicate warning (debounced)
+   198→   198→  const [similarPosts, setSimilarPosts] = useState<SimilarPost[]>([]);
+   199→   199→  useEffect(() => {
+   200→   200→    const t = setTimeout(() => {
+   201→   201→      setSimilarPosts(findSimilarPosts(topic, postedPosts, sensitivity));
+   202→   202→    }, 350);
+   203→   203→    return () => clearTimeout(t);
+   204→   204→  }, [topic, postedPosts, sensitivity]);
+   205→   205→
+   206→   206→  const saveDraft = async (content: string, contentType: string) => {
+   207→   207→    if (!selectedPersona) return;
+   208→   208→    const {
+   209→   209→      data: { user },
+   210→   210→    } = await supabase.auth.getUser();
+   211→   211→    if (user) {
+   212→   212→      await supabase.from("content_drafts").insert({
+   213→   213→        persona_id: selectedPersona.id,
+   214→   214→        user_id: user.id,
+   215→   215→        type: contentType,
+   216→   216→        content,
+   217→   217→      });
+   218→   218→    }
+   219→   219→  };
+   220→   220→
+   221→   221→  const callGenerate = async (body: Record<string, unknown>) => {
+   222→   222→    const res = await fetch("/api/generate", {
+   223→   223→      method: "POST",
+   224→   224→      headers: { "Content-Type": "application/json" },
+   225→   225→      body: JSON.stringify(body),
+   226→   226→    });
+   227→   227→    const data = await res.json();
+   228→   228→    if (!res.ok) throw new Error(data.error || "Generation failed");
+   229→   229→    return data.content as string;
+   230→   230→  };
+   231→   231→
+   232→   232→  const handleGenerate = async () => {
+   233→   233→    if (!selectedPersona) return;
+   234→   234→    setLoading(true);
+   235→   235→    setError(null);
+   236→   236→    setResults([]);
+   237→   237→    setAllFormats({});
+   238→   238→
+   239→   239→    try {
+   240→   240→      const allResults: string[] = [];
+   241→   241→
+   242→   242→      for (let i = 0; i < variations; i++) {
+   243→   243→        const content = await callGenerate({
+   244→   244→          persona: selectedPersona,
+   245→   245→          type,
+   246→   246→          topic,
+   247→   247→          model,
+   248→   248→          postedContext: postedPosts,
+   249→   249→          assetContext: assetCtx
+   250→   250→            ? {
+   251→   251→                type: assetCtx.type,
+   252→   252→                tags: assetCtx.tags || [],
+   253→   253→                content: assetCtx.content || "",
+   254→   254→              }
+   255→   255→            : undefined,
+   256→   256→        });
+   257→   257→        allResults.push(content);
+   258→   258→        await saveDraft(content, type);
+   259→   259→      }
+   260→   260→
+   261→   261→      setResults(allResults);
+   262→   262→    } catch (err: any) {
+   263→   263→      setError(err.message);
+   264→   264→    } finally {
+   265→   265→      setLoading(false);
+   266→   266→    }
+   267→   267→  };
+   268→   268→
+   269→   269→  const handleQuickRewrite = async (index: number, instruction: string) => {
+   270→   270→    if (!selectedPersona) return;
+   271→   271→    setRewritingIndex(index);
+   272→   272→
+   273→   273→    try {
+   274→   274→      const content = await callGenerate({
+   275→   275→        persona: selectedPersona,
+   276→   276→        type,
+   277→   277→        topic: `${instruction}\n\nOriginal:\n${results[index]}`,
+   278→   278→        model,
+   279→   279→      });
+   280→   280→
+   281→   281→      const newResults = [...results];
+   282→   282→      newResults[index] = content;
+   283→   283→      setResults(newResults);
+   284→   284→      await saveDraft(content, type);
+   285→   285→    } catch (err: any) {
+   286→   286→      alert(err.message);
+   287→   287→    } finally {
+   288→   288→      setRewritingIndex(null);
+   289→   289→    }
+   290→   290→  };
+   291→   291→
+   292→   292→  const handleTransform = async (index: number, newType: string, instruction: string) => {
+   293→   293→    if (!selectedPersona) return;
+   294→   294→    setRewritingIndex(index);
+   295→   295→
+   296→   296→    try {
+   297→   297→      const content = await callGenerate({
+   298→   298→        persona: selectedPersona,
+   299→   299→        type: newType,
+   300→   300→        topic: `${instruction}\n\nOriginal content:\n${results[index]}`,
+   301→   301→        model,
+   302→   302→      });
+   303→   303→
+   304→   304→      const newResults = [...results];
+   305→   305→      newResults[index] = content;
+   306→   306→      setResults(newResults);
+   307→   307→      await saveDraft(content, newType);
+   308→   308→    } catch (err: any) {
+   309→   309→      alert(err.message);
+   310→   310→    } finally {
+   311→   311→      setRewritingIndex(null);
+   312→   312→    }
+   313→   313→  };
+   314→   314→
+   315→   315→  // One click → script + caption + image prompt, all in persona voice
+   316→   316→  const handleMakeAllFormats = async (index: number) => {
+   317→   317→    if (!selectedPersona || makingAll !== null) return;
+   318→   318→    setMakingAll(index);
+   319→   319→    setError(null);
+   320→   320→
+   321→   321→    const jobs: { label: string; type: ContentType; instruction: string }[] = [
+   322→   322→      {
+   323→   323→        label: "Script",
+   324→   324→        type: "script",
+   325→   325→        instruction:
+   326→   326→          "Turn this into a short video script (30-45 seconds) while keeping the exact same voice and message",
+   327→   327→      },
+   328→   328→      {
+   329→   329→        label: "Caption",
+   330→   330→        type: "caption",
+   331→   331→        instruction:
+   332→   332→          "Turn this into a strong social media caption while keeping the exact same voice and message",
+   333→   333→      },
+   334→   334→      {
+   335→   335→        label: "Image prompt",
+   336→   336→        type: "image_prompt",
+   337→   337→        instruction:
+   338→   338→          "Turn this into a detailed image generation prompt that matches the persona's world and the content",
+   339→   339→      },
+   340→   340→    ];
+   341→   341→
+   342→   342→    try {
+   343→   343→      const formats: FormatResult[] = [];
+   344→   344→      // Sequential (not parallel): keeps preview LLM within rate limits and
+   345→   345→      // gives users a stable order Script → Caption → Image prompt.
+   346→   346→      for (const j of jobs) {
+   347→   347→        try {
+   348→   348→          const content = await callGenerate({
+   349→   349→            persona: selectedPersona,
+   350→   350→            type: j.type,
+   351→   351→            topic: `${j.instruction}\n\nOriginal content:\n${results[index]}`,
+   352→   352→            model,
+   353→   353→          });
+   354→   354→          formats.push({ label: j.label, type: j.type, content });
+   355→   355→          await saveDraft(content, j.type);
+   356→   356→        } catch {
+   357→   357→          // One format failing shouldn't kill the others
+   358→   358→        }
+   359→   359→      }
+   360→   360→
+   361→   361→      if (formats.length === 0) throw new Error("All transforms failed");
+   362→   362→      setAllFormats((prev) => ({ ...prev, [index]: formats }));
+   363→   363→    } catch (err: any) {
+   364→   364→      setError(err.message);
+   365→   365→    } finally {
+   366→   366→      setMakingAll(null);
+   367→   367→    }
+   368→   368→  };
+   369→   369→
+   370→   370→  const handleCopyOnly = async (content: string, index: number) => {
+   371→   371→    const ok = await copyToClipboard(content);
+   372→   372→    if (ok) {
+   373→   373→      setCopiedIndex(index);
+   374→   374→      setTimeout(() => setCopiedIndex((c) => (c === index ? null : c)), 1500);
+   375→   375→    }
+   376→   376→  };
+   377→   377→
+   378→   378→  const generateButton = (
+   379→   379→    extraClass: string = "",
+   380→   380→    ref?: RefObject<HTMLButtonElement | null>
+   381→   381→  ) => (
+   382→   382→    <button
+   383→   383→      ref={ref}
+   384→   384→      onClick={handleGenerate}
+   385→   385→      disabled={loading || !selectedPersona}
+   386→   386→      className={`w-full min-h-[52px] bg-white text-black font-medium rounded-xl hover:bg-zinc-200 disabled:opacity-50 text-base ${extraClass}`}
+   387→   387→    >
+   388→   388→      {loading
+   389→   389→        ? `Generating ${variations > 1 ? variations + " variations" : "..."}`
+   390→   390→        : "Generate"}
+   391→   391→    </button>
+   392→   392→  );
+   393→   393→
+   394→   394→  return (
+   395→   395→    <div className="min-h-screen p-4 sm:p-8 pb-28 sm:pb-8">
+   396→   396→      <div className="max-w-3xl mx-auto">
+   397→   397→        <div className="flex items-center justify-between mb-6 sm:mb-8">
+   398→   398→          <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
+   399→   399→            ← Dashboard
+   400→   400→          </a>
+   401→   401→          <h1 className="text-2xl font-bold">Generate Content</h1>
+   402→   402→        </div>
+   403→   403→
+   404→   404→        {/* First-run progress banner */}
+   405→   405→        {isFirstRun && (
+   406→   406→          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 sm:p-5 mb-6">
+   407→   407→            <p className="text-sm font-medium text-white mb-3">Your first post, in 3 steps</p>
+   408→   408→            <ol className="space-y-2 text-sm">
+   409→   409→              <li className="flex items-center gap-2 text-green-300">
+   410→   410→                <span className="w-5 h-5 rounded-full bg-green-500/20 border border-green-600 flex items-center justify-center text-[10px]">✓</span>
+   411→   411→                Persona created
+   412→   412→              </li>
+   413→   413→              <li className="flex items-center gap-2 text-white font-medium">
+   414→   414→                <span className="w-5 h-5 rounded-full bg-white text-black flex items-center justify-center text-[10px]">2</span>
+   415→   415→                Generate your first post ← you are here
+   416→   416→              </li>
+   417→   417→              <li className="flex items-center gap-2 text-zinc-400">
+   418→   418→                <span className="w-5 h-5 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[10px]">3</span>
+   419→   419→                Copy &amp; open X or LinkedIn
+   420→   420→              </li>
+   421→   421→            </ol>
+   422→   422→          </div>
+   423→   423→        )}
+   424→   424→
+   425→   425→        <div className="space-y-6">
+   426→   426→          <div>
+   427→   427→            <label className="block text-sm text-zinc-400 mb-2">Persona</label>
+   428→   428→            <select
+   429→   429→              value={selectedId}
+   430→   430→              onChange={(e) => {
+   431→   431→                setSelectedId(e.target.value);
+   432→   432→                setActivePersonaId(e.target.value);
+   433→   433→              }}
+   434→   434→              className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   435→   435→            >
+   436→   436→              {personas.map((p) => (
+   437→   437→                <option key={p.id} value={p.id}>
+   438→   438→                  {p.name}
+   439→   439→                </option>
+   440→   440→              ))}
+   441→   441→            </select>
+   442→   442→            {selectedPersona && getActivePersonaId() === selectedPersona.id && (
+   443→   443→              <p className="mt-2 text-xs text-green-400">● Active voice</p>
+   444→   444→            )}
+   445→   445→          </div>
+   446→   446→
+   447→   447→          {/* Vault asset chip: the words will match this asset */}
+   448→   448→          {assetCtx && (
+   449→   449→            <div className="bg-zinc-900 border border-zinc-600 rounded-xl p-4 flex items-center gap-4">
+   450→   450→              {assetCtx.type === "image" && assetCtx.url ? (
+   451→   451→                <img src={assetCtx.url} alt="Vault asset" className="w-14 h-14 rounded-lg object-cover shrink-0" />
+   452→   452→              ) : (
+   453→   453→                <div className="w-14 h-14 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-xl">
+   454→   454→                  {assetCtx.type === "video" ? "🎬" : "📄"}
+   455→   455→                </div>
+   456→   456→              )}
+   457→   457→              <div className="flex-1 min-w-0">
+   458→   458→                <p className="text-sm font-medium text-white">Writing for your vault asset</p>
+   459→   459→                <p className="text-xs text-zinc-500 truncate">
+   460→   460→                  {(assetCtx.tags || []).length > 0
+   461→   461→                    ? `Tags: ${assetCtx.tags.map((t) => `#${t}`).join(" ")}`
+   462→   462→                    : "Generation will pair the words with this asset"}
+   463→   463→                </p>
+   464→   464→              </div>
+   465→   465→              <button
+   466→   466→                onClick={() => setAssetCtx(null)}
+   467→   467→                className="text-xs text-zinc-500 hover:text-white shrink-0"
+   468→   468→              >
+   469→   469→                Remove
+   470→   470→              </button>
+   471→   471→            </div>
+   472→   472→          )}
+   473→   473→
+   474→   474→          {/* Welcome-back chip */}
+   475→   475→          {isWelcomeBack && !assetCtx && (
+   476→   476→            <div className="bg-amber-950/30 border border-amber-800/50 rounded-xl p-4">
+   477→   477→              <p className="text-sm font-medium text-amber-200">Come-back angle loaded</p>
+   478→   478→              <p className="text-xs text-zinc-400 mt-1">
+   479→   479→                The gap is the content. Topic is prefilled — edit it to match your actual week, then
+   480→   480→                generate.
+   481→   481→              </p>
+   482→   482→            </div>
+   483→   483→          )}
+   484→   484→
+   485→   485→          {selectedPersona && (
+   486→   486→            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
+   487→   487→              <p className="font-medium text-zinc-200 mb-1">{selectedPersona.name}</p>
+   488→   488→              <p className="line-clamp-2">{selectedPersona.backstory}</p>
+   489→   489→            </div>
+   490→   490→          )}
+   491→   491→
+   492→   492→          <div>
+   493→   493→            <label className="block text-sm text-zinc-400 mb-2">Content Type</label>
+   494→   494→            <div className="flex flex-wrap gap-2">
+   495→   495→              {(["caption", "script", "story_arc", "image_prompt"] as const).map((t) => (
+   496→   496→                <button
+   497→   497→                  key={t}
+   498→   498→                  onClick={() => setType(t)}
+   499→   499→                  className={`px-4 py-2 min-h-[40px] rounded-lg text-sm capitalize ${
+   500→   500→                    type === t
+   501→   501→                      ? "bg-white text-black"
+   502→   502→                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+   503→   503→                  }`}
+   504→   504→                >
+   505→   505→                  {t.replace("_", " ")}
+   506→   506→                </button>
+   507→   507→              ))}
+   508→   508→            </div>
+   509→   509→          </div>
+   510→   510→
+   511→   511→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   512→   512→            <div>
+   513→   513→              <label className="block text-sm text-zinc-400 mb-2">Model</label>
+   514→   514→              <select
+   515→   515→                value={model}
+   516→   516→                onChange={(e) => setModel(e.target.value)}
+   517→   517→                className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   518→   518→              >
+   519→   519→                {MODELS.map((m) => (
+   520→   520→                  <option key={m.id} value={m.id}>
+   521→   521→                    {m.name}
+   522→   522→                  </option>
+   523→   523→                ))}
+   524→   524→              </select>
+   525→   525→            </div>
+   526→   526→            <div>
+   527→   527→              <label className="block text-sm text-zinc-400 mb-2">Variations</label>
+   528→   528→              <select
+   529→   529→                value={variations}
+   530→   530→                onChange={(e) => setVariations(Number(e.target.value))}
+   531→   531→                className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   532→   532→              >
+   533→   533→                <option value={1}>1 variation</option>
+   534→   534→                <option value={2}>2 variations</option>
+   535→   535→                <option value={3}>3 variations</option>
+   536→   536→              </select>
+   537→   537→            </div>
+   538→   538→          </div>
+   539→   539→
+   540→   540→          <div>
+   541→   541→            <label className="block text-sm text-zinc-400 mb-2">Topic / Context (optional)</label>
+   542→   542→            <input
+   543→   543→              value={topic}
+   544→   544→              onChange={(e) => setTopic(e.target.value)}
+   545→   545→              placeholder="e.g. launching a new product, morning routine, mindset"
+   546→   546→              className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   547→   547→            />
+   548→   548→          </div>
+   549→   549→
+   550→   550→          {/* Live duplicate warning */}
+   551→   551→          {similarPosts.length > 0 && (
+   552→   552→            <div className="bg-amber-950/40 border border-amber-700/60 rounded-xl p-4">
+   553→   553→              <div className="flex items-start justify-between gap-3 mb-2">
+   554→   554→                <p className="text-sm font-medium text-amber-300">
+   555→   555→                  ⚠ Heads up — this is close to something you already posted
+   556→   556→                </p>
+   557→   557→                <div className="flex gap-1 shrink-0">
+   558→   558→                  {(["low", "medium", "high"] as Sensitivity[]).map((s) => (
+   559→   559→                    <button
+   560→   560→                      key={s}
+   561→   561→                      onClick={() => changeSensitivity(s)}
+   562→   562→                      title={`${sensitivityLabel(s)} sensitivity`}
+   563→   563→                      className={`text-[10px] px-2 py-1 rounded border ${
+   564→   564→                        sensitivity === s
+   565→   565→                          ? "bg-amber-300 text-black border-amber-300"
+   566→   566→                          : "border-amber-800 text-amber-400 hover:bg-amber-900/40"
+   567→   567→                      }`}
+   568→   568→                    >
+   569→   569→                      {sensitivityLabel(s)}
+   570→   570→                    </button>
+   571→   571→                  ))}
+   572→   572→                </div>
+   573→   573→              </div>
+   574→   574→              <ul className="space-y-1.5">
+   575→   575→                {similarPosts.map(({ post, score }) => (
+   576→   576→                  <li key={post.id} className="text-xs text-amber-200/90 leading-relaxed">
+   577→   577→                    <span className="text-amber-400">
+   578→   578→                      {formatPostedDate(post.created_at)} ({Math.round(score * 100)}% match):
+   579→   579→                    </span>{" "}
+   580→   580→                    “{post.content.replace(/\s+/g, " ").slice(0, 110)}
+   581→   581→                    {post.content.length > 110 ? "…" : ""}”
+   582→   582→                  </li>
+   583→   583→                ))}
+   584→   584→              </ul>
+   585→   585→              <p className="text-[11px] text-amber-500/80 mt-2">
+   586→   586→                Generation will automatically steer toward a fresh angle.
+   587→   587→              </p>
+   588→   588→            </div>
+   589→   589→          )}
+   590→   590→
+   591→   591→          {postedPosts.length > 0 && similarPosts.length === 0 && (
+   592→   592→            <p className="text-xs text-zinc-500">
+   593→   593→              Posted-aware mode: generation avoids repeating your {postedPosts.length} posted{" "}
+   594→   594→              {postedPosts.length === 1 ? "item" : "items"}.
+   595→   595→            </p>
+   596→   596→          )}
+   597→   597→
+   598→   598→          {generateButton("", generateBtnRef)}
+   599→   599→
+   600→   600→          {error && (
+   601→   601→            <div className="p-4 bg-red-900/40 border border-red-700 rounded-lg text-red-200 text-sm">
+   602→   602→              {error}
+   603→   603→            </div>
+   604→   604→          )}
+   605→   605→
+   606→   606→          {results.map((result, idx) => (
+   607→   607→            <div key={idx} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 sm:p-6">
+   608→   608→              <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+   609→   609→                <h3 className="font-medium">
+   610→   610→                  {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
+   611→   611→                  {isFirstRun && idx === 0 && (
+   612→   612→                    <span className="ml-2 text-xs text-green-400 font-normal">
+   613→   613→                      Draft saved — last step: post it
+   614→   614→                    </span>
+   615→   615→                  )}
+   616→   616→                </h3>
+   617→   617→                {copiedIndex === idx && (
+   618→   618→                  <span className="text-xs text-green-400">Copied ✓</span>
+   619→   619→                )}
+   620→   620→              </div>
+   621→   621→
+   622→   622→              <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-4">
+   623→   623→                {rewritingIndex === idx ? "Working..." : result}
+   624→   624→              </pre>
+   625→   625→
+   626→   626→              {/* Copy & open platform — the one-tap handoff */}
+   627→   627→              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+   628→   628→                <button
+   629→   629→                  onClick={() => copyAndOpen(result, "twitter")}
+   630→   630→                  className="min-h-[46px] px-4 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
+   631→   631→                >
+   632→   632→                  Copy &amp; open X
+   633→   633→                </button>
+   634→   634→                <button
+   635→   635→                  onClick={() => copyAndOpen(result, "linkedin")}
+   636→   636→                  className="min-h-[46px] px-4 bg-[#0a66c2] text-white rounded-lg text-sm font-medium hover:bg-[#004182]"
+   637→   637→                >
+   638→   638→                  Copy &amp; open LinkedIn
+   639→   639→                </button>
+   640→   640→                <button
+   641→   641→                  onClick={() => handleCopyOnly(result, idx)}
+   642→   642→                  className="min-h-[46px] px-4 border border-zinc-600 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800"
+   643→   643→                >
+   644→   644→                  {copiedIndex === idx ? "Copied ✓" : "Copy only"}
+   645→   645→                </button>
+   646→   646→              </div>
+   647→   647→
+   648→   648→              {/* Quick actions */}
+   649→   649→              <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
+   650→   650→                <button
+   651→   651→                  onClick={() => handleMakeAllFormats(idx)}
+   652→   652→                  disabled={makingAll === idx || rewritingIndex === idx}
+   653→   653→                  className="text-xs px-3 py-2 min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg font-medium hover:bg-zinc-700 disabled:opacity-50"
+   654→   654→                >
+   655→   655→                  {makingAll === idx ? "Making all formats..." : "⚡ Make all formats"}
+   656→   656→                </button>
+   657→   657→                <button
+   658→   658→                  onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
+   659→   659→                  disabled={rewritingIndex === idx || makingAll === idx}
+   660→   660→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   661→   661→                >
+   662→   662→                  Shorter
+   663→   663→                </button>
+   664→   664→                <button
+   665→   665→                  onClick={() => handleQuickRewrite(idx, "Make this longer and more detailed")}
+   666→   666→                  disabled={rewritingIndex === idx || makingAll === idx}
+   667→   667→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   668→   668→                >
+   669→   669→                  Longer
+   670→   670→                </button>
+   671→   671→                <button
+   672→   672→                  onClick={() =>
+   673→   673→                    handleQuickRewrite(idx, "Make this more aggressive and high-energy")
+   674→   674→                  }
+   675→   675→                  disabled={rewritingIndex === idx || makingAll === idx}
+   676→   676→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   677→   677→                >
+   678→   678→                  More Punch
+   679→   679→                </button>
+   680→   680→                <button
+   681→   681→                  onClick={() =>
+   682→   682→                    handleTransform(
+   683→   683→                      idx,
+   684→   684→                      "script",
+   685→   685→                      "Turn this into a short video script (30-45 seconds) while keeping the exact same voice and message"
+   686→   686→                    )
+   687→   687→                  }
+   688→   688→                  disabled={rewritingIndex === idx || makingAll === idx}
+   689→   689→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   690→   690→                >
+   691→   691→                  → Script
+   692→   692→                </button>
+   693→   693→                <button
+   694→   694→                  onClick={() =>
+   695→   695→                    handleTransform(
+   696→   696→                      idx,
+   697→   697→                      "caption",
+   698→   698→                      "Turn this into a strong social media caption while keeping the exact same voice and message"
+   699→   699→                    )
+   700→   700→                  }
+   701→   701→                  disabled={rewritingIndex === idx || makingAll === idx}
+   702→   702→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   703→   703→                >
+   704→   704→                  → Caption
+   705→   705→                </button>
+   706→   706→                <button
+   707→   707→                  onClick={() =>
+   708→   708→                    handleTransform(
+   709→   709→                      idx,
+   710→   710→                      "image_prompt",
+   711→   711→                      "Turn this into a detailed image generation prompt that matches the persona's world and the content"
+   712→   712→                    )
+   713→   713→                  }
+   714→   714→                  disabled={rewritingIndex === idx || makingAll === idx}
+   715→   715→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   716→   716→                >
+   717→   717→                  → Image Prompt
+   718→   718→                </button>
+   719→   719→              </div>
+   720→   720→
+   721→   721→              {/* Make-all-formats results */}
+   722→   722→              {allFormats[idx] && (
+   723→   723→                <div className="mt-4 pt-4 border-t border-zinc-800 space-y-4">
+   724→   724→                  <p className="text-xs text-green-400 font-medium">
+   725→   725→                    All formats ready — each one is saved to Drafts
+   726→   726→                  </p>
+   727→   727→                  {allFormats[idx].map((f) => (
+   728→   728→                    <div key={f.label} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+   729→   729→                      <div className="flex items-center justify-between mb-2">
+   730→   730→                        <span className="text-xs uppercase tracking-wide text-zinc-400 font-medium">
+   731→   731→                          {f.label}
+   732→   732→                        </span>
+   733→   733→                        <div className="flex gap-3">
+   734→   734→                          <button
+   735→   735→                            onClick={() => copyAndOpen(f.content, "twitter")}
+   736→   736→                            className="text-xs text-white font-medium hover:text-zinc-300"
+   737→   737→                          >
+   738→   738→                            Copy &amp; open X
+   739→   739→                          </button>
+   740→   740→                          <button
+   741→   741→                            onClick={() => copyAndOpen(f.content, "linkedin")}
+   742→   742→                            className="text-xs text-[#4a9ede] hover:text-[#7db8e8]"
+   743→   743→                          >
+   744→   744→                            LinkedIn
+   745→   745→                          </button>
+   746→   746→                        </div>
+   747→   747→                      </div>
+   748→   748→                      <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+   749→   749→                        {f.content}
+   750→   750→                      </pre>
+   751→   751→                    </div>
+   752→   752→                  ))}
+   753→   753→                </div>
+   754→   754→              )}
+   755→   755→            </div>
+   756→   756→          ))}
+   757→   757→        </div>
+   758→   758→      </div>
+   759→   759→
+   760→   760→      {/* Sticky mobile generate bar */}
+   761→   761→      {showStickyBar && (
+   762→   762→        <div
+   763→   763→          className="fixed bottom-0 inset-x-0 sm:hidden bg-zinc-950/95 backdrop-blur border-t border-zinc-800 p-3"
+   764→   764→          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
+   765→   765→        >
+   766→   766→          {generateButton("shadow-lg")}
+   767→   767→        </div>
+   768→   768→      )}
+   769→   769→    </div>
+   770→   770→  );
+   771→   771→}
+   772→   772→
+   773→   773→export default function GeneratePage() {
+   774→   774→  return (
+   775→   775→    <Suspense
+   776→   776→      fallback={
+   777→   777→        <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>
+   778→   778→      }
+   779→   779→    >
+   780→   780→      <GenerateContent />
+   781→   781→    </Suspense>
+   782→   782→  );
+   783→   783→}
+   784→   784→

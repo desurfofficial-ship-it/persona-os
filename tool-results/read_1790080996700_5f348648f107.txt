@@ -1,0 +1,784 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState, useRef, Suspense, type RefObject } from "react";
+     4→import { useRouter, useSearchParams } from "next/navigation";
+     5→import { supabase } from "@/lib/supabase";
+     6→import type { Persona } from "@/types/persona";
+     7→import { copyAndOpen, copyToClipboard } from "@/lib/share";
+     8→import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
+     9→import {
+    10→  findSimilarPosts,
+    11→  formatPostedDate,
+    12→  sensitivityLabel,
+    13→  type PostedPost,
+    14→  type Sensitivity,
+    15→  type SimilarPost,
+    16→} from "@/lib/duplicate";
+    17→
+    18→const MODELS = [
+    19→  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini (Fast)" },
+    20→  { id: "anthropic/claude-3.5-haiku", name: "Claude 3.5 Haiku" },
+    21→  { id: "google/gemini-flash-1.5", name: "Gemini Flash" },
+    22→  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B" },
+    23→];
+    24→
+    25→const SENSITIVITY_KEY = "persona-os-dup-sensitivity";
+    26→
+    27→type ContentType = "caption" | "script" | "story_arc" | "image_prompt";
+    28→
+    29→interface AssetCtx {
+    30→  id: string;
+    31→  persona_id: string;
+    32→  type: string;
+    33→  url: string | null;
+    34→  content: string | null;
+    35→  tags: string[];
+    36→}
+    37→
+    38→interface FormatResult {
+    39→  label: string;
+    40→  type: ContentType;
+    41→  content: string;
+    42→}
+    43→
+    44→function GenerateContent() {
+    45→  const router = useRouter();
+    46→  const searchParams = useSearchParams();
+    47→  const preselectedId = searchParams.get("persona");
+    48→  const isFirstRun = searchParams.get("first") === "1";
+    49→  const assetParam = searchParams.get("asset");
+    50→  const isWelcomeBack = searchParams.get("welcome") === "1";
+    51→
+    52→  const WELCOME_PROMPT =
+    53→    "I've been quiet for a few days — write an honest come-back post about where I've been and what I learned in the gap. No apology theater, just real.";
+    54→
+    55→  const [personas, setPersonas] = useState<Persona[]>([]);
+    56→  const [selectedId, setSelectedId] = useState(preselectedId || "");
+    57→  const [type, setType] = useState<ContentType>("caption");
+    58→  const [topic, setTopic] = useState("");
+    59→  const [model, setModel] = useState("openai/gpt-4o-mini");
+    60→  const [variations, setVariations] = useState(1);
+    61→  const [results, setResults] = useState<string[]>([]);
+    62→  const [loading, setLoading] = useState(false);
+    63→  const [error, setError] = useState<string | null>(null);
+    64→  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
+    65→  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+    66→
+    67→  // Posted-aware state
+    68→  const [postedPosts, setPostedPosts] = useState<PostedPost[]>([]);
+    69→  const [sensitivity, setSensitivity] = useState<Sensitivity>("medium");
+    70→
+    71→  // Vault asset context (write-for-this-asset loop)
+    72→  const [assetCtx, setAssetCtx] = useState<AssetCtx | null>(null);
+    73→
+    74→  // Make all formats state: per result index → generated formats
+    75→  const [allFormats, setAllFormats] = useState<Record<number, FormatResult[]>>({});
+    76→  const [makingAll, setMakingAll] = useState<number | null>(null);
+    77→
+    78→  // Sticky mobile generate bar
+    79→  const generateBtnRef = useRef<HTMLButtonElement>(null);
+    80→  const [showStickyBar, setShowStickyBar] = useState(false);
+    81→
+    82→  useEffect(() => {
+    83→    const stored = window.localStorage.getItem(SENSITIVITY_KEY);
+    84→    if (stored === "low" || stored === "medium" || stored === "high") {
+    85→      setSensitivity(stored);
+    86→    }
+    87→  }, []);
+    88→
+    89→  const changeSensitivity = (s: Sensitivity) => {
+    90→    setSensitivity(s);
+    91→    window.localStorage.setItem(SENSITIVITY_KEY, s);
+    92→  };
+    93→
+    94→  useEffect(() => {
+    95→    const load = async () => {
+    96→      const {
+    97→        data: { user },
+    98→      } = await supabase.auth.getUser();
+    99→      if (!user) {
+   100→        router.push("/login");
+   101→        return;
+   102→      }
+   103→
+   104→      const { data } = await supabase
+   105→        .from("personas")
+   106→        .select("*")
+   107→        .eq("user_id", user.id)
+   108→        .order("created_at", { ascending: false });
+   109→
+   110→      setPersonas(data || []);
+   111→      if (preselectedId) {
+   112→        setSelectedId(preselectedId);
+   113→        setActivePersonaId(preselectedId);
+   114→      } else {
+   115→        // Default to the user's active voice when there is one.
+   116→        const active = getActivePersonaId();
+   117→        if (active && data?.some((p) => p.id === active)) setSelectedId(active);
+   118→        else if (data && data.length > 0) setSelectedId(data[0].id);
+   119→      }
+   120→    };
+   121→    load();
+   122→  }, [router, preselectedId]);
+   123→
+   124→  // Load already-posted content for the selected persona (for repeat-avoidance)
+   125→  useEffect(() => {
+   126→    if (!selectedId) return;
+   127→    let cancelled = false;
+   128→
+   129→    const loadPosted = async () => {
+   130→      const { data } = await supabase
+   131→        .from("content_drafts")
+   132→        .select("id, content, created_at")
+   133→        .eq("persona_id", selectedId)
+   134→        .eq("posted", true)
+   135→        .order("created_at", { ascending: false })
+   136→        .limit(20);
+   137→
+   138→      if (!cancelled) setPostedPosts((data || []) as PostedPost[]);
+   139→    };
+   140→    loadPosted();
+   141→
+   142→    return () => {
+   143→      cancelled = true;
+   144→    };
+   145→  }, [selectedId]);
+   146→
+   147→  // Welcome-back prefill: absence as content.
+   148→  useEffect(() => {
+   149→    if (isWelcomeBack) setTopic(WELCOME_PROMPT);
+   150→  }, [isWelcomeBack]);
+   151→
+   152→  // Load vault asset context when arriving from "Write for this".
+   153→  useEffect(() => {
+   154→    if (!assetParam) return;
+   155→    let cancelled = false;
+   156→
+   157→    const loadAsset = async () => {
+   158→      const {
+   159→        data: { user },
+   160→      } = await supabase.auth.getUser();
+   161→      if (!user) return;
+   162→
+   163→      const { data } = await supabase
+   164→        .from("assets")
+   165→        .select("id, persona_id, type, url, content, tags")
+   166→        .eq("id", assetParam)
+   167→        .eq("user_id", user.id)
+   168→        .limit(1);
+   169→
+   170→      const asset = (data || [])[0] as AssetCtx | undefined;
+   171→      if (!cancelled && asset) {
+   172→        setAssetCtx(asset);
+   173→        if (asset.persona_id) setSelectedId(asset.persona_id);
+   174→      }
+   175→    };
+   176→    loadAsset();
+   177→
+   178→    return () => {
+   179→      cancelled = true;
+   180→    };
+   181→  }, [assetParam]);
+   182→
+   183→  // Sticky bar: show when the main Generate button scrolls out of view
+   184→  useEffect(() => {
+   185→    const el = generateBtnRef.current;
+   186→    if (!el) return;
+   187→    const observer = new IntersectionObserver(
+   188→      ([entry]) => setShowStickyBar(!entry.isIntersecting),
+   189→      { threshold: 0 }
+   190→    );
+   191→    observer.observe(el);
+   192→    return () => observer.disconnect();
+   193→  }, []);
+   194→
+   195→  const selectedPersona = personas.find((p) => p.id === selectedId);
+   196→
+   197→  // Live duplicate warning (debounced)
+   198→  const [similarPosts, setSimilarPosts] = useState<SimilarPost[]>([]);
+   199→  useEffect(() => {
+   200→    const t = setTimeout(() => {
+   201→      setSimilarPosts(findSimilarPosts(topic, postedPosts, sensitivity));
+   202→    }, 350);
+   203→    return () => clearTimeout(t);
+   204→  }, [topic, postedPosts, sensitivity]);
+   205→
+   206→  const saveDraft = async (content: string, contentType: string) => {
+   207→    if (!selectedPersona) return;
+   208→    const {
+   209→      data: { user },
+   210→    } = await supabase.auth.getUser();
+   211→    if (user) {
+   212→      await supabase.from("content_drafts").insert({
+   213→        persona_id: selectedPersona.id,
+   214→        user_id: user.id,
+   215→        type: contentType,
+   216→        content,
+   217→      });
+   218→    }
+   219→  };
+   220→
+   221→  const callGenerate = async (body: Record<string, unknown>) => {
+   222→    const res = await fetch("/api/generate", {
+   223→      method: "POST",
+   224→      headers: { "Content-Type": "application/json" },
+   225→      body: JSON.stringify(body),
+   226→    });
+   227→    const data = await res.json();
+   228→    if (!res.ok) throw new Error(data.error || "Generation failed");
+   229→    return data.content as string;
+   230→  };
+   231→
+   232→  const handleGenerate = async () => {
+   233→    if (!selectedPersona) return;
+   234→    setLoading(true);
+   235→    setError(null);
+   236→    setResults([]);
+   237→    setAllFormats({});
+   238→
+   239→    try {
+   240→      const allResults: string[] = [];
+   241→
+   242→      for (let i = 0; i < variations; i++) {
+   243→        const content = await callGenerate({
+   244→          persona: selectedPersona,
+   245→          type,
+   246→          topic,
+   247→          model,
+   248→          postedContext: postedPosts,
+   249→          assetContext: assetCtx
+   250→            ? {
+   251→                type: assetCtx.type,
+   252→                tags: assetCtx.tags || [],
+   253→                content: assetCtx.content || "",
+   254→              }
+   255→            : undefined,
+   256→        });
+   257→        allResults.push(content);
+   258→        await saveDraft(content, type);
+   259→      }
+   260→
+   261→      setResults(allResults);
+   262→    } catch (err: any) {
+   263→      setError(err.message);
+   264→    } finally {
+   265→      setLoading(false);
+   266→    }
+   267→  };
+   268→
+   269→  const handleQuickRewrite = async (index: number, instruction: string) => {
+   270→    if (!selectedPersona) return;
+   271→    setRewritingIndex(index);
+   272→
+   273→    try {
+   274→      const content = await callGenerate({
+   275→        persona: selectedPersona,
+   276→        type,
+   277→        topic: `${instruction}\n\nOriginal:\n${results[index]}`,
+   278→        model,
+   279→      });
+   280→
+   281→      const newResults = [...results];
+   282→      newResults[index] = content;
+   283→      setResults(newResults);
+   284→      await saveDraft(content, type);
+   285→    } catch (err: any) {
+   286→      alert(err.message);
+   287→    } finally {
+   288→      setRewritingIndex(null);
+   289→    }
+   290→  };
+   291→
+   292→  const handleTransform = async (index: number, newType: string, instruction: string) => {
+   293→    if (!selectedPersona) return;
+   294→    setRewritingIndex(index);
+   295→
+   296→    try {
+   297→      const content = await callGenerate({
+   298→        persona: selectedPersona,
+   299→        type: newType,
+   300→        topic: `${instruction}\n\nOriginal content:\n${results[index]}`,
+   301→        model,
+   302→      });
+   303→
+   304→      const newResults = [...results];
+   305→      newResults[index] = content;
+   306→      setResults(newResults);
+   307→      await saveDraft(content, newType);
+   308→    } catch (err: any) {
+   309→      alert(err.message);
+   310→    } finally {
+   311→      setRewritingIndex(null);
+   312→    }
+   313→  };
+   314→
+   315→  // One click → script + caption + image prompt, all in persona voice
+   316→  const handleMakeAllFormats = async (index: number) => {
+   317→    if (!selectedPersona || makingAll !== null) return;
+   318→    setMakingAll(index);
+   319→    setError(null);
+   320→
+   321→    const jobs: { label: string; type: ContentType; instruction: string }[] = [
+   322→      {
+   323→        label: "Script",
+   324→        type: "script",
+   325→        instruction:
+   326→          "Turn this into a short video script (30-45 seconds) while keeping the exact same voice and message",
+   327→      },
+   328→      {
+   329→        label: "Caption",
+   330→        type: "caption",
+   331→        instruction:
+   332→          "Turn this into a strong social media caption while keeping the exact same voice and message",
+   333→      },
+   334→      {
+   335→        label: "Image prompt",
+   336→        type: "image_prompt",
+   337→        instruction:
+   338→          "Turn this into a detailed image generation prompt that matches the persona's world and the content",
+   339→      },
+   340→    ];
+   341→
+   342→    try {
+   343→      const formats: FormatResult[] = [];
+   344→      // Sequential (not parallel): keeps preview LLM within rate limits and
+   345→      // gives users a stable order Script → Caption → Image prompt.
+   346→      for (const j of jobs) {
+   347→        try {
+   348→          const content = await callGenerate({
+   349→            persona: selectedPersona,
+   350→            type: j.type,
+   351→            topic: `${j.instruction}\n\nOriginal content:\n${results[index]}`,
+   352→            model,
+   353→          });
+   354→          formats.push({ label: j.label, type: j.type, content });
+   355→          await saveDraft(content, j.type);
+   356→        } catch {
+   357→          // One format failing shouldn't kill the others
+   358→        }
+   359→      }
+   360→
+   361→      if (formats.length === 0) throw new Error("All transforms failed");
+   362→      setAllFormats((prev) => ({ ...prev, [index]: formats }));
+   363→    } catch (err: any) {
+   364→      setError(err.message);
+   365→    } finally {
+   366→      setMakingAll(null);
+   367→    }
+   368→  };
+   369→
+   370→  const handleCopyOnly = async (content: string, index: number) => {
+   371→    const ok = await copyToClipboard(content);
+   372→    if (ok) {
+   373→      setCopiedIndex(index);
+   374→      setTimeout(() => setCopiedIndex((c) => (c === index ? null : c)), 1500);
+   375→    }
+   376→  };
+   377→
+   378→  const generateButton = (
+   379→    extraClass: string = "",
+   380→    ref?: RefObject<HTMLButtonElement | null>
+   381→  ) => (
+   382→    <button
+   383→      ref={ref}
+   384→      onClick={handleGenerate}
+   385→      disabled={loading || !selectedPersona}
+   386→      className={`w-full min-h-[52px] bg-white text-black font-medium rounded-xl hover:bg-zinc-200 disabled:opacity-50 text-base ${extraClass}`}
+   387→    >
+   388→      {loading
+   389→        ? `Generating ${variations > 1 ? variations + " variations" : "..."}`
+   390→        : "Generate"}
+   391→    </button>
+   392→  );
+   393→
+   394→  return (
+   395→    <div className="min-h-screen p-4 sm:p-8 pb-28 sm:pb-8">
+   396→      <div className="max-w-3xl mx-auto">
+   397→        <div className="flex items-center justify-between mb-6 sm:mb-8">
+   398→          <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
+   399→            ← Dashboard
+   400→          </a>
+   401→          <h1 className="text-2xl font-bold">Generate Content</h1>
+   402→        </div>
+   403→
+   404→        {/* First-run progress banner */}
+   405→        {isFirstRun && (
+   406→          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 sm:p-5 mb-6">
+   407→            <p className="text-sm font-medium text-white mb-3">Your first post, in 3 steps</p>
+   408→            <ol className="space-y-2 text-sm">
+   409→              <li className="flex items-center gap-2 text-green-300">
+   410→                <span className="w-5 h-5 rounded-full bg-green-500/20 border border-green-600 flex items-center justify-center text-[10px]">✓</span>
+   411→                Persona created
+   412→              </li>
+   413→              <li className="flex items-center gap-2 text-white font-medium">
+   414→                <span className="w-5 h-5 rounded-full bg-white text-black flex items-center justify-center text-[10px]">2</span>
+   415→                Generate your first post ← you are here
+   416→              </li>
+   417→              <li className="flex items-center gap-2 text-zinc-400">
+   418→                <span className="w-5 h-5 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[10px]">3</span>
+   419→                Copy &amp; open X or LinkedIn
+   420→              </li>
+   421→            </ol>
+   422→          </div>
+   423→        )}
+   424→
+   425→        <div className="space-y-6">
+   426→          <div>
+   427→            <label className="block text-sm text-zinc-400 mb-2">Persona</label>
+   428→            <select
+   429→              value={selectedId}
+   430→              onChange={(e) => {
+   431→                setSelectedId(e.target.value);
+   432→                setActivePersonaId(e.target.value);
+   433→              }}
+   434→              className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   435→            >
+   436→              {personas.map((p) => (
+   437→                <option key={p.id} value={p.id}>
+   438→                  {p.name}
+   439→                </option>
+   440→              ))}
+   441→            </select>
+   442→            {selectedPersona && getActivePersonaId() === selectedPersona.id && (
+   443→              <p className="mt-2 text-xs text-green-400">● Active voice</p>
+   444→            )}
+   445→          </div>
+   446→
+   447→          {/* Vault asset chip: the words will match this asset */}
+   448→          {assetCtx && (
+   449→            <div className="bg-zinc-900 border border-zinc-600 rounded-xl p-4 flex items-center gap-4">
+   450→              {assetCtx.type === "image" && assetCtx.url ? (
+   451→                <img src={assetCtx.url} alt="Vault asset" className="w-14 h-14 rounded-lg object-cover shrink-0" />
+   452→              ) : (
+   453→                <div className="w-14 h-14 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-xl">
+   454→                  {assetCtx.type === "video" ? "🎬" : "📄"}
+   455→                </div>
+   456→              )}
+   457→              <div className="flex-1 min-w-0">
+   458→                <p className="text-sm font-medium text-white">Writing for your vault asset</p>
+   459→                <p className="text-xs text-zinc-500 truncate">
+   460→                  {(assetCtx.tags || []).length > 0
+   461→                    ? `Tags: ${assetCtx.tags.map((t) => `#${t}`).join(" ")}`
+   462→                    : "Generation will pair the words with this asset"}
+   463→                </p>
+   464→              </div>
+   465→              <button
+   466→                onClick={() => setAssetCtx(null)}
+   467→                className="text-xs text-zinc-500 hover:text-white shrink-0"
+   468→              >
+   469→                Remove
+   470→              </button>
+   471→            </div>
+   472→          )}
+   473→
+   474→          {/* Welcome-back chip */}
+   475→          {isWelcomeBack && !assetCtx && (
+   476→            <div className="bg-amber-950/30 border border-amber-800/50 rounded-xl p-4">
+   477→              <p className="text-sm font-medium text-amber-200">Come-back angle loaded</p>
+   478→              <p className="text-xs text-zinc-400 mt-1">
+   479→                The gap is the content. Topic is prefilled — edit it to match your actual week, then
+   480→                generate.
+   481→              </p>
+   482→            </div>
+   483→          )}
+   484→
+   485→          {selectedPersona && (
+   486→            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
+   487→              <p className="font-medium text-zinc-200 mb-1">{selectedPersona.name}</p>
+   488→              <p className="line-clamp-2">{selectedPersona.backstory}</p>
+   489→            </div>
+   490→          )}
+   491→
+   492→          <div>
+   493→            <label className="block text-sm text-zinc-400 mb-2">Content Type</label>
+   494→            <div className="flex flex-wrap gap-2">
+   495→              {(["caption", "script", "story_arc", "image_prompt"] as const).map((t) => (
+   496→                <button
+   497→                  key={t}
+   498→                  onClick={() => setType(t)}
+   499→                  className={`px-4 py-2 min-h-[40px] rounded-lg text-sm capitalize ${
+   500→                    type === t
+   501→                      ? "bg-white text-black"
+   502→                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+   503→                  }`}
+   504→                >
+   505→                  {t.replace("_", " ")}
+   506→                </button>
+   507→              ))}
+   508→            </div>
+   509→          </div>
+   510→
+   511→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   512→            <div>
+   513→              <label className="block text-sm text-zinc-400 mb-2">Model</label>
+   514→              <select
+   515→                value={model}
+   516→                onChange={(e) => setModel(e.target.value)}
+   517→                className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   518→              >
+   519→                {MODELS.map((m) => (
+   520→                  <option key={m.id} value={m.id}>
+   521→                    {m.name}
+   522→                  </option>
+   523→                ))}
+   524→              </select>
+   525→            </div>
+   526→            <div>
+   527→              <label className="block text-sm text-zinc-400 mb-2">Variations</label>
+   528→              <select
+   529→                value={variations}
+   530→                onChange={(e) => setVariations(Number(e.target.value))}
+   531→                className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   532→              >
+   533→                <option value={1}>1 variation</option>
+   534→                <option value={2}>2 variations</option>
+   535→                <option value={3}>3 variations</option>
+   536→              </select>
+   537→            </div>
+   538→          </div>
+   539→
+   540→          <div>
+   541→            <label className="block text-sm text-zinc-400 mb-2">Topic / Context (optional)</label>
+   542→            <input
+   543→              value={topic}
+   544→              onChange={(e) => setTopic(e.target.value)}
+   545→              placeholder="e.g. launching a new product, morning routine, mindset"
+   546→              className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+   547→            />
+   548→          </div>
+   549→
+   550→          {/* Live duplicate warning */}
+   551→          {similarPosts.length > 0 && (
+   552→            <div className="bg-amber-950/40 border border-amber-700/60 rounded-xl p-4">
+   553→              <div className="flex items-start justify-between gap-3 mb-2">
+   554→                <p className="text-sm font-medium text-amber-300">
+   555→                  ⚠ Heads up — this is close to something you already posted
+   556→                </p>
+   557→                <div className="flex gap-1 shrink-0">
+   558→                  {(["low", "medium", "high"] as Sensitivity[]).map((s) => (
+   559→                    <button
+   560→                      key={s}
+   561→                      onClick={() => changeSensitivity(s)}
+   562→                      title={`${sensitivityLabel(s)} sensitivity`}
+   563→                      className={`text-[10px] px-2 py-1 rounded border ${
+   564→                        sensitivity === s
+   565→                          ? "bg-amber-300 text-black border-amber-300"
+   566→                          : "border-amber-800 text-amber-400 hover:bg-amber-900/40"
+   567→                      }`}
+   568→                    >
+   569→                      {sensitivityLabel(s)}
+   570→                    </button>
+   571→                  ))}
+   572→                </div>
+   573→              </div>
+   574→              <ul className="space-y-1.5">
+   575→                {similarPosts.map(({ post, score }) => (
+   576→                  <li key={post.id} className="text-xs text-amber-200/90 leading-relaxed">
+   577→                    <span className="text-amber-400">
+   578→                      {formatPostedDate(post.created_at)} ({Math.round(score * 100)}% match):
+   579→                    </span>{" "}
+   580→                    “{post.content.replace(/\s+/g, " ").slice(0, 110)}
+   581→                    {post.content.length > 110 ? "…" : ""}”
+   582→                  </li>
+   583→                ))}
+   584→              </ul>
+   585→              <p className="text-[11px] text-amber-500/80 mt-2">
+   586→                Generation will automatically steer toward a fresh angle.
+   587→              </p>
+   588→            </div>
+   589→          )}
+   590→
+   591→          {postedPosts.length > 0 && similarPosts.length === 0 && (
+   592→            <p className="text-xs text-zinc-500">
+   593→              Posted-aware mode: generation avoids repeating your {postedPosts.length} posted{" "}
+   594→              {postedPosts.length === 1 ? "item" : "items"}.
+   595→            </p>
+   596→          )}
+   597→
+   598→          {generateButton("", generateBtnRef)}
+   599→
+   600→          {error && (
+   601→            <div className="p-4 bg-red-900/40 border border-red-700 rounded-lg text-red-200 text-sm">
+   602→              {error}
+   603→            </div>
+   604→          )}
+   605→
+   606→          {results.map((result, idx) => (
+   607→            <div key={idx} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 sm:p-6">
+   608→              <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+   609→                <h3 className="font-medium">
+   610→                  {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
+   611→                  {isFirstRun && idx === 0 && (
+   612→                    <span className="ml-2 text-xs text-green-400 font-normal">
+   613→                      Draft saved — last step: post it
+   614→                    </span>
+   615→                  )}
+   616→                </h3>
+   617→                {copiedIndex === idx && (
+   618→                  <span className="text-xs text-green-400">Copied ✓</span>
+   619→                )}
+   620→              </div>
+   621→
+   622→              <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-4">
+   623→                {rewritingIndex === idx ? "Working..." : result}
+   624→              </pre>
+   625→
+   626→              {/* Copy & open platform — the one-tap handoff */}
+   627→              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+   628→                <button
+   629→                  onClick={() => copyAndOpen(result, "twitter")}
+   630→                  className="min-h-[46px] px-4 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
+   631→                >
+   632→                  Copy &amp; open X
+   633→                </button>
+   634→                <button
+   635→                  onClick={() => copyAndOpen(result, "linkedin")}
+   636→                  className="min-h-[46px] px-4 bg-[#0a66c2] text-white rounded-lg text-sm font-medium hover:bg-[#004182]"
+   637→                >
+   638→                  Copy &amp; open LinkedIn
+   639→                </button>
+   640→                <button
+   641→                  onClick={() => handleCopyOnly(result, idx)}
+   642→                  className="min-h-[46px] px-4 border border-zinc-600 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800"
+   643→                >
+   644→                  {copiedIndex === idx ? "Copied ✓" : "Copy only"}
+   645→                </button>
+   646→              </div>
+   647→
+   648→              {/* Quick actions */}
+   649→              <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
+   650→                <button
+   651→                  onClick={() => handleMakeAllFormats(idx)}
+   652→                  disabled={makingAll === idx || rewritingIndex === idx}
+   653→                  className="text-xs px-3 py-2 min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg font-medium hover:bg-zinc-700 disabled:opacity-50"
+   654→                >
+   655→                  {makingAll === idx ? "Making all formats..." : "⚡ Make all formats"}
+   656→                </button>
+   657→                <button
+   658→                  onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
+   659→                  disabled={rewritingIndex === idx || makingAll === idx}
+   660→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   661→                >
+   662→                  Shorter
+   663→                </button>
+   664→                <button
+   665→                  onClick={() => handleQuickRewrite(idx, "Make this longer and more detailed")}
+   666→                  disabled={rewritingIndex === idx || makingAll === idx}
+   667→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   668→                >
+   669→                  Longer
+   670→                </button>
+   671→                <button
+   672→                  onClick={() =>
+   673→                    handleQuickRewrite(idx, "Make this more aggressive and high-energy")
+   674→                  }
+   675→                  disabled={rewritingIndex === idx || makingAll === idx}
+   676→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   677→                >
+   678→                  More Punch
+   679→                </button>
+   680→                <button
+   681→                  onClick={() =>
+   682→                    handleTransform(
+   683→                      idx,
+   684→                      "script",
+   685→                      "Turn this into a short video script (30-45 seconds) while keeping the exact same voice and message"
+   686→                    )
+   687→                  }
+   688→                  disabled={rewritingIndex === idx || makingAll === idx}
+   689→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   690→                >
+   691→                  → Script
+   692→                </button>
+   693→                <button
+   694→                  onClick={() =>
+   695→                    handleTransform(
+   696→                      idx,
+   697→                      "caption",
+   698→                      "Turn this into a strong social media caption while keeping the exact same voice and message"
+   699→                    )
+   700→                  }
+   701→                  disabled={rewritingIndex === idx || makingAll === idx}
+   702→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   703→                >
+   704→                  → Caption
+   705→                </button>
+   706→                <button
+   707→                  onClick={() =>
+   708→                    handleTransform(
+   709→                      idx,
+   710→                      "image_prompt",
+   711→                      "Turn this into a detailed image generation prompt that matches the persona's world and the content"
+   712→                    )
+   713→                  }
+   714→                  disabled={rewritingIndex === idx || makingAll === idx}
+   715→                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+   716→                >
+   717→                  → Image Prompt
+   718→                </button>
+   719→              </div>
+   720→
+   721→              {/* Make-all-formats results */}
+   722→              {allFormats[idx] && (
+   723→                <div className="mt-4 pt-4 border-t border-zinc-800 space-y-4">
+   724→                  <p className="text-xs text-green-400 font-medium">
+   725→                    All formats ready — each one is saved to Drafts
+   726→                  </p>
+   727→                  {allFormats[idx].map((f) => (
+   728→                    <div key={f.label} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+   729→                      <div className="flex items-center justify-between mb-2">
+   730→                        <span className="text-xs uppercase tracking-wide text-zinc-400 font-medium">
+   731→                          {f.label}
+   732→                        </span>
+   733→                        <div className="flex gap-3">
+   734→                          <button
+   735→                            onClick={() => copyAndOpen(f.content, "twitter")}
+   736→                            className="text-xs text-white font-medium hover:text-zinc-300"
+   737→                          >
+   738→                            Copy &amp; open X
+   739→                          </button>
+   740→                          <button
+   741→                            onClick={() => copyAndOpen(f.content, "linkedin")}
+   742→                            className="text-xs text-[#4a9ede] hover:text-[#7db8e8]"
+   743→                          >
+   744→                            LinkedIn
+   745→                          </button>
+   746→                        </div>
+   747→                      </div>
+   748→                      <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+   749→                        {f.content}
+   750→                      </pre>
+   751→                    </div>
+   752→                  ))}
+   753→                </div>
+   754→              )}
+   755→            </div>
+   756→          ))}
+   757→        </div>
+   758→      </div>
+   759→
+   760→      {/* Sticky mobile generate bar */}
+   761→      {showStickyBar && (
+   762→        <div
+   763→          className="fixed bottom-0 inset-x-0 sm:hidden bg-zinc-950/95 backdrop-blur border-t border-zinc-800 p-3"
+   764→          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
+   765→        >
+   766→          {generateButton("shadow-lg")}
+   767→        </div>
+   768→      )}
+   769→    </div>
+   770→  );
+   771→}
+   772→
+   773→export default function GeneratePage() {
+   774→  return (
+   775→    <Suspense
+   776→      fallback={
+   777→        <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>
+   778→      }
+   779→    >
+   780→      <GenerateContent />
+   781→    </Suspense>
+   782→  );
+   783→}
+   784→
