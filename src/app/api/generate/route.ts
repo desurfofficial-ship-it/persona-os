@@ -44,29 +44,47 @@ STRICT RULES:
         userPrompt = `Generate content of type "${type}"${topic ? ` about ${topic}` : ""}.`;
     }
 
-    const apiKey = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
+    // Priority: OpenRouter > OpenAI > Anthropic
+    const openrouterKey = process.env.OPENROUTER_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
 
-    if (!apiKey) {
-      const simulated = `[Simulated ${type} — ${persona.name}]
+    if (openrouterKey) {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${openrouterKey}`,
+          "HTTP-Referer": "https://persona-os.app",
+          "X-Title": "Persona OS",
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.75,
+        }),
+      });
 
-${userPrompt}
+      const data = await res.json();
 
----
-Add OPENAI_API_KEY or ANTHROPIC_API_KEY to .env.local for real generation.
+      if (!res.ok) {
+        console.error("OpenRouter error:", data);
+        throw new Error(data.error?.message || data.message || "OpenRouter error");
+      }
 
-Tone: ${persona.tone_of_voice || "default"}
-Pillars: ${(persona.lifestyle_pillars || []).join(", ") || "none"}
-Rules: ${(persona.content_rules || []).join(" | ") || "none"}`;
-
-      return NextResponse.json({ content: simulated });
+      const content = data.choices?.[0]?.message?.content || "No content generated";
+      return NextResponse.json({ content });
     }
 
-    if (process.env.OPENAI_API_KEY) {
+    if (openaiKey) {
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          Authorization: `Bearer ${openaiKey}`,
         },
         body: JSON.stringify({
           model: "gpt-4o-mini",
@@ -86,12 +104,12 @@ Rules: ${(persona.content_rules || []).join(" | ") || "none"}`;
       });
     }
 
-    if (process.env.ANTHROPIC_API_KEY) {
+    if (anthropicKey) {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "x-api-key": anthropicKey,
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
@@ -110,7 +128,15 @@ Rules: ${(persona.content_rules || []).join(" | ") || "none"}`;
       });
     }
 
-    return NextResponse.json({ error: "No AI API key configured" }, { status: 500 });
+    // No key → simulated so UI still works
+    const simulated = `[Simulated ${type} — ${persona.name}]
+
+${userPrompt}
+
+---
+Add OPENROUTER_API_KEY to .env.local for real generation.`;
+
+    return NextResponse.json({ content: simulated });
   } catch (err: any) {
     console.error(err);
     return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
