@@ -9,8 +9,15 @@ import { userFromRequest } from "@/lib/local-session";
  * lowercase topic/mood tags so the drafts page gains a working filter
  * dimension, and future "write about X" loops can select by theme.
  *
- * Never blocks the import flow — callers fire-and-forget; failures here
- * simply leave drafts untagged.
+ * Two modes:
+ *  - { personaId }      bulk: tag every UNTAGGED draft of the persona
+ *                        (import flow fires this fire-and-forget)
+ *  - { draftId }        single: suggest tags for ONE draft, any time, and
+ *                        MERGE them into what's already there (cap 8) —
+ *                        the "Suggest tags" button on the drafts page
+ *
+ * Never blocks the calling flow — failures here simply leave drafts
+ * untagged.
  */
 
 const QUICK = new Set([
@@ -25,6 +32,25 @@ function sanitizeTags(raw: string): string[] {
     .slice(0, 6);
 }
 
+/** Safely read the jsonb tags column as a string[]. */
+function draftTagsOf(raw: unknown): string[] {
+  return Array.isArray(raw) ? (raw as unknown[]).filter((t): t is string => typeof t === "string") : [];
+}
+
+async function suggestTagsFor(zai: Awaited<ReturnType<typeof ZAI.create>>, content: string): Promise<string[]> {
+  const completion = await zai.chat.completions.create({
+    messages: [
+      {
+        role: "user",
+        content:
+          `Tag this social post in 3-6 lowercase keyword tags: the TOPIC (e.g. fitness, money, travel, discipline) and the MOOD (e.g. luxury, gritty, casual, professional). Prefer these when they fit: ${[...QUICK].join(", ")}. Reply with ONLY comma-separated tags.\n\n${content.slice(0, 900)}`,
+      },
+    ],
+    thinking: { type: "disabled" },
+  });
+  return sanitizeTags(completion.choices?.[0]?.message?.content || "");
+}
+
 export async function POST(req: NextRequest) {
   const userId = userFromRequest(req);
   if (!userId) {
@@ -32,13 +58,43 @@ export async function POST(req: NextRequest) {
   }
 
   let personaId = "";
+  let draftId = "";
   try {
-    ({ personaId } = await req.json());
+    ({ personaId, draftId } = await req.json());
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  const zai = await ZAI.create();
+
+  // ---- single-draft mode: suggest + MERGE (any draft, any time) ----------
+  if (draftId) {
+    const draft = await db.contentDraft.findFirst({
+      where: { id: draftId, userId },
+      select: { id: true, content: true, tags: true },
+    });
+    if (!draft) return NextResponse.json({ error: "Draft not found" }, { status: 404 });
+    if (!draft.content.trim()) {
+      return NextResponse.json({ error: "Draft has no content to tag" }, { status: 400 });
+    }
+
+    try {
+      const fresh = await suggestTagsFor(zai, draft.content);
+      if (!fresh.length) {
+        return NextResponse.json({ tagged: 0, tags: draftTagsOf(draft.tags), note: "No tags suggested" });
+      }
+      const existing = draftTagsOf(draft.tags);
+      const merged = Array.from(new Set([...existing, ...fresh])).slice(0, 8);
+      await db.contentDraft.update({ where: { id: draft.id }, data: { tags: merged } });
+      return NextResponse.json({ tagged: 1, tags: merged, added: merged.filter((t) => !existing.includes(t)) });
+    } catch (err) {
+      console.error("tag-drafts single failure:", err);
+      return NextResponse.json({ error: "Tag suggestion failed" }, { status: 502 });
+    }
+  }
+
   if (!personaId) {
-    return NextResponse.json({ error: "personaId required" }, { status: 400 });
+    return NextResponse.json({ error: "personaId or draftId required" }, { status: 400 });
   }
 
   const drafts = await db.contentDraft.findMany({
@@ -57,25 +113,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ tagged: 0, note: "Nothing untagged" });
   }
 
-  const zai = await ZAI.create();
   let tagged = 0;
 
   // One call per draft keeps the JSON extraction reliable; failures are
   // isolated per draft.
   for (const d of drafts) {
     try {
-      const completion = await zai.chat.completions.create({
-        messages: [
-          {
-            role: "user",
-            content:
-              `Tag this social post in 3-6 lowercase keyword tags: the TOPIC (e.g. fitness, money, travel, discipline) and the MOOD (e.g. luxury, gritty, casual, professional). Prefer these when they fit: ${[...QUICK].join(", ")}. Reply with ONLY comma-separated tags.\n\n${d.content.slice(0, 900)}`,
-          },
-        ],
-        thinking: { type: "disabled" },
-      });
-      const content: string = completion.choices?.[0]?.message?.content || "";
-      const tags = sanitizeTags(content);
+      const tags = await suggestTagsFor(zai, d.content);
       if (tags.length) {
         await db.contentDraft.update({ where: { id: d.id }, data: { tags } });
         tagged++;

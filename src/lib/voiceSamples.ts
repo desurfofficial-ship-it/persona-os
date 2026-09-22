@@ -48,3 +48,42 @@ export async function fetchVoiceSamples(personaId: string, limit = 30): Promise<
     .map((d) => d.content)
     .filter((c) => typeof c === "string" && c.length > 20);
 }
+
+// ---------------------------------------------------------------------------
+// Gold-set split — pure, testable
+// ---------------------------------------------------------------------------
+
+/**
+ * Split one sample into sentence-based parts. Sentences pack greedily so a
+ * part is never a lonely fragment — tiny sentences ride along until the part
+ * crosses MIN_PART_CHARS. Returns fewer than 2 parts (null) when there is
+ * nothing to split: no clean sentence break, or splitting would make
+ * fragments shorter than a usable sample.
+ */
+export const MIN_PART_CHARS = 50;
+
+export function splitIntoParts(text: string): string[] | null {
+  const sentences = text.match(/[^.!?\n]+[.!?]+["')\]]?|[^.!?\n]+$/g) || [text];
+  const parts: string[] = [];
+  let current = "";
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    const candidate = current ? `${current} ${s}` : s;
+    if (candidate.length <= MIN_PART_CHARS) {
+      current = candidate;
+    } else {
+      if (current) parts.push(current);
+      current = s;
+      if (current.length >= MIN_PART_CHARS) {
+        // Long enough to stand alone right now.
+        parts.push(current);
+        current = "";
+      }
+      // else: stays open — the next short sentence packs onto it.
+    }
+  }
+  if (current) parts.push(current);
+  const clean = parts.map((p) => p.trim()).filter((p) => p.length > 20);
+  return clean.length >= 2 ? clean : null;
+}

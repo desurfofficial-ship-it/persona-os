@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { fetchVoiceSamples } from "@/lib/voiceSamples";
 import { copyAndOpen } from "@/lib/share";
@@ -49,6 +49,7 @@ export default function DraftsPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [composingId, setComposingId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [taggingId, setTaggingId] = useState<string | null>(null);
   const planDays = nextSevenDays();
   const searchParams = useSearchParams();
 
@@ -297,6 +298,27 @@ export default function DraftsPage() {
       alert(err.message);
     } finally {
       setImprovingId(null);
+    }
+  };
+
+  const handleSuggestTags = async (draft: Draft) => {
+    if (taggingId) return;
+    setTaggingId(draft.id);
+    try {
+      const res = await authedFetch("/api/tag-drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId: draft.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Tag suggestion failed");
+      const tags: string[] = Array.isArray(data.tags) ? data.tags : [];
+      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, tags } : d)));
+      if (!tags.length) alert("No tags came back for this one — try again after editing it.");
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setTaggingId(null);
     }
   };
 
@@ -551,6 +573,11 @@ export default function DraftsPage() {
                               label: improvingId === draft.id ? "Improving…" : "✨ Improve with AI",
                               action: () => handleImprove(draft),
                               disabled: improvingId === draft.id,
+                            },
+                            {
+                              label: taggingId === draft.id ? "Suggesting…" : "# Suggest tags",
+                              action: () => handleSuggestTags(draft),
+                              disabled: taggingId === draft.id,
                             },
                             {
                               label: "🧵 Compose thread",

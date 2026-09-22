@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { Persona, VoiceSample } from "@/types/persona";
 import { extractVoiceFingerprint } from "@/lib/voice";
+import { splitIntoParts } from "@/lib/voiceSamples";
 
 /**
  * Voice Gold Set — the curation UI for the samples the engine learns voice
@@ -141,6 +142,46 @@ export default function VoiceCurator({ persona }: { persona: Persona }) {
     const [item] = next.splice(from, 1);
     next.splice(to, 0, item);
     await persist(next);
+  };
+
+  // Split one sample into sentence-based parts (same source + enabled state).
+  const [splitId, setSplitId] = useState<string | null>(null);
+  const splitProposal = useMemo(() => {
+    const s = samples.find((x) => x.id === splitId);
+    return s ? splitIntoParts(s.text) : null;
+  }, [splitId, samples]);
+
+  const confirmSplit = async () => {
+    const s = samples.find((x) => x.id === splitId);
+    if (!s || !splitProposal) return;
+    const next = samples.flatMap((x) =>
+      x.id === s.id
+        ? splitProposal.map((text) => ({
+            id: crypto.randomUUID(),
+            text,
+            source: x.source,
+            enabled: x.enabled,
+            addedAt: new Date().toISOString(),
+          }))
+        : [x]
+    );
+    setSplitId(null);
+    await persist(next);
+  };
+
+  // Merge a sample with the NEXT one — for oversized pastes that landed as
+  // fragments. Keeps the first sample's id + enabled state.
+  const mergeWithNext = async (id: string) => {
+    const i = samples.findIndex((x) => x.id === id);
+    if (i < 0 || i >= samples.length - 1) return;
+    const a = samples[i];
+    const b = samples[i + 1];
+    const merged: VoiceSample = {
+      ...a,
+      text: `${a.text.trim()}\n\n${b.text.trim()}`,
+      source: a.source === b.source ? a.source : "curated",
+    };
+    await persist([...samples.slice(0, i), merged, ...samples.slice(i + 2)]);
   };
 
   // HTML5 drag-and-drop (desktop); ↑/↓ buttons cover touch + keyboard.
@@ -296,14 +337,67 @@ export default function VoiceCurator({ persona }: { persona: Persona }) {
                   >
                     {s.source}
                   </span>
-                  <button
-                    onClick={() => remove(s.id)}
-                    className="text-[11px] text-zinc-600 hover:text-red-400"
-                  >
-                    remove
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSplitId(splitId === s.id ? null : s.id)}
+                      title="Split into sentence parts — big pastes make weak samples"
+                      className={`text-[11px] ${splitId === s.id ? "text-amber-400" : "text-zinc-600 hover:text-amber-400"}`}
+                    >
+                      split
+                    </button>
+                    {i < samples.length - 1 && (
+                      <button
+                        onClick={() => mergeWithNext(s.id)}
+                        title="Merge with the next sample below"
+                        className="text-[11px] text-zinc-600 hover:text-white"
+                      >
+                        merge ↓
+                      </button>
+                    )}
+                    <button
+                      onClick={() => remove(s.id)}
+                      className="text-[11px] text-zinc-600 hover:text-red-400"
+                    >
+                      remove
+                    </button>
+                  </div>
                 </div>
               </div>
+              {splitId === s.id && (
+                <div className="mt-2 pt-2 border-t border-zinc-800 flex flex-wrap items-center gap-2">
+                  {splitProposal ? (
+                    <>
+                      <span className="text-[11px] text-zinc-400">
+                        Split into {splitProposal.length} sentence parts? Each part counts as its own sample.
+                      </span>
+                      <button
+                        onClick={confirmSplit}
+                        className="text-[11px] px-2.5 py-1 min-h-[30px] bg-amber-200 text-amber-950 rounded font-semibold hover:bg-amber-100"
+                      >
+                        Split
+                      </button>
+                      <button
+                        onClick={() => setSplitId(null)}
+                        className="text-[11px] px-2.5 py-1 min-h-[30px] border border-zinc-700 rounded hover:bg-zinc-800"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-[11px] text-zinc-500">
+                        Nothing to split — this sample has no clean sentence break (or it would make fragments).
+                      </span>
+                      <button
+                        onClick={() => setSplitId(null)}
+                        className="text-[11px] px-2.5 py-1 min-h-[30px] border border-zinc-700 rounded hover:bg-zinc-800"
+                      >
+                        OK
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           ))}
           {samples.length > 2 && (

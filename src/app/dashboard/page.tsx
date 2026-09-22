@@ -48,6 +48,12 @@ export default function DashboardPage() {
   const [autoWrite, setAutoWrite] = useState(false);
   const autoWriteFired = useRef(false);
 
+  // Editing an idea before its due day: reword the topic, move the day.
+  const [editingIdea, setEditingIdea] = useState<string | null>(null);
+  const [ideaEditText, setIdeaEditText] = useState("");
+  const [ideaEditDay, setIdeaEditDay] = useState("");
+  const [savingIdeaEdit, setSavingIdeaEdit] = useState(false);
+
   const AUTO_WRITE_KEY = "persona-os-auto-write";
 
   const isUntouchedIdea = (d: Draft) => d.type === "scheduled_idea" && !d.content;
@@ -137,6 +143,49 @@ export default function DashboardPage() {
     setAllDrafts((prev) => prev.filter((d) => d.id !== idea.id));
     const { error } = await supabase.from("content_drafts").delete().eq("id", idea.id);
     if (error) alert(error.message);
+  };
+
+  const startIdeaEdit = (idea: Draft) => {
+    setEditingIdea(idea.id);
+    setIdeaEditText(idea.topic || "");
+    // Preselect the currently planned day when it's inside the picker window.
+    const current = idea.planned_for
+      ? nextSevenDays().find(
+          (d) =>
+            new Date(idea.planned_for!).toDateString() === new Date(`${d.key}T00:00:00`).toDateString()
+        )?.key || ""
+      : "";
+    setIdeaEditDay(current);
+  };
+
+  const saveIdeaEdit = async (idea: Draft) => {
+    const topic = ideaEditText.trim();
+    if (!topic || savingIdeaEdit) return;
+    setSavingIdeaEdit(true);
+    const planned = ideaEditDay ? new Date(`${ideaEditDay}T09:00:00`).toISOString() : null;
+    // Optimistic
+    setAllDrafts((prev) =>
+      prev.map((d) =>
+        d.id === idea.id ? { ...d, topic, planned_for: planned ?? d.planned_for } : d
+      )
+    );
+    setEditingIdea(null);
+    setSavingIdeaEdit(false);
+    try {
+      const res = await authedFetch("/api/scheduled-ideas", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ideaId: idea.id, topic, plannedFor: ideaEditDay ? planned : undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't save the edit");
+    } catch (err: unknown) {
+      // Revert on failure
+      setAllDrafts((prev) =>
+        prev.map((d) => (d.id === idea.id ? { ...d, topic: idea.topic, planned_for: idea.planned_for } : d))
+      );
+      alert(err instanceof Error ? err.message : "Couldn't save the edit");
+    }
   };
 
   // Untouched scheduled ideas (empty content) are not posts — they must not
@@ -614,43 +663,96 @@ export default function DashboardPage() {
                           : "border-zinc-800 bg-zinc-950/50"
                       }`}
                     >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-zinc-200 truncate">
-                          {idea.topic || "(untitled idea)"}
-                        </p>
-                        <p className="text-xs text-zinc-500">
-                          {(idea.personas as any)?.name || "Persona"} ·{" "}
-                          {idea.planned_for
-                            ? dueToday
-                              ? "due today"
-                              : new Date(idea.planned_for).toLocaleDateString("en-US", {
-                                  weekday: "short",
-                                  month: "short",
-                                  day: "numeric",
-                                })
-                            : "no day set"}
-                        </p>
-                      </div>
-                      <div className="flex gap-2 shrink-0">
-                        <button
-                          onClick={() => draftIdeaNow(idea)}
-                          disabled={draftingIdea !== null}
-                          className={`min-h-[38px] px-4 rounded-lg text-xs font-semibold disabled:opacity-50 ${
-                            dueToday
-                              ? "bg-amber-200 text-amber-950 hover:bg-amber-100"
-                              : "bg-zinc-800 border border-zinc-600 text-zinc-200 hover:bg-zinc-700"
-                          }`}
-                        >
-                          {draftingIdea === idea.id ? "Writing…" : "✍ Draft it now"}
-                        </button>
-                        <button
-                          onClick={() => removeIdea(idea)}
-                          title="Remove this scheduled idea"
-                          className="min-h-[38px] px-3 border border-zinc-700 rounded-lg text-xs hover:bg-zinc-800"
-                        >
-                          Remove
-                        </button>
-                      </div>
+                      {editingIdea === idea.id ? (
+                        <div className="flex-1 space-y-2">
+                          <textarea
+                            value={ideaEditText}
+                            onChange={(e) => setIdeaEditText(e.target.value)}
+                            rows={2}
+                            autoFocus
+                            placeholder="The idea Persona OS will write about"
+                            className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded-lg text-sm"
+                          />
+                          <div className="flex flex-wrap items-center gap-2">
+                            <select
+                              value={ideaEditDay}
+                              onChange={(e) => setIdeaEditDay(e.target.value)}
+                              title="Move to another day"
+                              className="px-3 py-2 min-h-[38px] bg-zinc-950 border border-zinc-700 rounded-lg text-xs"
+                            >
+                              <option value="">Keep current day</option>
+                              {nextSevenDays().map((d) => (
+                                <option key={d.key} value={d.key}>
+                                  {d.label}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => saveIdeaEdit(idea)}
+                              disabled={!ideaEditText.trim() || savingIdeaEdit}
+                              className="min-h-[38px] px-4 bg-white text-black rounded-lg text-xs font-semibold disabled:opacity-40"
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingIdea(null)}
+                              className="min-h-[38px] px-3 border border-zinc-700 rounded-lg text-xs hover:bg-zinc-800"
+                            >
+                              Cancel
+                            </button>
+                            <span className="text-[11px] text-zinc-500">
+                              Reword it or move it — the draft writes on the morning of the day.
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-zinc-200 truncate">
+                              {idea.topic || "(untitled idea)"}
+                            </p>
+                            <p className="text-xs text-zinc-500">
+                              {(idea.personas as any)?.name || "Persona"} ·{" "}
+                              {idea.planned_for
+                                ? dueToday
+                                  ? "due today"
+                                  : new Date(idea.planned_for).toLocaleDateString("en-US", {
+                                      weekday: "short",
+                                      month: "short",
+                                      day: "numeric",
+                                    })
+                                : "no day set"}
+                            </p>
+                          </div>
+                          <div className="flex gap-2 shrink-0">
+                            <button
+                              onClick={() => startIdeaEdit(idea)}
+                              title="Reword or reschedule before the due day"
+                              className="min-h-[38px] px-3 border border-zinc-700 rounded-lg text-xs hover:bg-zinc-800"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => draftIdeaNow(idea)}
+                              disabled={draftingIdea !== null}
+                              className={`min-h-[38px] px-4 rounded-lg text-xs font-semibold disabled:opacity-50 ${
+                                dueToday
+                                  ? "bg-amber-200 text-amber-950 hover:bg-amber-100"
+                                  : "bg-zinc-800 border border-zinc-600 text-zinc-200 hover:bg-zinc-700"
+                              }`}
+                            >
+                              {draftingIdea === idea.id ? "Writing…" : "✍ Draft it now"}
+                            </button>
+                            <button
+                              onClick={() => removeIdea(idea)}
+                              title="Remove this scheduled idea"
+                              className="min-h-[38px] px-3 border border-zinc-700 rounded-lg text-xs hover:bg-zinc-800"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   );
                 })}

@@ -1,0 +1,735 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState } from "react";
+     4→import { useRouter, useSearchParams } from "next/navigation";
+     5→import { supabase } from "@/lib/supabase";
+     6→import type { Persona } from "@/types/persona";
+     7→import { fetchVoiceSamples } from "@/lib/voiceSamples";
+     8→import { copyAndOpen } from "@/lib/share";
+     9→import { nextSevenDays } from "@/lib/calendar";
+    10→import { compactNumber, parseCount, metricEntries, appendEntry, type DraftMetrics } from "@/lib/metrics";
+    11→import ThreadComposer from "@/components/ThreadComposer";
+    12→
+    13→interface Draft {
+    14→  id: string;
+    15→  persona_id: string;
+    16→  type: string;
+    17→  content: string;
+    18→  created_at: string;
+    19→  posted?: boolean;
+    20→  planned_for?: string | null;
+    21→  metrics?: unknown;
+    22→  tags?: unknown;
+    23→  topic?: string | null;
+    24→  auto_fill?: boolean;
+    25→  personas?: { name: string };
+    26→}
+    27→
+    28→const PLATFORMS = ["X", "LinkedIn", "Instagram", "Threads", "TikTok", "YouTube", "Other"];
+    29→
+    30→function draftTags(raw: unknown): string[] {
+    31→  return Array.isArray(raw) ? (raw as unknown[]).filter((t): t is string => typeof t === "string") : [];
+    32→}
+    33→
+    34→export default function DraftsPage() {
+    35→  const router = useRouter();
+    36→  const [drafts, setDrafts] = useState<Draft[]>([]);
+    37→  const [personas, setPersonas] = useState<Persona[]>([]);
+    38→  const [loading, setLoading] = useState(true);
+    39→  const [search, setSearch] = useState("");
+    40→  const [filterPersona, setFilterPersona] = useState("all");
+    41→  const [filterPosted, setFilterPosted] = useState("all");
+    42→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    43→  const [improvingId, setImprovingId] = useState<string | null>(null);
+    44→  const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
+    45→  const [loggingId, setLoggingId] = useState<string | null>(null);
+    46→  const [logForm, setLogForm] = useState({ platform: "X", views: "", likes: "", comments: "" });
+    47→  const [editingId, setEditingId] = useState<string | null>(null);
+    48→  const [editText, setEditText] = useState("");
+    49→  const [savingEdit, setSavingEdit] = useState(false);
+    50→  const [composingId, setComposingId] = useState<string | null>(null);
+    51→  const [menuId, setMenuId] = useState<string | null>(null);
+    52→  const planDays = nextSevenDays();
+    53→  const searchParams = useSearchParams();
+    54→
+    55→  // Deep links:
+    56→  //   ?q=<quote> — from the Consistency Engine, prefill search
+    57→  //   ?log=<id>  — from the dashboard due-today queue, open the log form
+    58→  useEffect(() => {
+    59→    const q = searchParams.get("q");
+    60→    if (q) setSearch(q);
+    61→  }, [searchParams]);
+    62→
+    63→  const [logAutoOpened, setLogAutoOpened] = useState(false);
+    64→  useEffect(() => {
+    65→    const logId = searchParams.get("log");
+    66→    if (!logId || loading || logAutoOpened) return;
+    67→    const target = drafts.find((d) => d.id === logId);
+    68→    if (target) {
+    69→      setLogAutoOpened(true);
+    70→      openLogForm(target);
+    71→    }
+    72→     
+    73→  }, [searchParams, loading, drafts]);
+    74→
+    75→  useEffect(() => {
+    76→    const load = async () => {
+    77→      const {
+    78→        data: { user },
+    79→      } = await supabase.auth.getUser();
+    80→      if (!user) {
+    81→        router.push("/login");
+    82→        return;
+    83→      }
+    84→
+    85→      const [draftsRes, personasRes] = await Promise.all([
+    86→        supabase
+    87→          .from("content_drafts")
+    88→          .select("*, personas(name)")
+    89→          .eq("user_id", user.id)
+    90→          .order("created_at", { ascending: false }),
+    91→        supabase.from("personas").select("*").eq("user_id", user.id),
+    92→      ]);
+    93→
+    94→      setDrafts(draftsRes.data || []);
+    95→      setPersonas(personasRes.data || []);
+    96→      setLoading(false);
+    97→    };
+    98→    load();
+    99→  }, [router]);
+   100→
+   101→  const filtered = drafts.filter((d) => {
+   102→    // Scheduled ideas without content live on the dashboard board, not here.
+   103→    if (d.auto_fill && !d.content) return false;
+   104→
+   105→    const tagList = draftTags(d.tags);
+   106→    const matchesSearch =
+   107→      !search ||
+   108→      d.content.toLowerCase().includes(search.toLowerCase()) ||
+   109→      d.type.toLowerCase().includes(search.toLowerCase()) ||
+   110→      tagList.some((t) => t.includes(search.toLowerCase().replace(/^#/, ""))) ||
+   111→      ((d.personas as any)?.name || "").toLowerCase().includes(search.toLowerCase());
+   112→
+   113→    const matchesPersona = filterPersona === "all" || d.persona_id === filterPersona;
+   114→    const matchesPosted =
+   115→      filterPosted === "all" ||
+   116→      (filterPosted === "posted" && d.posted) ||
+   117→      (filterPosted === "unposted" && !d.posted);
+   118→
+   119→    return matchesSearch && matchesPersona && matchesPosted;
+   120→  });
+   121→
+   122→  const toggleSelect = (id: string) => {
+   123→    setSelectedIds((prev) => {
+   124→      const next = new Set(prev);
+   125→      if (next.has(id)) next.delete(id);
+   126→      else next.add(id);
+   127→      return next;
+   128→    });
+   129→  };
+   130→
+   131→  const handleBulkDelete = async () => {
+   132→    if (selectedIds.size === 0) return;
+   133→    if (!confirm(`Delete ${selectedIds.size} draft(s)?`)) return;
+   134→
+   135→    const ids = Array.from(selectedIds);
+   136→    await supabase.from("content_drafts").delete().in("id", ids);
+   137→    setDrafts((prev) => prev.filter((d) => !selectedIds.has(d.id)));
+   138→    setSelectedIds(new Set());
+   139→  };
+   140→
+   141→  const handleDelete = async (id: string) => {
+   142→    if (!confirm("Delete this draft?")) return;
+   143→    await supabase.from("content_drafts").delete().eq("id", id);
+   144→    setDrafts((prev) => prev.filter((d) => d.id !== id));
+   145→  };
+   146→
+   147→  const planFor = async (draft: Draft, dayKey: string | null) => {
+   148→    const value = dayKey ? new Date(`${dayKey}T09:00:00`).toISOString() : null;
+   149→    // Optimistic
+   150→    setDrafts((prev) =>
+   151→      prev.map((d) => (d.id === draft.id ? { ...d, planned_for: value } : d))
+   152→    );
+   153→    const { error } = await supabase
+   154→      .from("content_drafts")
+   155→      .update({ planned_for: value })
+   156→      .eq("id", draft.id);
+   157→    if (error) {
+   158→      setDrafts((prev) =>
+   159→        prev.map((d) => (d.id === draft.id ? { ...d, planned_for: draft.planned_for } : d))
+   160→      );
+   161→      alert(error.message);
+   162→    }
+   163→  };
+   164→
+   165→  const togglePosted = async (draft: Draft) => {
+   166→    const newValue = !draft.posted;
+   167→    // Optimistic update
+   168→    setDrafts((prev) =>
+   169→      prev.map((d) => (d.id === draft.id ? { ...d, posted: newValue } : d))
+   170→    );
+   171→
+   172→    const { error } = await supabase
+   173→      .from("content_drafts")
+   174→      .update({ posted: newValue })
+   175→      .eq("id", draft.id);
+   176→
+   177→    if (error) {
+   178→      // Revert on error
+   179→      setDrafts((prev) =>
+   180→        prev.map((d) => (d.id === draft.id ? { ...d, posted: draft.posted } : d))
+   181→      );
+   182→      console.error("Posted flag error:", error);
+   183→      return;
+   184→    }
+   185→
+   186→    // First time marking posted -> invite logging performance right away.
+   187→    if (newValue && !metricEntries(draft.metrics).length) {
+   188→      setLogForm({ platform: "X", views: "", likes: "", comments: "" });
+   189→      setLoggingId(draft.id);
+   190→    }
+   191→  };
+   192→
+   193→  const openLogForm = (draft: Draft, platform?: string) => {
+   194→    // Prefill from the entry the user is editing (default: most recent).
+   195→    const entries = metricEntries(draft.metrics);
+   196→    const existing = platform
+   197→      ? entries.find((e) => e.platform === platform)
+   198→      : entries[entries.length - 1];
+   199→    setLogForm({
+   200→      platform: existing?.platform || platform || "X",
+   201→      views: existing ? String(existing.views) : "",
+   202→      likes: existing ? String(existing.likes) : "",
+   203→      comments: existing ? String(existing.comments) : "",
+   204→    });
+   205→    setLoggingId(draft.id);
+   206→  };
+   207→
+   208→  const saveMetrics = async (draft: Draft) => {
+   209→    const entry: DraftMetrics = {
+   210→      platform: logForm.platform,
+   211→      views: parseCount(logForm.views) ?? 0,
+   212→      likes: parseCount(logForm.likes) ?? 0,
+   213→      comments: parseCount(logForm.comments) ?? 0,
+   214→      loggedAt: new Date().toISOString(),
+   215→    };
+   216→    // Never store an all-zero junk row — it would skew every average.
+   217→    if (entry.views + entry.likes + entry.comments === 0) return;
+   218→    // One truth per platform per post: re-logging X replaces the X entry.
+   219→    const metrics = appendEntry(draft.metrics, entry);
+   220→    // Optimistic
+   221→    setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics } : d)));
+   222→    setLoggingId(null);
+   223→
+   224→    const { error } = await supabase
+   225→      .from("content_drafts")
+   226→      .update({ metrics })
+   227→      .eq("id", draft.id);
+   228→    if (error) {
+   229→      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics: draft.metrics } : d)));
+   230→      alert(error.message);
+   231→    }
+   232→  };
+   233→
+   234→  const startEdit = (draft: Draft) => {
+   235→    setEditingId(draft.id);
+   236→    setEditText(draft.content);
+   237→    setMenuId(null);
+   238→  };
+   239→
+   240→  const saveEdit = async (draft: Draft) => {
+   241→    const next = editText.trim();
+   242→    if (!next || next === draft.content) {
+   243→      setEditingId(null);
+   244→      return;
+   245→    }
+   246→    setSavingEdit(true);
+   247→    // Optimistic
+   248→    setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, content: next } : d)));
+   249→    const { error } = await supabase
+   250→      .from("content_drafts")
+   251→      .update({ content: next })
+   252→      .eq("id", draft.id);
+   253→    setSavingEdit(false);
+   254→    if (error) {
+   255→      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, content: draft.content } : d)));
+   256→      alert(error.message);
+   257→      return;
+   258→    }
+   259→    setEditingId(null);
+   260→  };
+   261→
+   262→  const handleImprove = async (draft: Draft) => {
+   263→    setImprovingId(draft.id);
+   264→    try {
+   265→      const persona = personas.find((p) => p.id === draft.persona_id);
+   266→      if (!persona) throw new Error("Persona not found");
+   267→
+   268→      const res = await fetch("/api/generate", {
+   269→        method: "POST",
+   270→        headers: { "Content-Type": "application/json" },
+   271→        body: JSON.stringify({
+   272→          persona,
+   273→          type: draft.type,
+   274→          voiceSamples: await fetchVoiceSamples(draft.persona_id),
+   275→          topic: `Improve and tighten this existing ${draft.type}. Keep the same core message but make it stronger, more in character, and higher quality:\n\n${draft.content}`,
+   276→          model: "openai/gpt-4o-mini",
+   277→        }),
+   278→      });
+   279→
+   280→      const data = await res.json();
+   281→      if (!res.ok) throw new Error(data.error || "Improve failed");
+   282→
+   283→      setImprovedContent((prev) => ({ ...prev, [draft.id]: data.content }));
+   284→
+   285→      const {
+   286→        data: { user },
+   287→      } = await supabase.auth.getUser();
+   288→      if (user) {
+   289→        await supabase.from("content_drafts").insert({
+   290→          persona_id: draft.persona_id,
+   291→          user_id: user.id,
+   292→          type: draft.type,
+   293→          content: data.content,
+   294→        });
+   295→      }
+   296→    } catch (err: any) {
+   297→      alert(err.message);
+   298→    } finally {
+   299→      setImprovingId(null);
+   300→    }
+   301→  };
+   302→
+   303→  const handleExport = () => {
+   304→    const text = filtered
+   305→      .map(
+   306→        (d) =>
+   307→          `=== ${(d.personas as any)?.name || "Unknown"} | ${d.type} | ${new Date(
+   308→            d.created_at
+   309→          ).toLocaleString()} ${d.posted ? "| POSTED" : ""} ===\n${d.content}\n`
+   310→      )
+   311→      .join("\n\n");
+   312→
+   313→    const blob = new Blob([text], { type: "text/plain" });
+   314→    const url = URL.createObjectURL(blob);
+   315→    const a = document.createElement("a");
+   316→    a.href = url;
+   317→    a.download = `persona-os-drafts-${new Date().toISOString().slice(0, 10)}.txt`;
+   318→    a.click();
+   319→    URL.revokeObjectURL(url);
+   320→  };
+   321→
+   322→  if (loading) {
+   323→    return (
+   324→      <div className="min-h-screen flex items-center justify-center">
+   325→        <p className="text-zinc-400">Loading...</p>
+   326→      </div>
+   327→    );
+   328→  }
+   329→
+   330→  return (
+   331→    <div className="min-h-screen p-6 sm:p-8">
+   332→      <div className="max-w-4xl mx-auto">
+   333→        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+   334→          <div className="flex items-center gap-4">
+   335→            <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
+   336→              ← Dashboard
+   337→            </a>
+   338→            <h1 className="text-2xl font-bold">Content Drafts</h1>
+   339→          </div>
+   340→          <div className="flex gap-2">
+   341→            {selectedIds.size > 0 && (
+   342→              <button
+   343→                onClick={handleBulkDelete}
+   344→                className="px-4 py-2 bg-red-900/50 border border-red-800 text-red-200 rounded-lg text-sm"
+   345→              >
+   346→                Delete ({selectedIds.size})
+   347→              </button>
+   348→            )}
+   349→            <button
+   350→              onClick={handleExport}
+   351→              disabled={filtered.length === 0}
+   352→              className="px-4 py-2 border border-zinc-700 rounded-lg text-sm hover:bg-zinc-900 disabled:opacity-40"
+   353→            >
+   354→              Export
+   355→            </button>
+   356→          </div>
+   357→        </div>
+   358→
+   359→        <div className="flex flex-col sm:flex-row gap-3 mb-6">
+   360→          <input
+   361→            value={search}
+   362→            onChange={(e) => setSearch(e.target.value)}
+   363→            placeholder="Search drafts..."
+   364→            className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+   365→          />
+   366→          <select
+   367→            value={filterPersona}
+   368→            onChange={(e) => setFilterPersona(e.target.value)}
+   369→            className="px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+   370→          >
+   371→            <option value="all">All Personas</option>
+   372→            {personas.map((p) => (
+   373→              <option key={p.id} value={p.id}>
+   374→                {p.name}
+   375→              </option>
+   376→            ))}
+   377→          </select>
+   378→          <select
+   379→            value={filterPosted}
+   380→            onChange={(e) => setFilterPosted(e.target.value)}
+   381→            className="px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+   382→          >
+   383→            <option value="all">All</option>
+   384→            <option value="posted">Posted</option>
+   385→            <option value="unposted">Not Posted</option>
+   386→          </select>
+   387→        </div>
+   388→
+   389→        {filtered.length === 0 ? (
+   390→          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
+   391→            <p className="text-zinc-400 mb-4">
+   392→              {drafts.length === 0
+   393→                ? "No drafts yet."
+   394→                : search
+   395→                  ? searchParams.get("q")
+   396→                    ? "No drafts match this quote — you may have already edited or fixed the wording."
+   397→                    : `No drafts match “${search}”.`
+   398→                  : "No drafts match your filters."}
+   399→            </p>
+   400→            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+   401→              {(search || filterPersona !== "all" || filterPosted !== "all") && (
+   402→                <button
+   403→                  onClick={() => {
+   404→                    setSearch("");
+   405→                    setFilterPersona("all");
+   406→                    setFilterPosted("all");
+   407→                    if (searchParams.get("q")) router.replace("/dashboard/drafts");
+   408→                  }}
+   409→                  className="px-4 py-2.5 border border-zinc-600 rounded-lg text-sm hover:bg-zinc-800"
+   410→                >
+   411→                  Clear search & filters
+   412→                </button>
+   413→              )}
+   414→              {drafts.length === 0 && (
+   415→                <a
+   416→                  href="/dashboard/generate"
+   417→                  className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+   418→                >
+   419→                  Generate content
+   420→                </a>
+   421→              )}
+   422→            </div>
+   423→          </div>
+   424→        ) : (
+   425→          <div className="space-y-4">
+   426→            {filtered.map((draft) => (
+   427→              <div
+   428→                key={draft.id}
+   429→                className={`bg-zinc-900 border rounded-xl p-5 transition ${
+   430→                  selectedIds.has(draft.id) ? "border-zinc-500" : "border-zinc-800"
+   431→                }`}
+   432→              >
+   433→                <div className="flex flex-col sm:flex-row sm:items-start justify-between mb-3 gap-3">
+   434→                  <div className="flex items-start gap-3">
+   435→                    <input
+   436→                      type="checkbox"
+   437→                      checked={selectedIds.has(draft.id)}
+   438→                      onChange={() => toggleSelect(draft.id)}
+   439→                      className="mt-1"
+   440→                    />
+   441→                    <div>
+   442→                      <div className="flex flex-wrap items-center gap-2">
+   443→                        <span className="text-xs uppercase tracking-wide text-zinc-500">
+   444→                          {draft.type.replace("_", " ")}
+   445→                        </span>
+   446→                        {draft.posted && (
+   447→                          <span className="text-xs px-1.5 py-0.5 bg-green-900/40 text-green-300 rounded whitespace-nowrap">
+   448→                            Posted
+   449→                          </span>
+   450→                        )}
+   451→                        {metricEntries(draft.metrics).map((e, ei) => (
+   452→                          <button
+   453→                            key={`${e.platform}-${ei}`}
+   454→                            onClick={() => openLogForm(draft, e.platform)}
+   455→                            title={`Edit ${e.platform} numbers`}
+   456→                            className="text-xs px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded whitespace-nowrap hover:bg-blue-900/70"
+   457→                          >
+   458→                            {e.platform} · {compactNumber(e.views)} views
+   459→                          </button>
+   460→                        ))}
+   461→                        {draft.planned_for && !draft.posted && (
+   462→                          <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded whitespace-nowrap">
+   463→                            Planned {new Date(draft.planned_for).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+   464→                          </span>
+   465→                        )}
+   466→                      </div>
+   467→                      {draftTags(draft.tags).length > 0 && (
+   468→                        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+   469→                          {draftTags(draft.tags).map((t) => (
+   470→                            <button
+   471→                              key={t}
+   472→                              onClick={() => setSearch(t)}
+   473→                              title={`Show everything tagged ${t}`}
+   474→                              className="text-[10px] px-1.5 py-0.5 rounded-full border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+   475→                            >
+   476→                              #{t}
+   477→                            </button>
+   478→                          ))}
+   479→                        </div>
+   480→                      )}
+   481→                      <p className="text-sm text-zinc-400 mt-0.5">
+   482→                        {(draft.personas as any)?.name || "Unknown"} ·{" "}
+   483→                        {new Date(draft.created_at).toLocaleString()}
+   484→                      </p>
+   485→                    </div>
+   486→                  </div>
+   487→                  <div className="flex flex-wrap gap-2">
+   488→                    <select
+   489→                      value={
+   490→                        draft.planned_for
+   491→                          ? nextSevenDays().find(
+   492→                              (d) =>
+   493→                                new Date(draft.planned_for!).toDateString() ===
+   494→                                new Date(`${d.key}T00:00:00`).toDateString()
+   495→                            )?.key || ""
+   496→                          : ""
+   497→                      }
+   498→                      onChange={(e) => planFor(draft, e.target.value || null)}
+   499→                      title="Plan this draft for a day"
+   500→                      className="text-xs px-2 py-1.5 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   501→                    >
+   502→                      <option value="">Plan day…</option>
+   503→                      {planDays.map((d) => (
+   504→                        <option key={d.key} value={d.key}>
+   505→                          {d.label}
+   506→                        </option>
+   507→                      ))}
+   508→                    </select>
+   509→                    <button
+   510→                      onClick={() => togglePosted(draft)}
+   511→                      className={`text-xs px-2 py-1.5 min-h-[36px] rounded font-medium ${
+   512→                        draft.posted
+   513→                          ? "border border-zinc-700 hover:bg-zinc-800"
+   514→                          : "bg-white text-black hover:bg-zinc-200"
+   515→                      }`}
+   516→                    >
+   517→                      {draft.posted ? "Unmark" : "Mark Posted"}
+   518→                    </button>
+   519→                    {draft.posted && (
+   520→                      <button
+   521→                        onClick={() => openLogForm(draft)}
+   522→                        title="Record how this post performed — one entry per platform"
+   523→                        className="text-xs px-2 py-1.5 min-h-[36px] border border-blue-800 text-blue-300 rounded hover:bg-blue-950/50"
+   524→                      >
+   525→                        {metricEntries(draft.metrics).length ? "Edit numbers" : "Log performance"}
+   526→                      </button>
+   527→                    )}
+   528→                    <button
+   529→                      onClick={() => startEdit(draft)}
+   530→                      title="Edit this draft in place"
+   531→                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+   532→                    >
+   533→                      Edit
+   534→                    </button>
+   535→                    {/* Secondary actions live in an overflow menu — the card
+   536→                        stays scannable on mobile instead of a button wall. */}
+   537→                    <div className="relative">
+   538→                      <button
+   539→                        onClick={() => setMenuId(menuId === draft.id ? null : draft.id)}
+   540→                        aria-expanded={menuId === draft.id}
+   541→                        aria-haspopup="true"
+   542→                        title="More actions"
+   543→                        className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+   544→                      >
+   545→                        ⋯
+   546→                      </button>
+   547→                      {menuId === draft.id && (
+   548→                        <div className="absolute right-0 top-full mt-1 w-48 bg-zinc-900 border border-zinc-700 rounded-xl shadow-xl py-1.5 z-40">
+   549→                          {[
+   550→                            {
+   551→                              label: improvingId === draft.id ? "Improving…" : "✨ Improve with AI",
+   552→                              action: () => handleImprove(draft),
+   553→                              disabled: improvingId === draft.id,
+   554→                            },
+   555→                            {
+   556→                              label: "🧵 Compose thread",
+   557→                              action: () => setComposingId(composingId === draft.id ? null : draft.id),
+   558→                            },
+   559→                            {
+   560→                              label: "Copy & open X",
+   561→                              action: () => copyAndOpen(draft.content, "twitter"),
+   562→                            },
+   563→                            {
+   564→                              label: "Copy & open LinkedIn",
+   565→                              action: () => copyAndOpen(draft.content, "linkedin"),
+   566→                            },
+   567→                            {
+   568→                              label: "Copy text",
+   569→                              action: () => navigator.clipboard.writeText(draft.content),
+   570→                            },
+   571→                          ].map((item) => (
+   572→                            <button
+   573→                              key={item.label}
+   574→                              onClick={() => {
+   575→                                setMenuId(null);
+   576→                                item.action();
+   577→                              }}
+   578→                              disabled={item.disabled}
+   579→                              className="block w-full text-left px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-50"
+   580→                            >
+   581→                              {item.label}
+   582→                            </button>
+   583→                          ))}
+   584→                          <div className="border-t border-zinc-800 my-1" />
+   585→                          <button
+   586→                            onClick={() => {
+   587→                              setMenuId(null);
+   588→                              handleDelete(draft.id);
+   589→                            }}
+   590→                            className="block w-full text-left px-4 py-2.5 text-sm text-red-400 hover:bg-zinc-800"
+   591→                          >
+   592→                            Delete draft
+   593→                          </button>
+   594→                        </div>
+   595→                      )}
+   596→                    </div>
+   597→                  </div>
+   598→                </div>
+   599→
+   600→                {editingId === draft.id ? (
+   601→                  <div>
+   602→                    <textarea
+   603→                      value={editText}
+   604→                      onChange={(e) => setEditText(e.target.value)}
+   605→                      rows={Math.min(16, Math.max(4, Math.ceil(editText.length / 80)))}
+   606→                      className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-600 rounded-lg text-sm text-zinc-100 leading-relaxed"
+   607→                    />
+   608→                    <div className="flex flex-wrap gap-2 mt-2">
+   609→                      <button
+   610→                        onClick={() => saveEdit(draft)}
+   611→                        disabled={savingEdit}
+   612→                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium hover:bg-zinc-200 disabled:opacity-50"
+   613→                      >
+   614→                        {savingEdit ? "Saving…" : "Save changes"}
+   615→                      </button>
+   616→                      <button
+   617→                        onClick={() => setEditingId(null)}
+   618→                        className="text-xs px-3 py-2 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+   619→                      >
+   620→                        Cancel
+   621→                      </button>
+   622→                      <p className="text-xs text-zinc-500 self-center">
+   623→                        Editing updates the draft everywhere — the Consistency Engine re-checks on
+   624→                        the next scan.
+   625→                      </p>
+   626→                    </div>
+   627→                  </div>
+   628→                ) : (
+   629→                  <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+   630→                    {draft.content}
+   631→                  </pre>
+   632→                )}
+   633→
+   634→                {composingId === draft.id && (
+   635→                  <div className="mt-4 pt-4 border-t border-zinc-800">
+   636→                    <ThreadComposer
+   637→                      key={`${draft.id}-${draft.content.slice(0, 48)}`}
+   638→                      content={draft.content}
+   639→                      platform="x"
+   640→                      sharePlatform="twitter"
+   641→                    />
+   642→                  </div>
+   643→                )}
+   644→
+   645→                {loggingId === draft.id && (
+   646→                  <div className="mt-4 pt-4 border-t border-zinc-800">
+   647→                    <p className="text-xs text-blue-300 font-medium mb-2">
+   648→                      Log performance — numbers only you can see
+   649→                    </p>
+   650→                    <div className="flex flex-wrap gap-2 items-center">
+   651→                      <select
+   652→                        value={logForm.platform}
+   653→                        onChange={(e) => setLogForm((f) => ({ ...f, platform: e.target.value }))}
+   654→                        className="text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   655→                      >
+   656→                        {PLATFORMS.map((p) => (
+   657→                          <option key={p} value={p}>
+   658→                            {p}
+   659→                          </option>
+   660→                        ))}
+   661→                      </select>
+   662→                      <input
+   663→                        type="text"
+   664→                        inputMode="numeric"
+   665→                        placeholder="Views"
+   666→                        value={logForm.views}
+   667→                        onChange={(e) => setLogForm((f) => ({ ...f, views: e.target.value }))}
+   668→                        className="w-24 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   669→                      />
+   670→                      <input
+   671→                        type="text"
+   672→                        inputMode="numeric"
+   673→                        placeholder="Likes"
+   674→                        value={logForm.likes}
+   675→                        onChange={(e) => setLogForm((f) => ({ ...f, likes: e.target.value }))}
+   676→                        className="w-20 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   677→                      />
+   678→                      <input
+   679→                        type="text"
+   680→                        inputMode="numeric"
+   681→                        placeholder="Comments"
+   682→                        value={logForm.comments}
+   683→                        onChange={(e) => setLogForm((f) => ({ ...f, comments: e.target.value }))}
+   684→                        className="w-24 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   685→                      />
+   686→                      <button
+   687→                        onClick={() => saveMetrics(draft)}
+   688→                        disabled={
+   689→                          (parseCount(logForm.views) ?? 0) +
+   690→                            (parseCount(logForm.likes) ?? 0) +
+   691→                            (parseCount(logForm.comments) ?? 0) ===
+   692→                          0
+   693→                        }
+   694→                        title="Paste numbers exactly as the platform shows them — 12,500 and 1.2K both work"
+   695→                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+   696→                      >
+   697→                        Save
+   698→                      </button>
+   699→                      <button
+   700→                        onClick={() => setLoggingId(null)}
+   701→                        className="text-xs px-2 py-2 min-h-[36px] border border-zinc-700 rounded"
+   702→                      >
+   703→                        Skip
+   704→                      </button>
+   705→                    </div>
+   706→                  </div>
+   707→                )}
+   708→
+   709→                {improvedContent[draft.id] && (
+   710→                  <div className="mt-4 pt-4 border-t border-zinc-800">
+   711→                    <div className="flex items-center justify-between mb-2">
+   712→                      <p className="text-xs text-green-400 font-medium">Improved version</p>
+   713→                      <button
+   714→                        onClick={() =>
+   715→                          navigator.clipboard.writeText(improvedContent[draft.id])
+   716→                        }
+   717→                        className="text-xs text-zinc-400 hover:text-white"
+   718→                      >
+   719→                        Copy
+   720→                      </button>
+   721→                    </div>
+   722→                    <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+   723→                      {improvedContent[draft.id]}
+   724→                    </pre>
+   725→                  </div>
+   726→                )}
+   727→              </div>
+   728→            ))}
+   729→          </div>
+   730→        )}
+   731→      </div>
+   732→    </div>
+   733→  );
+   734→}
+   735→
