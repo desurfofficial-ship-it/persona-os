@@ -13,10 +13,13 @@ export default function PersonaDetailPage() {
   const [persona, setPersona] = useState<Persona | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
+
   const [name, setName] = useState("");
   const [backstory, setBackstory] = useState("");
   const [tone, setTone] = useState("");
   const [pillars, setPillars] = useState("");
+  const [rules, setRules] = useState("");
+  const [forbidden, setForbidden] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -37,7 +40,6 @@ export default function PersonaDetailPage() {
         .single();
 
       if (error || !data) {
-        console.error(error);
         router.push("/dashboard");
         return;
       }
@@ -47,6 +49,8 @@ export default function PersonaDetailPage() {
       setBackstory(data.backstory || "");
       setTone(data.tone_of_voice || "");
       setPillars((data.lifestyle_pillars || []).join(", "));
+      setRules((data.content_rules || []).join("\n"));
+      setForbidden((data.forbidden_topics || []).join(", "));
       setLoading(false);
     };
 
@@ -62,6 +66,16 @@ export default function PersonaDetailPage() {
       .map((p) => p.trim())
       .filter(Boolean);
 
+    const content_rules = rules
+      .split("\n")
+      .map((r) => r.trim())
+      .filter(Boolean);
+
+    const forbidden_topics = forbidden
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+
     const { error } = await supabase
       .from("personas")
       .update({
@@ -69,6 +83,8 @@ export default function PersonaDetailPage() {
         backstory,
         tone_of_voice: tone,
         lifestyle_pillars,
+        content_rules,
+        forbidden_topics,
       })
       .eq("id", persona.id);
 
@@ -81,6 +97,8 @@ export default function PersonaDetailPage() {
         backstory,
         tone_of_voice: tone,
         lifestyle_pillars,
+        content_rules,
+        forbidden_topics,
       });
       setEditing(false);
     }
@@ -159,6 +177,27 @@ export default function PersonaDetailPage() {
                 className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
               />
             </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">
+                Content Rules (one per line)
+              </label>
+              <textarea
+                value={rules}
+                onChange={(e) => setRules(e.target.value)}
+                rows={4}
+                className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">
+                Forbidden Topics (comma separated)
+              </label>
+              <input
+                value={forbidden}
+                onChange={(e) => setForbidden(e.target.value)}
+                className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
+              />
+            </div>
             <div className="flex gap-3">
               <button
                 onClick={handleSave}
@@ -176,12 +215,14 @@ export default function PersonaDetailPage() {
             </div>
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-8">
             <h1 className="text-3xl font-bold">{persona.name}</h1>
 
             <div>
               <h2 className="text-sm font-medium text-zinc-400 mb-2">Backstory</h2>
-              <p className="text-zinc-200 whitespace-pre-wrap">{persona.backstory}</p>
+              <p className="text-zinc-200 whitespace-pre-wrap leading-relaxed">
+                {persona.backstory}
+              </p>
             </div>
 
             {persona.tone_of_voice && (
@@ -201,6 +242,33 @@ export default function PersonaDetailPage() {
                       className="px-3 py-1 bg-zinc-800 rounded-full text-sm text-zinc-300"
                     >
                       {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {persona.content_rules?.length > 0 && (
+              <div>
+                <h2 className="text-sm font-medium text-zinc-400 mb-2">Content Rules</h2>
+                <ul className="list-disc list-inside space-y-1 text-zinc-200">
+                  {persona.content_rules.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {persona.forbidden_topics?.length > 0 && (
+              <div>
+                <h2 className="text-sm font-medium text-zinc-400 mb-2">Forbidden Topics</h2>
+                <div className="flex flex-wrap gap-2">
+                  {persona.forbidden_topics.map((t) => (
+                    <span
+                      key={t}
+                      className="px-3 py-1 bg-red-900/40 border border-red-800 rounded-full text-sm text-red-200"
+                    >
+                      {t}
                     </span>
                   ))}
                 </div>
