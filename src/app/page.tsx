@@ -74,7 +74,14 @@ export default function Home() {
       </section>
 
       <footer className="py-8 text-center text-sm text-zinc-600 border-t border-zinc-900">
-        Persona OS — Creative infrastructure for coherent identities
+        <div>
+          Persona OS — Creative infrastructure for coherent identities
+        </div>
+        <div className="mt-2">
+          <a href="/pricing" className="hover:text-zinc-300 underline underline-offset-2">
+            Pricing (fair use, in plain words)
+          </a>
+        </div>
       </footer>
     </main>
   );

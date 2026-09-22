@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import PostImport from "@/components/PostImport";
 
 /**
  * Dead-simple first-run flow:
@@ -156,6 +157,14 @@ export default function StartPage() {
             </p>
 
             <div className="space-y-5">
+              <PostImport
+                onAddPosts={(imported) =>
+                  setPosts((prev) =>
+                    prev.trim() ? `${prev.trim()}\n\n${imported.join("\n\n")}` : imported.join("\n\n")
+                  )
+                }
+              />
+
               <textarea
                 value={posts}
                 onChange={(e) => setPosts(e.target.value)}

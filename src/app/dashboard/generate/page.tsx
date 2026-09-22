@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { copyAndOpen, copyToClipboard } from "@/lib/share";
+import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
 import {
   findSimilarPosts,
   formatPostedDate,
@@ -25,6 +26,15 @@ const SENSITIVITY_KEY = "persona-os-dup-sensitivity";
 
 type ContentType = "caption" | "script" | "story_arc" | "image_prompt";
 
+interface AssetCtx {
+  id: string;
+  persona_id: string;
+  type: string;
+  url: string | null;
+  content: string | null;
+  tags: string[];
+}
+
 interface FormatResult {
   label: string;
   type: ContentType;
@@ -36,6 +46,11 @@ function GenerateContent() {
   const searchParams = useSearchParams();
   const preselectedId = searchParams.get("persona");
   const isFirstRun = searchParams.get("first") === "1";
+  const assetParam = searchParams.get("asset");
+  const isWelcomeBack = searchParams.get("welcome") === "1";
+
+  const WELCOME_PROMPT =
+    "I've been quiet for a few days — write an honest come-back post about where I've been and what I learned in the gap. No apology theater, just real.";
 
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [selectedId, setSelectedId] = useState(preselectedId || "");
@@ -52,6 +67,9 @@ function GenerateContent() {
   // Posted-aware state
   const [postedPosts, setPostedPosts] = useState<PostedPost[]>([]);
   const [sensitivity, setSensitivity] = useState<Sensitivity>("medium");
+
+  // Vault asset context (write-for-this-asset loop)
+  const [assetCtx, setAssetCtx] = useState<AssetCtx | null>(null);
 
   // Make all formats state: per result index → generated formats
   const [allFormats, setAllFormats] = useState<Record<number, FormatResult[]>>({});
@@ -90,8 +108,15 @@ function GenerateContent() {
         .order("created_at", { ascending: false });
 
       setPersonas(data || []);
-      if (preselectedId) setSelectedId(preselectedId);
-      else if (data && data.length > 0) setSelectedId(data[0].id);
+      if (preselectedId) {
+        setSelectedId(preselectedId);
+        setActivePersonaId(preselectedId);
+      } else {
+        // Default to the user's active voice when there is one.
+        const active = getActivePersonaId();
+        if (active && data?.some((p) => p.id === active)) setSelectedId(active);
+        else if (data && data.length > 0) setSelectedId(data[0].id);
+      }
     };
     load();
   }, [router, preselectedId]);
@@ -118,6 +143,42 @@ function GenerateContent() {
       cancelled = true;
     };
   }, [selectedId]);
+
+  // Welcome-back prefill: absence as content.
+  useEffect(() => {
+    if (isWelcomeBack) setTopic(WELCOME_PROMPT);
+  }, [isWelcomeBack]);
+
+  // Load vault asset context when arriving from "Write for this".
+  useEffect(() => {
+    if (!assetParam) return;
+    let cancelled = false;
+
+    const loadAsset = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from("assets")
+        .select("id, persona_id, type, url, content, tags")
+        .eq("id", assetParam)
+        .eq("user_id", user.id)
+        .limit(1);
+
+      const asset = (data || [])[0] as AssetCtx | undefined;
+      if (!cancelled && asset) {
+        setAssetCtx(asset);
+        if (asset.persona_id) setSelectedId(asset.persona_id);
+      }
+    };
+    loadAsset();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assetParam]);
 
   // Sticky bar: show when the main Generate button scrolls out of view
   useEffect(() => {
@@ -185,6 +246,13 @@ function GenerateContent() {
           topic,
           model,
           postedContext: postedPosts,
+          assetContext: assetCtx
+            ? {
+                type: assetCtx.type,
+                tags: assetCtx.tags || [],
+                content: assetCtx.content || "",
+              }
+            : undefined,
         });
         allResults.push(content);
         await saveDraft(content, type);
@@ -359,7 +427,10 @@ function GenerateContent() {
             <label className="block text-sm text-zinc-400 mb-2">Persona</label>
             <select
               value={selectedId}
-              onChange={(e) => setSelectedId(e.target.value)}
+              onChange={(e) => {
+                setSelectedId(e.target.value);
+                setActivePersonaId(e.target.value);
+              }}
               className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
             >
               {personas.map((p) => (
@@ -368,7 +439,48 @@ function GenerateContent() {
                 </option>
               ))}
             </select>
+            {selectedPersona && getActivePersonaId() === selectedPersona.id && (
+              <p className="mt-2 text-xs text-green-400">● Active voice</p>
+            )}
           </div>
+
+          {/* Vault asset chip: the words will match this asset */}
+          {assetCtx && (
+            <div className="bg-zinc-900 border border-zinc-600 rounded-xl p-4 flex items-center gap-4">
+              {assetCtx.type === "image" && assetCtx.url ? (
+                <img src={assetCtx.url} alt="Vault asset" className="w-14 h-14 rounded-lg object-cover shrink-0" />
+              ) : (
+                <div className="w-14 h-14 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-xl">
+                  {assetCtx.type === "video" ? "🎬" : "📄"}
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white">Writing for your vault asset</p>
+                <p className="text-xs text-zinc-500 truncate">
+                  {(assetCtx.tags || []).length > 0
+                    ? `Tags: ${assetCtx.tags.map((t) => `#${t}`).join(" ")}`
+                    : "Generation will pair the words with this asset"}
+                </p>
+              </div>
+              <button
+                onClick={() => setAssetCtx(null)}
+                className="text-xs text-zinc-500 hover:text-white shrink-0"
+              >
+                Remove
+              </button>
+            </div>
+          )}
+
+          {/* Welcome-back chip */}
+          {isWelcomeBack && !assetCtx && (
+            <div className="bg-amber-950/30 border border-amber-800/50 rounded-xl p-4">
+              <p className="text-sm font-medium text-amber-200">Come-back angle loaded</p>
+              <p className="text-xs text-zinc-400 mt-1">
+                The gap is the content. Topic is prefilled — edit it to match your actual week, then
+                generate.
+              </p>
+            </div>
+          )}
 
           {selectedPersona && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">

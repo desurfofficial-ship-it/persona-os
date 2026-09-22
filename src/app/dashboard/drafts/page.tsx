@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { copyAndOpen } from "@/lib/share";
+import { nextSevenDays } from "@/lib/calendar";
 
 interface Draft {
   id: string;
@@ -13,6 +14,7 @@ interface Draft {
   content: string;
   created_at: string;
   posted?: boolean;
+  planned_for?: string | null;
   personas?: { name: string };
 }
 
@@ -27,6 +29,7 @@ export default function DraftsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [improvingId, setImprovingId] = useState<string | null>(null);
   const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
+  const planDays = nextSevenDays();
 
   useEffect(() => {
     const load = async () => {
@@ -93,6 +96,24 @@ export default function DraftsPage() {
     if (!confirm("Delete this draft?")) return;
     await supabase.from("content_drafts").delete().eq("id", id);
     setDrafts((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const planFor = async (draft: Draft, dayKey: string | null) => {
+    const value = dayKey ? new Date(`${dayKey}T09:00:00`).toISOString() : null;
+    // Optimistic
+    setDrafts((prev) =>
+      prev.map((d) => (d.id === draft.id ? { ...d, planned_for: value } : d))
+    );
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ planned_for: value })
+      .eq("id", draft.id);
+    if (error) {
+      setDrafts((prev) =>
+        prev.map((d) => (d.id === draft.id ? { ...d, planned_for: draft.planned_for } : d))
+      );
+      alert(error.message);
+    }
   };
 
   const togglePosted = async (draft: Draft) => {
@@ -285,6 +306,11 @@ export default function DraftsPage() {
                             Posted
                           </span>
                         )}
+                        {draft.planned_for && !draft.posted && (
+                          <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded">
+                            Planned {new Date(draft.planned_for).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm text-zinc-400 mt-0.5">
                         {(draft.personas as any)?.name || "Unknown"} ·{" "}
@@ -293,6 +319,27 @@ export default function DraftsPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 shrink-0">
+                    <select
+                      value={
+                        draft.planned_for
+                          ? nextSevenDays().find(
+                              (d) =>
+                                new Date(draft.planned_for!).toDateString() ===
+                                new Date(`${d.key}T00:00:00`).toDateString()
+                            )?.key || ""
+                          : ""
+                      }
+                      onChange={(e) => planFor(draft, e.target.value || null)}
+                      title="Plan this draft for a day"
+                      className="text-xs px-2 py-1.5 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+                    >
+                      <option value="">Plan day…</option>
+                      {planDays.map((d) => (
+                        <option key={d.key} value={d.key}>
+                          {d.label}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       onClick={() => togglePosted(draft)}
                       className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"

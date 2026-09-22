@@ -33,13 +33,14 @@ model Persona {
 }
 
 model ContentDraft {
-  id        String   @id @default(uuid())
-  personaId String
-  userId    String
-  type      String
-  content   String
-  posted    Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id         String    @id @default(uuid())
+  personaId  String
+  userId     String
+  type       String
+  content    String
+  posted     Boolean   @default(false)
+  plannedFor DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([userId])
   @@index([personaId])

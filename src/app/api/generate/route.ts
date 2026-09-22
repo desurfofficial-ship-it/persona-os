@@ -6,9 +6,16 @@ interface PostedContextItem {
   created_at?: string;
 }
 
+interface AssetContext {
+  type?: string;
+  tags?: string[];
+  content?: string;
+  description?: string;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { persona, type, topic, model, postedContext } = await req.json();
+    const { persona, type, topic, model, postedContext, assetContext } = await req.json();
 
     if (!persona || !type) {
       return NextResponse.json({ error: "Missing persona or type" }, { status: 400 });
@@ -36,6 +43,22 @@ AVOIDING REPEATS:
 - The output must feel like the next post, not a rerun.`;
     }
 
+    // Vault-aware generation: when the post will sit alongside a specific
+    // asset (photo/video/text from the vault), tell the model about it so
+    // the words fit the image instead of floating free.
+    let assetBlock = "";
+    const ac = assetContext as AssetContext | undefined;
+    if (ac && (ac.description || ac.content || (ac.tags && ac.tags.length > 0))) {
+      const bits: string[] = [];
+      if (ac.description) bits.push(`what it shows: ${String(ac.description).slice(0, 300)}`);
+      if (ac.content) bits.push(`attached note/text: ${String(ac.content).slice(0, 300)}`);
+      if (ac.tags && ac.tags.length) bits.push(`tags: ${ac.tags.join(", ")}`);
+      assetBlock = `\n\nTHE POST WILL ACCOMPANY A VAULT ASSET (${ac.type || "image"}):
+${bits.join("\n")}
+- Write the words so they naturally pair with this asset (caption what's visible, build on the note).
+- Do NOT invent visual details that contradict the asset.`;
+    }
+
     const systemPrompt = `You are a content writer that MUST stay 100% in character for the following persona.
 
 PERSONA NAME: ${persona.name}
@@ -52,7 +75,7 @@ STRICT RULES:
 - Stay consistent with the backstory and lifestyle pillars.
 - Follow every content rule.
 - Completely avoid any forbidden topics.
-- If the requested topic conflicts with the persona, reframe it or refuse politely in character.` + postedBlock;
+- If the requested topic conflicts with the persona, reframe it or refuse politely in character.` + postedBlock + assetBlock;
 
     let userPrompt = "";
     switch (type) {

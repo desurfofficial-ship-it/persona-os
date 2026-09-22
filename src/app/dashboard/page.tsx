@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { computeMomentum, type MomentumStats } from "@/lib/momentum";
+import { buildWeek, type DayCell, type CalendarDraft } from "@/lib/calendar";
+import { computeInsights, daysSinceLastPost, type InsightDraft, type Insights } from "@/lib/insights";
+import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
 
 interface Draft {
   id: string;
@@ -12,6 +15,7 @@ interface Draft {
   content: string;
   created_at: string;
   posted?: boolean;
+  planned_for?: string | null;
   personas?: { name: string };
 }
 
@@ -22,6 +26,12 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [momentum, setMomentum] = useState<MomentumStats | null>(null);
+  const [allDrafts, setAllDrafts] = useState<Draft[]>([]);
+  const [week, setWeek] = useState<DayCell[]>([]);
+  const [insights, setInsights] = useState<Insights | null>(null);
+  const [activePersonaId, setActiveId] = useState<string | null>(null);
+  const [daysSince, setDaysSince] = useState<number | null>(null);
+  const [showPatterns, setShowPatterns] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
@@ -46,7 +56,7 @@ export default function DashboardPage() {
           .order("created_at", { ascending: false }),
         supabase
           .from("content_drafts")
-          .select("id, type, content, created_at, posted, personas(name)")
+          .select("id, type, content, created_at, posted, planned_for, personas(name)")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
           .limit(90),
@@ -54,8 +64,13 @@ export default function DashboardPage() {
 
       const drafts = (draftsRes.data || []) as Draft[];
       setPersonas(personasRes.data || []);
+      setAllDrafts(drafts);
       setRecentDrafts(drafts.slice(0, 5));
       setMomentum(computeMomentum(drafts));
+      setWeek(buildWeek(drafts as CalendarDraft[]));
+      setInsights(computeInsights(drafts as InsightDraft[]));
+      setDaysSince(daysSinceLastPost(drafts as InsightDraft[]));
+      setActiveId(getActivePersonaId());
       setLoading(false);
     };
 
@@ -77,6 +92,11 @@ export default function DashboardPage() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
+  };
+
+  const handleSetActive = (id: string) => {
+    setActivePersonaId(id);
+    setActiveId(id);
   };
 
   const handleDeletePersona = async (id: string, name: string) => {
@@ -170,6 +190,7 @@ export default function DashboardPage() {
                     ["Check", "/dashboard/check"],
                     ["Vault", "/dashboard/vault"],
                     ["New Persona", "/dashboard/personas/new"],
+                    ["Trust & Data", "/dashboard/trust"],
                   ].map(([label, href]) => (
                     <a
                       key={href}
@@ -269,6 +290,80 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* Welcome back: absence as content, not guilt */}
+        {!firstRun && personas.length > 0 && daysSince !== null && daysSince >= 4 && (
+          <div className="bg-gradient-to-r from-amber-950/40 to-zinc-900 border border-amber-800/50 rounded-xl p-5 mb-8">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <p className="font-medium text-amber-200">
+                  Welcome back — {daysSince} days since your last post
+                </p>
+                <p className="text-sm text-zinc-400 mt-1">
+                  The gap IS the content. Your audience relates to real cadence, not a machine.
+                </p>
+              </div>
+              <a
+                href={`/dashboard/generate?persona=${activePersonaId || personas[0].id}&welcome=1`}
+                className="shrink-0 min-h-[48px] px-5 flex items-center bg-amber-200 text-amber-950 rounded-lg text-sm font-semibold hover:bg-amber-100"
+              >
+                Write the come-back post →
+              </a>
+            </div>
+          </div>
+        )}
+
+        {/* Week calendar: this week at a glance, Mon–Sun */}
+        {!firstRun && week.length > 0 && (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-medium">This week</h2>
+              <p className="text-xs text-zinc-500">
+                <span className="inline-block w-2 h-2 rounded-full bg-green-400 mr-1 align-middle" />
+                posted
+                <span className="inline-block w-2 h-2 rounded-full bg-white ml-3 mr-1 align-middle" />
+                drafted
+                <span className="inline-block w-2 h-2 border border-amber-400 rounded-full ml-3 mr-1 align-middle" />
+                planned
+              </p>
+            </div>
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+              {week.map((day) => (
+                <div
+                  key={day.key}
+                  title={
+                    [
+                      ...day.planned.map((d) => `Planned: ${d.content.slice(0, 60)}`),
+                      ...day.posted.map((d) => `Posted: ${d.content.slice(0, 60)}`),
+                      ...day.drafts
+                        .filter((d) => !d.posted)
+                        .map((d) => `Draft: ${d.content.slice(0, 60)}`),
+                    ].join("\n") || undefined
+                  }
+                  className={`rounded-lg border p-1.5 sm:p-2.5 text-center ${
+                    day.isToday ? "border-zinc-500 bg-zinc-800/60" : "border-zinc-800"
+                  }`}
+                >
+                  <p className="text-[10px] text-zinc-500 uppercase hidden sm:block">{day.label}</p>
+                  <p className={`text-xs sm:text-sm ${day.isToday ? "text-white font-semibold" : "text-zinc-400"}`}>
+                    {day.dayNum}
+                  </p>
+                  <div className="flex items-center justify-center gap-1 mt-1.5 h-2">
+                    {day.planned.length > 0 && (
+                      <span className="w-2 h-2 rounded-full border border-amber-400" title={`${day.planned.length} planned`} />
+                    )}
+                    {day.posted.length > 0 && (
+                      <span className="w-2 h-2 rounded-full bg-green-400" title={`${day.posted.length} posted`} />
+                    )}
+                    {day.drafts.length - day.posted.length > 0 && (
+                      <span className="w-2 h-2 rounded-full bg-white" title={`${day.drafts.length - day.posted.length} drafted`} />
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {!firstRun && (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-12">
@@ -310,8 +405,25 @@ export default function DashboardPage() {
             </div>
 
             <div className="mb-12">
-              <div className="flex items-center justify-between mb-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <h2 className="text-xl font-semibold">Your Personas</h2>
+                {personas.length > 1 && (
+                  <label className="flex items-center gap-2 text-sm text-zinc-400">
+                    <span className="hidden sm:inline">Active voice:</span>
+                    <select
+                      value={activePersonaId || ""}
+                      onChange={(e) => handleSetActive(e.target.value)}
+                      className="px-3 py-1.5 min-h-[40px] bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+                    >
+                      {!activePersonaId && <option value="">Choose…</option>}
+                      {personas.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <a
                   href="/dashboard/personas/new"
                   className="px-4 py-2 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
@@ -320,6 +432,13 @@ export default function DashboardPage() {
                 </a>
               </div>
 
+              {personas.length > 3 && (
+                <p className="text-xs text-amber-400/80 mb-4">
+                  Heads up: you have {personas.length} personas. The most consistent creators run
+                  one to three — more voices means more drift.
+                </p>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {personas.map((persona) => (
                   <div
@@ -327,6 +446,25 @@ export default function DashboardPage() {
                     className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition group relative"
                   >
                     <a href={`/dashboard/personas/${persona.id}`} className="block">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span
+                          onClick={(e) => {
+                            if (activePersonaId !== persona.id) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleSetActive(persona.id);
+                            }
+                          }}
+                          role={activePersonaId === persona.id ? undefined : "button"}
+                          className={`text-[10px] px-2 py-0.5 rounded-full ${
+                            activePersonaId === persona.id
+                              ? "bg-green-500/15 text-green-300 border border-green-700/60"
+                              : "bg-zinc-800 text-zinc-400 border border-zinc-700 hover:text-white cursor-pointer"
+                          }`}
+                        >
+                          {activePersonaId === persona.id ? "● Active voice" : "Set active"}
+                        </span>
+                      </div>
                       <h3 className="text-lg font-semibold mb-2 pr-20">{persona.name}</h3>
                       <p className="text-sm text-zinc-400 line-clamp-3 mb-3">
                         {persona.backstory || "No backstory."}
@@ -366,6 +504,91 @@ export default function DashboardPage() {
               </div>
             </div>
           </>
+        )}
+
+        {recentDrafts.length > 0 && (
+          <div className="mb-12">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-xl font-semibold">Patterns (from your real activity)</h2>
+              <button
+                onClick={() => setShowPatterns((s) => !s)}
+                className="text-sm text-zinc-400 hover:text-white"
+              >
+                {showPatterns ? "Hide" : "Show"} →
+              </button>
+            </div>
+
+            {showPatterns && insights && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                  <p className="text-xs uppercase tracking-wide text-zinc-500 mb-2">Follow-through</p>
+                  {insights.postedRatio ? (
+                    <p className="text-sm text-zinc-300">
+                      <span className="text-2xl font-bold text-white">
+                        {Math.round((insights.postedRatio.posted / insights.postedRatio.total) * 100)}%
+                      </span>{" "}
+                      of your {insights.postedRatio.total} recent drafts got posted
+                      ({insights.postedRatio.posted}). Drafting is easy — posting is the habit
+                      that pays.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-zinc-500">No drafts yet.</p>
+                  )}
+                </div>
+
+                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                  <p className="text-xs uppercase tracking-wide text-zinc-500 mb-2">Cadence</p>
+                  <p className="text-sm text-zinc-300">
+                    {insights.thisWeekDrafts} drafts this week vs {insights.lastWeekDrafts} last
+                    week
+                    {insights.thisWeekDrafts > insights.lastWeekDrafts
+                      ? " — trending up."
+                      : insights.thisWeekDrafts < insights.lastWeekDrafts
+                        ? " — dip week. Normal, restart today."
+                        : " — steady."}
+                  </p>
+                  {insights.longestStreak > 1 && (
+                    <p className="text-xs text-zinc-500 mt-2">
+                      Longest daily run: {insights.longestStreak} days.
+                    </p>
+                  )}
+                </div>
+
+                {insights.bestDay && (
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                    <p className="text-xs uppercase tracking-wide text-zinc-500 mb-2">Best day</p>
+                    <p className="text-sm text-zinc-300">
+                      You post most on{" "}
+                      <span className="text-white font-semibold">{insights.bestDay.day}s</span> (
+                      {insights.bestDay.count} posts). Worth protecting that slot.
+                    </p>
+                  </div>
+                )}
+
+                {insights.topThemes.length > 0 && (
+                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                    <p className="text-xs uppercase tracking-wide text-zinc-500 mb-2">
+                      What you keep coming back to
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {insights.topThemes.map((t) => (
+                        <span
+                          key={t.label}
+                          className="text-xs px-2.5 py-1 bg-zinc-800 rounded-full text-zinc-300"
+                          title={t.example.slice(0, 120)}
+                        >
+                          {t.label} ×{t.count}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-3">
+                      Recurring themes in your POSTED content — your audience shows up for these.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {recentDrafts.length > 0 && (

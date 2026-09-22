@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import PostImport from "@/components/PostImport";
 
 export default function FromPostsPage() {
   const router = useRouter();
@@ -92,6 +93,14 @@ export default function FromPostsPage() {
         </p>
 
         <div className="space-y-6">
+          <PostImport
+            onAddPosts={(imported) =>
+              setPosts((prev) =>
+                prev.trim() ? `${prev.trim()}\n\n${imported.join("\n\n")}` : imported.join("\n\n")
+              )
+            }
+          />
+
           <div>
             <label className="block text-sm text-zinc-400 mb-2">
               Paste your posts (separate with blank lines)

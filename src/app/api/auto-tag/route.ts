@@ -1,0 +1,103 @@
+import { NextRequest, NextResponse } from "next/server";
+import ZAI from "z-ai-web-dev-sdk";
+import { db } from "@/lib/db";
+import { userFromRequest } from "@/lib/local-session";
+import fs from "fs/promises";
+import path from "path";
+
+/**
+ * Auto-tag a vault asset. For images we try the vision model to read what's
+ * actually in the frame; anything that fails degrades to honest heuristic
+ * tags (type, month, persona) rather than pretending.
+ */
+
+const UPLOADS_ROOT = path.join(process.cwd(), "db", "uploads");
+
+function heuristicTags(type: string, personaName: string | null): string[] {
+  const month = new Date().toLocaleDateString("en-US", { month: "short" });
+  const tags = [type, `uploaded ${month}`];
+  if (personaName) tags.push(personaName.toLowerCase());
+  return tags;
+}
+
+export async function POST(req: NextRequest) {
+  const userId = userFromRequest(req);
+  if (!userId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  let assetId = "";
+  try {
+    ({ assetId } = await req.json());
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (!assetId) {
+    return NextResponse.json({ error: "assetId required" }, { status: 400 });
+  }
+
+  const asset = await db.asset.findFirst({ where: { id: assetId, userId } });
+  if (!asset) {
+    return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+  }
+
+  let personaName: string | null = null;
+  if (asset.personaId) {
+    const persona = await db.persona.findFirst({ where: { id: asset.personaId, userId } });
+    personaName = persona?.name ?? null;
+  }
+
+  // Try vision description for images.
+  if (asset.type === "image" && asset.url) {
+    const rel = asset.url.split("path=")[1];
+    if (rel) {
+      const relPath = decodeURIComponent(rel);
+      const full = path.resolve(UPLOADS_ROOT, relPath);
+      if (full.startsWith(UPLOADS_ROOT)) {
+        try {
+          const buf = await fs.readFile(full);
+          const b64 = buf.toString("base64");
+          const dataUrl = `data:image/${path.extname(full).slice(1) || "png"};base64,${b64}`;
+
+          const zai = await ZAI.create();
+          const completion = await zai.chat.completions.createVision({
+            model: "glm-4.5v",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: "Describe this image for a content asset vault in 3-6 lowercase keyword tags (e.g. 'office', 'product shot', 'city night'). Reply with ONLY the tags separated by commas — no other words.",
+                  },
+                  { type: "image_url", image_url: { url: dataUrl } },
+                ],
+              },
+            ],
+            thinking: { type: "disabled" },
+          });
+
+          const content: string = completion.choices?.[0]?.message?.content || "";
+          const tags = content
+            .split(/[,\n]/)
+            .map((t) => t.trim().toLowerCase().replace(/[^a-z0-9 \-]/g, "").trim())
+            .filter((t) => t.length > 1 && t.length < 30)
+            .slice(0, 6);
+
+          if (tags.length > 0) {
+            const all = Array.from(new Set([...tags]));
+            await db.asset.update({ where: { id: asset.id }, data: { tags: all } });
+            return NextResponse.json({ tags: all, source: "vision" });
+          }
+        } catch (err) {
+          console.error("auto-tag vision failed, using heuristics:", err);
+        }
+      }
+    }
+  }
+
+  // Heuristic fallback for images whose vision failed, and for videos.
+  const tags = heuristicTags(asset.type, personaName);
+  await db.asset.update({ where: { id: asset.id }, data: { tags } });
+  return NextResponse.json({ tags, source: "heuristic" });
+}

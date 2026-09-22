@@ -24,9 +24,13 @@ export default function VaultPage() {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState("");
   const [filterPersonaId, setFilterPersonaId] = useState("all");
+  const [filterTag, setFilterTag] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [taggingId, setTaggingId] = useState<string | null>(null); // asset being auto-tagged
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
+  const [newTag, setNewTag] = useState("");
 
   const loadData = async () => {
     const {
@@ -62,10 +66,63 @@ export default function VaultPage() {
     loadData();
   }, [router]);
 
+  const allTags = Array.from(
+    new Set(assets.flatMap((a) => (Array.isArray(a.tags) ? a.tags : [])))
+  ).sort();
+
   const filteredAssets =
     filterPersonaId === "all"
       ? assets
       : assets.filter((a) => a.persona_id === filterPersonaId);
+
+  const tagFilteredAssets = filterTag
+    ? filteredAssets.filter((a) => Array.isArray(a.tags) && a.tags.includes(filterTag))
+    : filteredAssets;
+
+  const autoTag = async (assetId: string) => {
+    setTaggingId(assetId);
+    try {
+      const res = await fetch("/api/auto-tag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assetId }),
+      });
+      const data = await res.json();
+      if (res.ok && data.tags) {
+        setAssets((prev) =>
+          prev.map((a) => (a.id === assetId ? { ...a, tags: data.tags } : a))
+        );
+      }
+    } catch {
+      // silent — user can tag manually
+    } finally {
+      setTaggingId(null);
+    }
+  };
+
+  const addTag = async (assetId: string) => {
+    const tag = newTag.trim().toLowerCase();
+    if (!tag) return;
+    const asset = assets.find((a) => a.id === assetId);
+    if (!asset) return;
+
+    const tags = Array.from(new Set([...(asset.tags || []), tag]));
+    setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, tags } : a)));
+    setNewTag("");
+    setEditingTagId(null);
+
+    await supabase.from("assets").update({ tags }).eq("id", assetId);
+  };
+
+  const removeTag = async (assetId: string, tag: string) => {
+    const asset = assets.find((a) => a.id === assetId);
+    if (!asset) return;
+
+    const tags = (asset.tags || []).filter((t) => t !== tag);
+    setAssets((prev) => prev.map((a) => (a.id === assetId ? { ...a, tags } : a)));
+
+    await supabase.from("assets").update({ tags }).eq("id", assetId);
+  };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -73,6 +130,8 @@ export default function VaultPage() {
 
     setUploading(true);
     setError(null);
+
+    let createdAssetId: string | null = null;
 
     try {
       const {
@@ -87,17 +146,7 @@ export default function VaultPage() {
         .from("assets")
         .upload(fileName, file);
 
-      if (uploadError) {
-        if (
-          uploadError.message.includes("Bucket not found") ||
-          uploadError.message.includes("not found")
-        ) {
-          throw new Error(
-            'Storage bucket "assets" not found. Go to Supabase → Storage → New bucket → name it "assets" → make it Public.'
-          );
-        }
-        throw uploadError;
-      }
+      if (uploadError) throw uploadError;
 
       const {
         data: { publicUrl },
@@ -105,7 +154,7 @@ export default function VaultPage() {
 
       const type = file.type.startsWith("video") ? "video" : "image";
 
-      const { error: insertError } = await supabase.from("assets").insert({
+      const { data: inserted, error: insertError } = await supabase.from("assets").insert({
         persona_id: selectedPersonaId,
         user_id: user.id,
         type,
@@ -114,6 +163,7 @@ export default function VaultPage() {
       });
 
       if (insertError) throw insertError;
+      createdAssetId = (inserted as any)?.[0]?.id || null;
 
       await loadData();
     } catch (err: any) {
@@ -122,6 +172,9 @@ export default function VaultPage() {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+
+    // Auto-tag right after the asset lands (non-blocking errors are fine).
+    if (createdAssetId) await autoTag(createdAssetId);
   };
 
   const handleDelete = async (id: string, url: string | null) => {
@@ -141,6 +194,10 @@ export default function VaultPage() {
     }
   };
 
+  const writeForAsset = (asset: Asset) => {
+    router.push(`/dashboard/generate?persona=${asset.persona_id}&asset=${asset.id}`);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -150,7 +207,7 @@ export default function VaultPage() {
   }
 
   return (
-    <div className="min-h-screen p-6 sm:p-8">
+    <div className="min-h-screen p-4 sm:p-8">
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
           <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
@@ -161,7 +218,12 @@ export default function VaultPage() {
 
         {/* Upload */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 mb-8">
-          <h2 className="font-medium mb-4">Upload Asset</h2>
+          <h2 className="font-medium mb-1">Upload Asset</h2>
+          <p className="text-xs text-zinc-500 mb-4">
+            Images get auto-tagged on upload. Every asset has a{" "}
+            <span className="text-zinc-300">&quot;Write for this&quot;</span> button — the words
+            will match what&apos;s in the frame.
+          </p>
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
             <div className="flex-1 w-full">
               <label className="block text-sm text-zinc-400 mb-2">Attach to Persona</label>
@@ -204,9 +266,8 @@ export default function VaultPage() {
           )}
         </div>
 
-        {/* Filter */}
-        <div className="flex items-center gap-3 mb-6">
-          <span className="text-sm text-zinc-400">Filter:</span>
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-3 mb-6">
           <select
             value={filterPersonaId}
             onChange={(e) => setFilterPersonaId(e.target.value)}
@@ -219,16 +280,46 @@ export default function VaultPage() {
               </option>
             ))}
           </select>
+
+          {allTags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setFilterTag(null)}
+                className={`text-xs px-2.5 py-1 rounded-full border ${
+                  !filterTag
+                    ? "bg-white text-black border-white"
+                    : "border-zinc-700 text-zinc-400 hover:text-white"
+                }`}
+              >
+                all
+              </button>
+              {allTags.slice(0, 12).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFilterTag(filterTag === t ? null : t)}
+                  className={`text-xs px-2.5 py-1 rounded-full border ${
+                    filterTag === t
+                      ? "bg-white text-black border-white"
+                      : "border-zinc-700 text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  #{t}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Grid */}
-        {filteredAssets.length === 0 ? (
+        {tagFilteredAssets.length === 0 ? (
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
-            <p className="text-zinc-400">No assets yet.</p>
+            <p className="text-zinc-400">
+              {filterTag ? `No assets tagged #${filterTag}.` : "No assets yet."}
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {filteredAssets.map((asset) => (
+            {tagFilteredAssets.map((asset) => (
               <div
                 key={asset.id}
                 className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden group relative"
@@ -250,20 +341,73 @@ export default function VaultPage() {
                     {asset.type}
                   </div>
                 )}
-                <div className="p-3">
-                  <p className="text-xs text-zinc-400 truncate">
-                    {(asset.personas as any)?.name || "Unknown"}
-                  </p>
-                  <p className="text-xs text-zinc-600">
-                    {new Date(asset.created_at).toLocaleDateString()}
-                  </p>
-                </div>
+
                 <button
                   onClick={() => handleDelete(asset.id, asset.url)}
                   className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-black/70 text-white text-xs px-2 py-1 rounded transition"
                 >
                   Delete
                 </button>
+
+                <div className="p-3">
+                  <p className="text-xs text-zinc-400 truncate">
+                    {(asset.personas as any)?.name || "Unknown"}
+                  </p>
+
+                  {/* Tags */}
+                  <div className="flex flex-wrap gap-1 mt-1.5 min-h-[20px]">
+                    {(asset.tags || []).map((t) => (
+                      <span
+                        key={t}
+                        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded-full text-zinc-300"
+                      >
+                        #{t}
+                        <button
+                          onClick={() => removeTag(asset.id, t)}
+                          className="text-zinc-500 hover:text-red-400"
+                          aria-label={`Remove tag ${t}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                    {editingTagId === asset.id ? (
+                      <input
+                        autoFocus
+                        value={newTag}
+                        onChange={(e) => setNewTag(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") addTag(asset.id);
+                          if (e.key === "Escape") setEditingTagId(null);
+                        }}
+                        onBlur={() => addTag(asset.id)}
+                        placeholder="tag…"
+                        className="w-16 text-[10px] px-1.5 py-0.5 bg-zinc-950 border border-zinc-600 rounded-full outline-none"
+                      />
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setEditingTagId(asset.id);
+                          setNewTag("");
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 border border-dashed border-zinc-600 rounded-full text-zinc-500 hover:text-white"
+                      >
+                        + tag
+                      </button>
+                    )}
+                    {taggingId === asset.id && (
+                      <span className="text-[10px] text-zinc-500 animate-pulse">tagging…</span>
+                    )}
+                  </div>
+
+                  {/* The vault→generate loop */}
+                  <button
+                    onClick={() => writeForAsset(asset)}
+                    className="mt-2.5 w-full min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg text-xs font-medium hover:bg-zinc-700"
+                  >
+                    ✍ Write for this
+                  </button>
+                </div>
               </div>
             ))}
           </div>

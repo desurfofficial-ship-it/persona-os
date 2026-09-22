@@ -38,6 +38,10 @@
   ],
   "exclude": [
     "node_modules",
-    "skills"
+    "skills",
+    "persona-os",
+    "scripts",
+    "mini-services",
+    "tests"
   ]
 }
