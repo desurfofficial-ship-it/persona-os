@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { fetchVoiceSamples } from "@/lib/voiceSamples";
 import { copyAndOpen } from "@/lib/share";
 import { nextSevenDays } from "@/lib/calendar";
-import { compactNumber } from "@/lib/metrics";
+import { compactNumber, parseCount } from "@/lib/metrics";
 
 interface Draft {
   id: string;
@@ -57,7 +57,18 @@ export default function DraftsPage() {
   const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
   const [loggingId, setLoggingId] = useState<string | null>(null);
   const [logForm, setLogForm] = useState({ platform: "X", views: "", likes: "", comments: "" });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [menuId, setMenuId] = useState<string | null>(null);
   const planDays = nextSevenDays();
+  const searchParams = useSearchParams();
+
+  // Deep link from the Consistency Engine: /dashboard/drafts?q=<quote fragment>
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q) setSearch(q);
+  }, [searchParams]);
 
   useEffect(() => {
     const load = async () => {
@@ -186,11 +197,13 @@ export default function DraftsPage() {
   const saveMetrics = async (draft: Draft) => {
     const metrics: DraftMetrics = {
       platform: logForm.platform,
-      views: Math.max(0, Math.round(Number(logForm.views) || 0)),
-      likes: Math.max(0, Math.round(Number(logForm.likes) || 0)),
-      comments: Math.max(0, Math.round(Number(logForm.comments) || 0)),
+      views: parseCount(logForm.views) ?? 0,
+      likes: parseCount(logForm.likes) ?? 0,
+      comments: parseCount(logForm.comments) ?? 0,
       loggedAt: new Date().toISOString(),
     };
+    // Never store an all-zero junk row — it would skew every average.
+    if (metrics.views + metrics.likes + metrics.comments === 0) return;
     // Optimistic
     setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics } : d)));
     setLoggingId(null);
@@ -203,6 +216,34 @@ export default function DraftsPage() {
       setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics: draft.metrics } : d)));
       alert(error.message);
     }
+  };
+
+  const startEdit = (draft: Draft) => {
+    setEditingId(draft.id);
+    setEditText(draft.content);
+    setMenuId(null);
+  };
+
+  const saveEdit = async (draft: Draft) => {
+    const next = editText.trim();
+    if (!next || next === draft.content) {
+      setEditingId(null);
+      return;
+    }
+    setSavingEdit(true);
+    // Optimistic
+    setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, content: next } : d)));
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ content: next })
+      .eq("id", draft.id);
+    setSavingEdit(false);
+    if (error) {
+      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, content: draft.content } : d)));
+      alert(error.message);
+      return;
+    }
+    setEditingId(null);
   };
 
   const handleImprove = async (draft: Draft) => {
@@ -335,16 +376,37 @@ export default function DraftsPage() {
         {filtered.length === 0 ? (
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
             <p className="text-zinc-400 mb-4">
-              {drafts.length === 0 ? "No drafts yet." : "No drafts match your filters."}
+              {drafts.length === 0
+                ? "No drafts yet."
+                : search
+                  ? searchParams.get("q")
+                    ? "No drafts match this quote — you may have already edited or fixed the wording."
+                    : `No drafts match “${search}”.`
+                  : "No drafts match your filters."}
             </p>
-            {drafts.length === 0 && (
-              <a
-                href="/dashboard/generate"
-                className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
-              >
-                Generate content
-              </a>
-            )}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              {(search || filterPersona !== "all" || filterPosted !== "all") && (
+                <button
+                  onClick={() => {
+                    setSearch("");
+                    setFilterPersona("all");
+                    setFilterPosted("all");
+                    if (searchParams.get("q")) router.replace("/dashboard/drafts");
+                  }}
+                  className="px-4 py-2.5 border border-zinc-600 rounded-lg text-sm hover:bg-zinc-800"
+                >
+                  Clear search & filters
+                </button>
+              )}
+              {drafts.length === 0 && (
+                <a
+                  href="/dashboard/generate"
+                  className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+                >
+                  Generate content
+                </a>
+              )}
+            </div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -355,7 +417,7 @@ export default function DraftsPage() {
                   selectedIds.has(draft.id) ? "border-zinc-500" : "border-zinc-800"
                 }`}
               >
-                <div className="flex items-start justify-between mb-3 gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between mb-3 gap-3">
                   <div className="flex items-start gap-3">
                     <input
                       type="checkbox"
@@ -364,22 +426,22 @@ export default function DraftsPage() {
                       className="mt-1"
                     />
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs uppercase tracking-wide text-zinc-500">
                           {draft.type.replace("_", " ")}
                         </span>
                         {draft.posted && (
-                          <span className="text-xs px-1.5 py-0.5 bg-green-900/40 text-green-300 rounded">
+                          <span className="text-xs px-1.5 py-0.5 bg-green-900/40 text-green-300 rounded whitespace-nowrap">
                             Posted
                           </span>
                         )}
                         {asMetrics(draft.metrics) && (
-                          <span className="text-xs px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded">
+                          <span className="text-xs px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded whitespace-nowrap">
                             {asMetrics(draft.metrics)!.platform} · {compactNumber(asMetrics(draft.metrics)!.views)} views
                           </span>
                         )}
                         {draft.planned_for && !draft.posted && (
-                          <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded">
+                          <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded whitespace-nowrap">
                             Planned {new Date(draft.planned_for).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
                           </span>
                         )}
@@ -390,7 +452,7 @@ export default function DraftsPage() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 shrink-0">
+                  <div className="flex flex-wrap gap-2">
                     <select
                       value={
                         draft.planned_for
@@ -414,7 +476,11 @@ export default function DraftsPage() {
                     </select>
                     <button
                       onClick={() => togglePosted(draft)}
-                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+                      className={`text-xs px-2 py-1.5 min-h-[36px] rounded font-medium ${
+                        draft.posted
+                          ? "border border-zinc-700 hover:bg-zinc-800"
+                          : "bg-white text-black hover:bg-zinc-200"
+                      }`}
                     >
                       {draft.posted ? "Unmark" : "Mark Posted"}
                     </button>
@@ -428,44 +494,106 @@ export default function DraftsPage() {
                       </button>
                     )}
                     <button
-                      onClick={() => handleImprove(draft)}
-                      disabled={improvingId === draft.id}
-                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                    >
-                      {improvingId === draft.id ? "Improving..." : "Improve"}
-                    </button>
-                    <button
-                      onClick={() => copyAndOpen(draft.content, "twitter")}
-                      title="Copy & open X"
+                      onClick={() => startEdit(draft)}
+                      title="Edit this draft in place"
                       className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
                     >
-                      Open X
+                      Edit
                     </button>
-                    <button
-                      onClick={() => copyAndOpen(draft.content, "linkedin")}
-                      title="Copy & open LinkedIn"
-                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
-                    >
-                      Open LinkedIn
-                    </button>
-                    <button
-                      onClick={() => navigator.clipboard.writeText(draft.content)}
-                      className="text-xs text-zinc-400 hover:text-white px-2 py-1.5 min-h-[36px]"
-                    >
-                      Copy
-                    </button>
-                    <button
-                      onClick={() => handleDelete(draft.id)}
-                      className="text-xs text-red-400 hover:text-red-300 px-2 py-1.5 min-h-[36px]"
-                    >
-                      Delete
-                    </button>
+                    {/* Secondary actions live in an overflow menu — the card
+                        stays scannable on mobile instead of a button wall. */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setMenuId(menuId === draft.id ? null : draft.id)}
+                        aria-expanded={menuId === draft.id}
+                        aria-haspopup="true"
+                        title="More actions"
+                        className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+                      >
+                        ⋯
+                      </button>
+                      {menuId === draft.id && (
+                        <div className="absolute right-0 top-full mt-1 w-48 bg-zinc-900 border border-zinc-700 rounded-xl shadow-xl py-1.5 z-40">
+                          {[
+                            {
+                              label: improvingId === draft.id ? "Improving…" : "✨ Improve with AI",
+                              action: () => handleImprove(draft),
+                              disabled: improvingId === draft.id,
+                            },
+                            {
+                              label: "Copy & open X",
+                              action: () => copyAndOpen(draft.content, "twitter"),
+                            },
+                            {
+                              label: "Copy & open LinkedIn",
+                              action: () => copyAndOpen(draft.content, "linkedin"),
+                            },
+                            {
+                              label: "Copy text",
+                              action: () => navigator.clipboard.writeText(draft.content),
+                            },
+                          ].map((item) => (
+                            <button
+                              key={item.label}
+                              onClick={() => {
+                                setMenuId(null);
+                                item.action();
+                              }}
+                              disabled={item.disabled}
+                              className="block w-full text-left px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-50"
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                          <div className="border-t border-zinc-800 my-1" />
+                          <button
+                            onClick={() => {
+                              setMenuId(null);
+                              handleDelete(draft.id);
+                            }}
+                            className="block w-full text-left px-4 py-2.5 text-sm text-red-400 hover:bg-zinc-800"
+                          >
+                            Delete draft
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
-                  {draft.content}
-                </pre>
+                {editingId === draft.id ? (
+                  <div>
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      rows={Math.min(16, Math.max(4, Math.ceil(editText.length / 80)))}
+                      className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-600 rounded-lg text-sm text-zinc-100 leading-relaxed"
+                    />
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <button
+                        onClick={() => saveEdit(draft)}
+                        disabled={savingEdit}
+                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium hover:bg-zinc-200 disabled:opacity-50"
+                      >
+                        {savingEdit ? "Saving…" : "Save changes"}
+                      </button>
+                      <button
+                        onClick={() => setEditingId(null)}
+                        className="text-xs px-3 py-2 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+                      >
+                        Cancel
+                      </button>
+                      <p className="text-xs text-zinc-500 self-center">
+                        Editing updates the draft everywhere — the Consistency Engine re-checks on
+                        the next scan.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+                    {draft.content}
+                  </pre>
+                )}
 
                 {loggingId === draft.id && (
                   <div className="mt-4 pt-4 border-t border-zinc-800">
@@ -485,8 +613,7 @@ export default function DraftsPage() {
                         ))}
                       </select>
                       <input
-                        type="number"
-                        min={0}
+                        type="text"
                         inputMode="numeric"
                         placeholder="Views"
                         value={logForm.views}
@@ -494,8 +621,7 @@ export default function DraftsPage() {
                         className="w-24 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
                       />
                       <input
-                        type="number"
-                        min={0}
+                        type="text"
                         inputMode="numeric"
                         placeholder="Likes"
                         value={logForm.likes}
@@ -503,8 +629,7 @@ export default function DraftsPage() {
                         className="w-20 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
                       />
                       <input
-                        type="number"
-                        min={0}
+                        type="text"
                         inputMode="numeric"
                         placeholder="Comments"
                         value={logForm.comments}
@@ -513,7 +638,14 @@ export default function DraftsPage() {
                       />
                       <button
                         onClick={() => saveMetrics(draft)}
-                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium"
+                        disabled={
+                          (parseCount(logForm.views) ?? 0) +
+                            (parseCount(logForm.likes) ?? 0) +
+                            (parseCount(logForm.comments) ?? 0) ===
+                          0
+                        }
+                        title="Paste numbers exactly as the platform shows them — 12,500 and 1.2K both work"
+                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         Save
                       </button>

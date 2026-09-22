@@ -184,11 +184,13 @@ RULES:
             quote: String(a.quote || "").slice(0, 200),
             itemId: aItem.id,
             date: aItem.createdAt,
+            type: aItem.type,
           },
           b: {
             quote: String(b.quote || "").slice(0, 200),
             itemId: bItem.id,
             date: bItem.createdAt,
+            type: bItem.type,
           },
           why: String(c.why || "").slice(0, 300),
           severity: severity as Contradiction["severity"],
@@ -215,5 +217,6 @@ RULES:
     contradictions,
     scanned: items.length,
     scannedPosted: items.filter((i) => i.posted).length,
+    scannedAt: new Date().toISOString(),
   });
 }

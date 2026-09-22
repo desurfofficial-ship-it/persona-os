@@ -104,6 +104,15 @@ function GenerateContent() {
   const [allFormats, setAllFormats] = useState<Record<number, FormatResult[]>>({});
   const [makingAll, setMakingAll] = useState<number | null>(null);
 
+  // Inline character check: verdict chip on the card, no navigation needed.
+  const [checkingIdx, setCheckingIdx] = useState<number | null>(null);
+  const [checkResults, setCheckResults] = useState<
+    Record<
+      string,
+      { score: number; verdict: string; breaks: { quote: string; why: string; fix: string }[] }
+    >
+  >({});
+
   // Sticky mobile generate bar
   const generateBtnRef = useRef<HTMLButtonElement>(null);
   const [showStickyBar, setShowStickyBar] = useState(false);
@@ -413,6 +422,38 @@ function GenerateContent() {
     const next = [...results];
     next[index] = { ...v, content: v.original, original: undefined };
     setResults(next);
+  };
+
+  // "Does this break character?" — inline on the card, same engine as
+  // the /check page (deterministic quality pre-passes + LLM judgment).
+  const handleInlineCheck = async (index: number, text: string, key: string) => {
+    if (!selectedPersona || checkingIdx !== null) return;
+    setCheckingIdx(index);
+    try {
+      const res = await fetch("/api/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona: selectedPersona,
+          text: text.slice(0, 2000),
+          voiceSamples: voiceSource,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Check failed");
+      setCheckResults((prev) => ({
+        ...prev,
+        [key]: {
+          score: data.score,
+          verdict: data.verdict,
+          breaks: (data.breaks || []).slice(0, 3),
+        },
+      }));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Check failed");
+    } finally {
+      setCheckingIdx(null);
+    }
   };
 
   // Render an image prompt into an actual image.
@@ -1093,14 +1134,22 @@ function GenerateContent() {
                 </button>
                 <button
                   onClick={() =>
-                    router.push(
-                      `/dashboard/check?persona=${selectedPersona?.id || ""}&text=${encodeURIComponent(variant.content.slice(0, 2000))}`
-                    )
+                    checkResults[String(idx)]
+                      ? setCheckResults((prev) => {
+                          const next = { ...prev };
+                          delete next[String(idx)];
+                          return next;
+                        })
+                      : handleInlineCheck(idx, variant.content, String(idx))
                   }
-                  disabled={rewritingIndex === idx || makingAll === idx}
+                  disabled={checkingIdx === idx || rewritingIndex === idx || makingAll === idx}
                   className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                 >
-                  ✓ Check it
+                  {checkingIdx === idx
+                    ? "Checking…"
+                    : checkResults[String(idx)]
+                      ? "✓ Hide check"
+                      : "✓ Check it"}
                 </button>
                 <button
                   onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
@@ -1145,6 +1194,39 @@ function GenerateContent() {
                   → Image Prompt
                 </button>
               </div>
+
+              {/* Inline check verdict — same engine as the full Check page */}
+              {checkResults[String(idx)] && (
+                <div
+                  className={`rounded-lg border p-3 text-xs space-y-1.5 ${
+                    checkResults[String(idx)].verdict === "Safe to post"
+                      ? "border-green-800 bg-green-950/30 text-green-200"
+                      : checkResults[String(idx)].verdict === "Needs changes"
+                        ? "border-amber-800 bg-amber-950/30 text-amber-200"
+                        : "border-red-800 bg-red-950/30 text-red-200"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold">
+                      {checkResults[String(idx)].verdict} ·{" "}
+                      {checkResults[String(idx)].score}/100 in character
+                    </span>
+                    <a
+                      href={`/dashboard/check?persona=${selectedPersona?.id || ""}&text=${encodeURIComponent(variant.content.slice(0, 2000))}`}
+                      className="underline opacity-80 hover:opacity-100"
+                    >
+                      Full report
+                    </a>
+                  </div>
+                  {checkResults[String(idx)].breaks.map((b, bi) => (
+                    <p key={bi} className="opacity-90">
+                      <span className="font-medium">“{b.quote}”</span>
+                      {b.why ? ` — ${b.why}` : ""}
+                      {b.fix ? ` Fix: ${b.fix}` : ""}
+                    </p>
+                  ))}
+                </div>
+              )}
 
               {/* Render image: image prompts become actual images */}
               {(type === "image_prompt" || /image prompt/i.test(variant.hookType || "")) && (

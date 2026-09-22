@@ -236,6 +236,19 @@ export default function VaultPage() {
             <span className="text-zinc-300">&quot;Write for this&quot;</span> button — the words
             will match what&apos;s in the frame.
           </p>
+          {personas.length === 0 ? (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-950/60 border border-zinc-800 rounded-lg p-4">
+              <p className="text-sm text-zinc-400">
+                Create a persona first — every asset in the vault belongs to one.
+              </p>
+              <a
+                href="/dashboard/personas/from-posts"
+                className="shrink-0 px-4 py-2.5 min-h-[40px] bg-white text-black rounded-lg text-sm font-medium text-center"
+              >
+                Build a persona
+              </a>
+            </div>
+          ) : (
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
             <div className="flex-1 w-full">
               <label className="block text-sm text-zinc-400 mb-2">Attach to Persona</label>
@@ -273,6 +286,7 @@ export default function VaultPage() {
               </label>
             </div>
           </div>
+          )}
           {error && (
             <p className="mt-4 text-sm text-red-400 bg-red-900/30 p-3 rounded-lg">{error}</p>
           )}
