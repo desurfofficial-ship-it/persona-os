@@ -64,3 +64,28 @@ Stage Summary:
 - Deliverable: /home/z/my-project/download/Persona-OS-Red-Team-Report-Rounds-4-5.docx (full dossier, TOC + field codes ready).
 - Decisions embedded for next execution round: Sprint 1 = X/LinkedIn read-only import, week calendar, persona switcher (<=3) with active-voice badge, trust page + export/delete; Sprint 2 = vault-to-generate loop + auto-tags, welcome-back (absence-as-content), pattern insights v1, fair-use pricing page. Native posting API / Notion-Docs export / OCR / SOC2 / team seats explicitly deferred with dates.
 - Kill criteria pre-agreed per feature; next red team should attack the new surface after Sprints 1-2 ship.
+
+---
+Task ID: 4
+Agent: Super Z (main agent)
+Task: "Execute" — implement the Round 4+5 red-team Fix Sprint (7 fixes) in code; rebuild lost local backend first.
+
+Work Log:
+- Discovered the sandbox had been reset: /api/local-db, /api/local-auth, /api/local-storage (the shim's backend) were gone from disk (never committed). Killed stale port-3000 process; rebuilt all three routes + src/lib/local-session.ts (stateless HMAC tokens, salted SHA-256 passwords). Verified demo@persona-os.app signs in; snake_case<->camelCase mapping and personas(name) embed work; count/single/in filters supported; RLS-equivalent user scoping enforced server-side (cross-user id probe returns 0 rows; user_id overridden on insert).
+- Schema: added ContentDraft.plannedFor (db push OK).
+- Sprint 1a import: /api/import-posts (fetch X/LinkedIn public page -> strip HTML -> candidate posts; reader-proxy fallback; honest 422 with fallback:true) + shared PostImport component wired into /dashboard/start and from-posts. Browser-verified REAL fetch of x.com/elonmusk: 12 candidates -> tick -> added 7 blocks to textarea.
+- Sprint 1b calendar: lib/calendar.ts buildWeek/nextSevenDays; dashboard "This week" Mon-Sun grid (posted green / drafted white / planned amber ring, today highlighted, title tooltips); drafts page per-draft "Plan day" select (next 7 days) -> planned_for persisted (verified reload) -> amber "Planned Thu, Sep 24" badge + calendar ring.
+- Sprint 1c switcher: lib/activePersona.ts (localStorage); dashboard "Active voice" dropdown (when >1 persona), per-card Set active chip / green ● Active voice badge; >3 personas warning ("more voices means more drift"); generate page defaults to active voice, writes it on change, shows ● badge.
+- Sprint 1d trust: /dashboard/trust — plain-language data handling table, JSON export (verified: 1 persona, 6 drafts, 2 assets in downloaded file), account delete gated by typing DELETE -> /api/delete-account wipes personas+drafts+assets+user+uploads (throwaway-account verified: sign-in fails after).
+- Sprint 2a vault loop: /api/auto-tag (glm-4.5v vision on upload w/ data URL, heuristic fallback type/month/persona); vault page rewritten: auto-tag after upload, manual +tag/remove, tag filter chips, per-asset "✍ Write for this" -> generate?asset=id -> asset chip (thumbnail + tags) -> /api/generate accepts assetContext and injects "POST WILL ACCOMPANY A VAULT ASSET" block (regression-tested real generation).
+- Sprint 2b welcome-back: insights.daysSinceLastPost; dashboard amber card at >=4 day gap ("The gap IS the content") -> generate?welcome=1 prefills come-back topic; chip explains the angle.
+- Sprint 2c patterns: lib/insights.ts (themes from POSTED content only, best weekday, follow-through %, week-over-week cadence, longest streak); dashboard collapsible Patterns section; honest thresholds (bestDay needs >=2 posted, themes need >=2 occurrences).
+- Sprint 2d pricing: /pricing fair-use page (Solo $0 / Creator $19 / Studio $49 + "The fair-use line, in plain words" — no fake metrics, no engagement farming); linked from landing footer.
+- Housekeeping: tsconfig excludes persona-os/ clone (killed pre-existing phantom tsc errors), eslint ignores scripts/mini-services/tests; lint + tsc --noEmit clean.
+- Browser-verified end-to-end (desktop + 390px mobile): dashboard momentum+calendar+patterns, drafts plan badge, vault tags/loop, generate welcome+asset chips+active badge, trust export/delete gating, start-page import flow, pricing. dev.log clean of runtime errors.
+- Committed b286e28, pushed to private repo branch round-5-fix-sprint (no force-push to main; PAT scrubbed from remote config after push).
+
+Stage Summary:
+- All 7 Fix Sprint items shipped and browser-verified; the preview backend is now committed to the repo so sandbox resets no longer strand the shim.
+- UI contract with the real Supabase deployment unchanged (same supabase-js surface; only additions: planned_for column, planned_for in drafts select, assetContext in generate body).
+- Explicit PAT-rotation reminder delivered to user (PAT appeared in chat + was used for push).
