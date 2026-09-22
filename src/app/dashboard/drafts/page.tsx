@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
+import { copyAndOpen } from "@/lib/share";
 
 interface Draft {
   id: string;
@@ -294,26 +295,40 @@ export default function DraftsPage() {
                   <div className="flex flex-wrap gap-2 shrink-0">
                     <button
                       onClick={() => togglePosted(draft)}
-                      className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
+                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
                     >
                       {draft.posted ? "Unmark" : "Mark Posted"}
                     </button>
                     <button
                       onClick={() => handleImprove(draft)}
                       disabled={improvingId === draft.id}
-                      className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                     >
                       {improvingId === draft.id ? "Improving..." : "Improve"}
                     </button>
                     <button
+                      onClick={() => copyAndOpen(draft.content, "twitter")}
+                      title="Copy & open X"
+                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+                    >
+                      Open X
+                    </button>
+                    <button
+                      onClick={() => copyAndOpen(draft.content, "linkedin")}
+                      title="Copy & open LinkedIn"
+                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+                    >
+                      Open LinkedIn
+                    </button>
+                    <button
                       onClick={() => navigator.clipboard.writeText(draft.content)}
-                      className="text-xs text-zinc-400 hover:text-white px-2 py-1"
+                      className="text-xs text-zinc-400 hover:text-white px-2 py-1.5 min-h-[36px]"
                     >
                       Copy
                     </button>
                     <button
                       onClick={() => handleDelete(draft.id)}
-                      className="text-xs text-red-400 hover:text-red-300 px-2 py-1"
+                      className="text-xs text-red-400 hover:text-red-300 px-2 py-1.5 min-h-[36px]"
                     >
                       Delete
                     </button>

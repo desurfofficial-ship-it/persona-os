@@ -20,6 +20,7 @@ export default function PersonaDetailPage() {
   const [persona, setPersona] = useState<Persona | null>(null);
   const [recentDrafts, setRecentDrafts] = useState<Draft[]>([]);
   const [draftCount, setDraftCount] = useState(0);
+  const [postedCount, setPostedCount] = useState(0);
   const [assetCount, setAssetCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -65,7 +66,7 @@ export default function PersonaDetailPage() {
       setRules((data.content_rules || []).join("\n"));
       setForbidden((data.forbidden_topics || []).join(", "));
 
-      const [draftsRes, assetsRes, recentRes] = await Promise.all([
+      const [draftsRes, assetsRes, recentRes, postedRes] = await Promise.all([
         supabase
           .from("content_drafts")
           .select("id", { count: "exact", head: true })
@@ -80,11 +81,17 @@ export default function PersonaDetailPage() {
           .eq("persona_id", id)
           .order("created_at", { ascending: false })
           .limit(5),
+        supabase
+          .from("content_drafts")
+          .select("id", { count: "exact", head: true })
+          .eq("persona_id", id)
+          .eq("posted", true),
       ]);
 
       setDraftCount(draftsRes.count || 0);
       setAssetCount(assetsRes.count || 0);
       setRecentDrafts(recentRes.data || []);
+      setPostedCount(postedRes.count || 0);
       setLoading(false);
     };
 
@@ -265,6 +272,10 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
             <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
               <span className="text-zinc-500">Drafts</span>{" "}
               <span className="font-medium ml-1">{draftCount}</span>
+            </div>
+            <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+              <span className="text-zinc-500">Posted</span>{" "}
+              <span className="font-medium ml-1 text-green-400">{postedCount}</span>
             </div>
             <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
               <span className="text-zinc-500">Assets</span>{" "}

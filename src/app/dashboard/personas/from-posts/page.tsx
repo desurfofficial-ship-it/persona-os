@@ -53,7 +53,7 @@ export default function FromPostsPage() {
         return;
       }
 
-      const { error: insertError } = await supabase.from("personas").insert({
+      const { data: created, error: insertError } = await supabase.from("personas").insert({
         user_id: user.id,
         name: name || preview.name || "My Persona",
         backstory: preview.backstory || "",
@@ -65,7 +65,11 @@ export default function FromPostsPage() {
 
       if (insertError) throw insertError;
 
-      router.push("/dashboard");
+      // Keep the loop going: persona created → first generation immediately.
+      const newId = (created as any)?.[0]?.id;
+      router.push(
+        newId ? `/dashboard/generate?persona=${newId}&first=1` : "/dashboard/generate?first=1"
+      );
     } catch (err: any) {
       setError(err.message);
     } finally {

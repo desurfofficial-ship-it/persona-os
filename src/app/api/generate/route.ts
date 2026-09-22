@@ -1,12 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
 
+interface PostedContextItem {
+  content?: string;
+  created_at?: string;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { persona, type, topic, model } = await req.json();
+    const { persona, type, topic, model, postedContext } = await req.json();
 
     if (!persona || !type) {
       return NextResponse.json({ error: "Missing persona or type" }, { status: 400 });
+    }
+
+    // Posted-aware generation: tell the model what the user already published
+    // so it produces fresh angles instead of repeating them.
+    let postedBlock = "";
+    if (Array.isArray(postedContext) && postedContext.length > 0) {
+      const list = (postedContext as PostedContextItem[])
+        .slice(0, 12)
+        .map((p, i) => {
+          const excerpt = String(p.content || "").replace(/\s+/g, " ").slice(0, 220);
+          return `${i + 1}. ${excerpt}`;
+        })
+        .join("\n");
+      postedBlock = `
+
+RECENTLY POSTED BY THIS USER (their real published content, newest first):
+${list}
+
+AVOIDING REPEATS:
+- Do NOT reuse the topics, hooks, claims, or angles listed above.
+- If the requested topic is close to a posted item, take a noticeably different angle (new insight, opposite take, next step, deeper layer).
+- The output must feel like the next post, not a rerun.`;
     }
 
     const systemPrompt = `You are a content writer that MUST stay 100% in character for the following persona.
@@ -25,7 +52,7 @@ STRICT RULES:
 - Stay consistent with the backstory and lifestyle pillars.
 - Follow every content rule.
 - Completely avoid any forbidden topics.
-- If the requested topic conflicts with the persona, reframe it or refuse politely in character.`;
+- If the requested topic conflicts with the persona, reframe it or refuse politely in character.` + postedBlock;
 
     let userPrompt = "";
     switch (type) {
