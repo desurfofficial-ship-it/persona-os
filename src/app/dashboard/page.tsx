@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { computeMomentum, type MomentumStats } from "@/lib/momentum";
-import { buildWeek, type DayCell, type CalendarDraft } from "@/lib/calendar";
+import { buildWeek, dueQueue, isOverdue, type DayCell, type CalendarDraft } from "@/lib/calendar";
 import { computeInsights, daysSinceLastPost, type InsightDraft, type Insights } from "@/lib/insights";
 import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
 
@@ -34,6 +34,39 @@ export default function DashboardPage() {
   const [showPatterns, setShowPatterns] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+
+  const due = dueQueue(allDrafts as CalendarDraft[]);
+
+  const markPostedFromQueue = async (draft: Draft) => {
+    setAllDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, posted: true } : d)));
+    setRecentDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, posted: true } : d)));
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ posted: true })
+      .eq("id", draft.id);
+    if (error) {
+      setAllDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, posted: false } : d)));
+      alert(error.message);
+    }
+  };
+
+  const snoozeFromQueue = async (draft: Draft) => {
+    const next = new Date();
+    next.setDate(next.getDate() + 1);
+    next.setHours(9, 0, 0, 0);
+    const iso = next.toISOString();
+    setAllDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, planned_for: iso } : d)));
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ planned_for: iso })
+      .eq("id", draft.id);
+    if (error) {
+      setAllDrafts((prev) =>
+        prev.map((d) => (d.id === draft.id ? { ...d, planned_for: draft.planned_for } : d))
+      );
+      alert(error.message);
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -308,6 +341,71 @@ export default function DashboardPage() {
               >
                 Write the come-back post →
               </a>
+            </div>
+          </div>
+        )}
+
+        {/* Posting queue: due today + overdue planned drafts */}
+        {!firstRun && due.length > 0 && (
+          <div className="bg-zinc-900 border border-amber-700/50 rounded-xl p-5 mb-8">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-medium">
+                Due today
+                {due.some((d) => isOverdue(d.planned_for)) && (
+                  <span className="ml-2 text-[10px] uppercase tracking-wider text-red-400">
+                    includes overdue
+                  </span>
+                )}
+              </h2>
+              <span className="text-xs text-zinc-500">{due.length} queued</span>
+            </div>
+            <div className="space-y-3">
+              {due.slice(0, 4).map((d) => {
+                const draft = d as unknown as Draft;
+                return (
+                  <div
+                    key={d.id}
+                    className="flex flex-col sm:flex-row sm:items-center gap-3 bg-zinc-950/60 border border-zinc-800 rounded-lg p-3"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-zinc-500 mb-0.5">
+                        {(draft.personas as any)?.name || "Persona"} ·{" "}
+                        {isOverdue(d.planned_for) ? (
+                          <span className="text-red-400">
+                            was planned {new Date(d.planned_for!).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                          </span>
+                        ) : (
+                          <span className="text-amber-300">planned for today</span>
+                        )}
+                      </p>
+                      <p className="text-sm text-zinc-200 line-clamp-1">{d.content}</p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        onClick={() => markPostedFromQueue(draft)}
+                        className="min-h-[40px] px-4 bg-white text-black rounded-lg text-xs font-semibold hover:bg-zinc-200"
+                      >
+                        ✓ Mark posted
+                      </button>
+                      <button
+                        onClick={() => snoozeFromQueue(draft)}
+                        title="Push to tomorrow"
+                        className="min-h-[40px] px-3 border border-zinc-700 rounded-lg text-xs hover:bg-zinc-800"
+                      >
+                        Tomorrow
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {due.length > 4 && (
+                <p className="text-xs text-zinc-500">
+                  +{due.length - 4} more in the queue —{" "}
+                  <a href="/dashboard/drafts" className="underline hover:text-white">
+                    open Drafts
+                  </a>
+                </p>
+              )}
             </div>
           </div>
         )}

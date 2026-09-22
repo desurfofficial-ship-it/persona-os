@@ -115,6 +115,16 @@ function CheckContent() {
           <h1 className="text-2xl font-bold">Consistency Checker</h1>
         </div>
 
+        <p className="text-xs text-zinc-500 -mt-4 mb-6">
+          This checks ONE piece of content. To find contradictions{" "}
+          <span className="text-zinc-300">across</span> all your posts and scripts, open a persona
+          and run the{" "}
+          <a href="/dashboard" className="underline text-zinc-300 hover:text-white">
+            Consistency Engine scan
+          </a>
+          .
+        </p>
+
         <div className="space-y-6">
           <div>
             <label className="block text-sm text-zinc-400 mb-2">Persona</label>

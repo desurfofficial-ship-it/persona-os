@@ -6,12 +6,21 @@ import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { fetchVoiceSamples } from "@/lib/voiceSamples";
 import VoiceCurator from "@/components/VoiceCurator";
+import ConsistencyPanel from "@/components/ConsistencyPanel";
+import PerformancePanel from "@/components/PerformancePanel";
 
 interface Draft {
   id: string;
   type: string;
   content: string;
   created_at: string;
+}
+
+interface PostedDraft {
+  id: string;
+  content: string;
+  type: string;
+  metrics?: unknown;
 }
 
 export default function PersonaDetailPage() {
@@ -23,6 +32,7 @@ export default function PersonaDetailPage() {
   const [recentDrafts, setRecentDrafts] = useState<Draft[]>([]);
   const [draftCount, setDraftCount] = useState(0);
   const [postedCount, setPostedCount] = useState(0);
+  const [postedDrafts, setPostedDrafts] = useState<PostedDraft[]>([]);
   const [assetCount, setAssetCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -68,7 +78,7 @@ export default function PersonaDetailPage() {
       setRules((data.content_rules || []).join("\n"));
       setForbidden((data.forbidden_topics || []).join(", "));
 
-      const [draftsRes, assetsRes, recentRes, postedRes] = await Promise.all([
+      const [draftsRes, assetsRes, recentRes, postedRes, postedFullRes] = await Promise.all([
         supabase
           .from("content_drafts")
           .select("id", { count: "exact", head: true })
@@ -88,12 +98,20 @@ export default function PersonaDetailPage() {
           .select("id", { count: "exact", head: true })
           .eq("persona_id", id)
           .eq("posted", true),
+        supabase
+          .from("content_drafts")
+          .select("id, content, type, metrics")
+          .eq("persona_id", id)
+          .eq("posted", true)
+          .order("created_at", { ascending: false })
+          .limit(60),
       ]);
 
       setDraftCount(draftsRes.count || 0);
       setAssetCount(assetsRes.count || 0);
       setRecentDrafts(recentRes.data || []);
       setPostedCount(postedRes.count || 0);
+      setPostedDrafts(postedFullRes.data || []);
       setLoading(false);
     };
 
@@ -324,6 +342,18 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
         </div>
 
         <VoiceCurator persona={persona} />
+
+        <ConsistencyPanel personaId={persona.id} />
+
+        <PerformancePanel
+          drafts={postedDrafts.map((d) => ({
+            id: d.id,
+            content: d.content,
+            type: d.type,
+            metrics: d.metrics,
+          }))}
+          stats={{ draftCount, postedCount }}
+        />
 
         {editing ? (
           <div className="space-y-5 mb-10">

@@ -40,6 +40,21 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * fetch() with the preview-backend session token attached. Required for any
+ * /api/* route guarded by userFromRequest (auto-tag, render-image,
+ * consistency-scan, delete-account, ...). Pages must use this instead of
+ * bare fetch for auth-gated endpoints.
+ */
+export async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers || {});
+  const contentType = init.body ? "application/json" : null;
+  if (contentType && !headers.has("Content-Type")) headers.set("Content-Type", contentType);
+  const token = getStoredToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(url, { ...init, headers });
+}
+
 async function requestDb(payload: Record<string, unknown>): Promise<DbResponse> {
   const res = await fetch("/api/local-db", {
     method: "POST",

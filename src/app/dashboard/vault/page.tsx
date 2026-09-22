@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
 interface Asset {
@@ -25,6 +25,7 @@ export default function VaultPage() {
   const [selectedPersonaId, setSelectedPersonaId] = useState("");
   const [filterPersonaId, setFilterPersonaId] = useState("all");
   const [filterTag, setFilterTag] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,10 +80,21 @@ export default function VaultPage() {
     ? filteredAssets.filter((a) => Array.isArray(a.tags) && a.tags.includes(filterTag))
     : filteredAssets;
 
+  const searchedAssets = search.trim()
+    ? tagFilteredAssets.filter((a) => {
+        const q = search.trim().toLowerCase();
+        return (
+          (Array.isArray(a.tags) && a.tags.some((t) => t.toLowerCase().includes(q))) ||
+          ((a.personas as any)?.name || "").toLowerCase().includes(q) ||
+          (a.content || "").toLowerCase().includes(q)
+        );
+      })
+    : tagFilteredAssets;
+
   const autoTag = async (assetId: string) => {
     setTaggingId(assetId);
     try {
-      const res = await fetch("/api/auto-tag", {
+      const res = await authedFetch("/api/auto-tag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assetId }),
@@ -100,8 +112,8 @@ export default function VaultPage() {
     }
   };
 
-  const addTag = async (assetId: string) => {
-    const tag = newTag.trim().toLowerCase();
+  const addTag = async (assetId: string, presetTag?: string) => {
+    const tag = (presetTag ?? newTag).trim().toLowerCase();
     if (!tag) return;
     const asset = assets.find((a) => a.id === assetId);
     if (!asset) return;
@@ -267,19 +279,27 @@ export default function VaultPage() {
         </div>
 
         {/* Filters */}
-        <div className="flex flex-wrap items-center gap-3 mb-6">
-          <select
-            value={filterPersonaId}
-            onChange={(e) => setFilterPersonaId(e.target.value)}
-            className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
-          >
-            <option value="all">All Personas</option>
-            {personas.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+        <div className="flex flex-col gap-3 mb-6">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search vault — tags, persona, anything…"
+              className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+            />
+            <select
+              value={filterPersonaId}
+              onChange={(e) => setFilterPersonaId(e.target.value)}
+              className="px-3 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+            >
+              <option value="all">All Personas</option>
+              {personas.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {allTags.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
@@ -311,15 +331,19 @@ export default function VaultPage() {
         </div>
 
         {/* Grid */}
-        {tagFilteredAssets.length === 0 ? (
+        {searchedAssets.length === 0 ? (
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
             <p className="text-zinc-400">
-              {filterTag ? `No assets tagged #${filterTag}.` : "No assets yet."}
+              {search
+                ? `Nothing matches “${search}”.`
+                : filterTag
+                  ? `No assets tagged #${filterTag}.`
+                  : "No assets yet."}
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {tagFilteredAssets.map((asset) => (
+            {searchedAssets.map((asset) => (
               <div
                 key={asset.id}
                 className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden group relative"
@@ -372,18 +396,34 @@ export default function VaultPage() {
                       </span>
                     ))}
                     {editingTagId === asset.id ? (
-                      <input
-                        autoFocus
-                        value={newTag}
-                        onChange={(e) => setNewTag(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") addTag(asset.id);
-                          if (e.key === "Escape") setEditingTagId(null);
-                        }}
-                        onBlur={() => addTag(asset.id)}
-                        placeholder="tag…"
-                        className="w-16 text-[10px] px-1.5 py-0.5 bg-zinc-950 border border-zinc-600 rounded-full outline-none"
-                      />
+                      <span className="flex flex-col gap-1 items-start">
+                        <input
+                          autoFocus
+                          value={newTag}
+                          onChange={(e) => setNewTag(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") addTag(asset.id);
+                            if (e.key === "Escape") setEditingTagId(null);
+                          }}
+                          onBlur={() => addTag(asset.id)}
+                          placeholder="tag… (mood, place, campaign)"
+                          className="w-32 text-[10px] px-1.5 py-0.5 bg-zinc-950 border border-zinc-600 rounded-full outline-none"
+                        />
+                        <span className="flex flex-wrap gap-1">
+                          {["luxury", "casual", "professional", "night", "beach", "office", "gym", "travel"]
+                            .filter((s) => !(asset.tags || []).includes(s))
+                            .slice(0, 4)
+                            .map((s) => (
+                              <button
+                                key={s}
+                                onClick={() => addTag(asset.id, s)}
+                                className="text-[9px] px-1.5 py-0.5 border border-dashed border-zinc-600 rounded-full text-zinc-500 hover:text-white"
+                              >
+                                {s}
+                              </button>
+                            ))}
+                        </span>
+                      </span>
                     ) : (
                       <button
                         onClick={() => {

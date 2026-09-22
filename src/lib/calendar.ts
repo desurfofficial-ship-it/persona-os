@@ -82,3 +82,23 @@ export function nextSevenDays(ref: Date = new Date()): { key: string; label: str
   }
   return out;
 }
+
+/**
+ * The posting queue: planned-but-unposted drafts that are due today or
+ * overdue. Sorted oldest deadline first — overdue items lead the list.
+ */
+export function dueQueue(drafts: CalendarDraft[], ref: Date = new Date()): CalendarDraft[] {
+  const today = new Date(ref);
+  today.setHours(23, 59, 59, 999);
+  return drafts
+    .filter((d) => !d.posted && d.planned_for && new Date(d.planned_for) <= today)
+    .sort((a, b) => new Date(a.planned_for!).getTime() - new Date(b.planned_for!).getTime());
+}
+
+/** True when the planned day is strictly before today (missed). */
+export function isOverdue(plannedFor: string | null | undefined, ref: Date = new Date()): boolean {
+  if (!plannedFor) return false;
+  const start = new Date(ref);
+  start.setHours(0, 0, 0, 0);
+  return new Date(plannedFor) < start;
+}

@@ -7,6 +7,7 @@ import type { Persona } from "@/types/persona";
 import { fetchVoiceSamples } from "@/lib/voiceSamples";
 import { copyAndOpen } from "@/lib/share";
 import { nextSevenDays } from "@/lib/calendar";
+import { compactNumber } from "@/lib/metrics";
 
 interface Draft {
   id: string;
@@ -16,7 +17,31 @@ interface Draft {
   created_at: string;
   posted?: boolean;
   planned_for?: string | null;
+  metrics?: unknown;
   personas?: { name: string };
+}
+
+interface DraftMetrics {
+  platform: string;
+  views: number;
+  likes: number;
+  comments: number;
+  loggedAt: string;
+}
+
+const PLATFORMS = ["X", "LinkedIn", "Instagram", "Threads", "TikTok", "YouTube", "Other"];
+
+function asMetrics(raw: unknown): DraftMetrics | null {
+  if (!raw || typeof raw !== "object") return null;
+  const m = raw as Record<string, unknown>;
+  if (!m.platform) return null;
+  return {
+    platform: String(m.platform),
+    views: Number(m.views) || 0,
+    likes: Number(m.likes) || 0,
+    comments: Number(m.comments) || 0,
+    loggedAt: String(m.loggedAt || ""),
+  };
 }
 
 export default function DraftsPage() {
@@ -30,6 +55,8 @@ export default function DraftsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [improvingId, setImprovingId] = useState<string | null>(null);
   const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
+  const [loggingId, setLoggingId] = useState<string | null>(null);
+  const [logForm, setLogForm] = useState({ platform: "X", views: "", likes: "", comments: "" });
   const planDays = nextSevenDays();
 
   useEffect(() => {
@@ -124,8 +151,6 @@ export default function DraftsPage() {
       prev.map((d) => (d.id === draft.id ? { ...d, posted: newValue } : d))
     );
 
-    // Note: requires a `posted` boolean column on content_drafts.
-    // If the column doesn't exist yet, this will fail silently in UI but we try.
     const { error } = await supabase
       .from("content_drafts")
       .update({ posted: newValue })
@@ -136,7 +161,47 @@ export default function DraftsPage() {
       setDrafts((prev) =>
         prev.map((d) => (d.id === draft.id ? { ...d, posted: draft.posted } : d))
       );
-      console.error("Posted flag error (you may need to add a boolean column 'posted' to content_drafts):", error);
+      console.error("Posted flag error:", error);
+      return;
+    }
+
+    // First time marking posted -> invite logging performance right away.
+    if (newValue && !draft.metrics) {
+      setLogForm({ platform: "X", views: "", likes: "", comments: "" });
+      setLoggingId(draft.id);
+    }
+  };
+
+  const openLogForm = (draft: Draft) => {
+    const existing = asMetrics(draft.metrics);
+    setLogForm({
+      platform: existing?.platform || "X",
+      views: existing ? String(existing.views) : "",
+      likes: existing ? String(existing.likes) : "",
+      comments: existing ? String(existing.comments) : "",
+    });
+    setLoggingId(draft.id);
+  };
+
+  const saveMetrics = async (draft: Draft) => {
+    const metrics: DraftMetrics = {
+      platform: logForm.platform,
+      views: Math.max(0, Math.round(Number(logForm.views) || 0)),
+      likes: Math.max(0, Math.round(Number(logForm.likes) || 0)),
+      comments: Math.max(0, Math.round(Number(logForm.comments) || 0)),
+      loggedAt: new Date().toISOString(),
+    };
+    // Optimistic
+    setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics } : d)));
+    setLoggingId(null);
+
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ metrics })
+      .eq("id", draft.id);
+    if (error) {
+      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics: draft.metrics } : d)));
+      alert(error.message);
     }
   };
 
@@ -308,6 +373,11 @@ export default function DraftsPage() {
                             Posted
                           </span>
                         )}
+                        {asMetrics(draft.metrics) && (
+                          <span className="text-xs px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded">
+                            {asMetrics(draft.metrics)!.platform} · {compactNumber(asMetrics(draft.metrics)!.views)} views
+                          </span>
+                        )}
                         {draft.planned_for && !draft.posted && (
                           <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded">
                             Planned {new Date(draft.planned_for).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
@@ -348,6 +418,15 @@ export default function DraftsPage() {
                     >
                       {draft.posted ? "Unmark" : "Mark Posted"}
                     </button>
+                    {draft.posted && (
+                      <button
+                        onClick={() => openLogForm(draft)}
+                        title="Record how this post performed"
+                        className="text-xs px-2 py-1.5 min-h-[36px] border border-blue-800 text-blue-300 rounded hover:bg-blue-950/50"
+                      >
+                        {asMetrics(draft.metrics) ? "Edit numbers" : "Log performance"}
+                      </button>
+                    )}
                     <button
                       onClick={() => handleImprove(draft)}
                       disabled={improvingId === draft.id}
@@ -387,6 +466,66 @@ export default function DraftsPage() {
                 <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
                   {draft.content}
                 </pre>
+
+                {loggingId === draft.id && (
+                  <div className="mt-4 pt-4 border-t border-zinc-800">
+                    <p className="text-xs text-blue-300 font-medium mb-2">
+                      Log performance — numbers only you can see
+                    </p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <select
+                        value={logForm.platform}
+                        onChange={(e) => setLogForm((f) => ({ ...f, platform: e.target.value }))}
+                        className="text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+                      >
+                        {PLATFORMS.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={0}
+                        inputMode="numeric"
+                        placeholder="Views"
+                        value={logForm.views}
+                        onChange={(e) => setLogForm((f) => ({ ...f, views: e.target.value }))}
+                        className="w-24 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        inputMode="numeric"
+                        placeholder="Likes"
+                        value={logForm.likes}
+                        onChange={(e) => setLogForm((f) => ({ ...f, likes: e.target.value }))}
+                        className="w-20 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        inputMode="numeric"
+                        placeholder="Comments"
+                        value={logForm.comments}
+                        onChange={(e) => setLogForm((f) => ({ ...f, comments: e.target.value }))}
+                        className="w-24 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+                      />
+                      <button
+                        onClick={() => saveMetrics(draft)}
+                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setLoggingId(null)}
+                        className="text-xs px-2 py-2 min-h-[36px] border border-zinc-700 rounded"
+                      >
+                        Skip
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {improvedContent[draft.id] && (
                   <div className="mt-4 pt-4 border-t border-zinc-800">

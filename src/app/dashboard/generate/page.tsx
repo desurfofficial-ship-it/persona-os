@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef, Suspense, type RefObject } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { copyAndOpen, copyToClipboard, type Platform } from "@/lib/share";
 import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
@@ -421,7 +421,7 @@ function GenerateContent() {
     setLoadingRender(index);
     setError(null);
     try {
-      const res = await fetch("/api/render-image", {
+      const res = await authedFetch("/api/render-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

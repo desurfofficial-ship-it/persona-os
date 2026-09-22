@@ -42,6 +42,8 @@ model ContentDraft {
   content    String
   posted     Boolean   @default(false)
   plannedFor DateTime?
+  /// Manual performance log: { platform, views, likes, comments, loggedAt }
+  metrics    Json?
   createdAt  DateTime  @default(now())
 
   @@index([userId])

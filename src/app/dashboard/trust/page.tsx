@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 
 /**
  * Trust page — plain language about where data lives, plus the two buttons
@@ -75,7 +75,7 @@ export default function TrustPage() {
     setDeleting(true);
 
     try {
-      const res = await fetch("/api/delete-account", { method: "POST" });
+      const res = await authedFetch("/api/delete-account", { method: "POST" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Deletion failed");

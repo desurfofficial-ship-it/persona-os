@@ -20,6 +20,11 @@ function heuristicTags(type: string, personaName: string | null): string[] {
   return tags;
 }
 
+/** Mood/location quick tags offered by the vault UI — keeps vocab consistent. */
+export const QUICK_TAGS = [
+  "luxury", "casual", "professional", "night", "beach", "office", "gym", "travel",
+];
+
 export async function POST(req: NextRequest) {
   const userId = userFromRequest(req);
   if (!userId) {
@@ -68,7 +73,7 @@ export async function POST(req: NextRequest) {
                 content: [
                   {
                     type: "text",
-                    text: "Describe this image for a content asset vault in 3-6 lowercase keyword tags (e.g. 'office', 'product shot', 'city night'). Reply with ONLY the tags separated by commas — no other words.",
+                    text: "Describe this image for a content asset vault in 5-8 lowercase keyword tags. Include: what's in the frame, the MOOD (e.g. luxury, casual, gritty, cozy), and the LOCATION/SETTING when evident (e.g. office, beach, car, gym, city night). Reply with ONLY the tags separated by commas — no other words.",
                   },
                   { type: "image_url", image_url: { url: dataUrl } },
                 ],
@@ -82,7 +87,7 @@ export async function POST(req: NextRequest) {
             .split(/[,\n]/)
             .map((t) => t.trim().toLowerCase().replace(/[^a-z0-9 \-]/g, "").trim())
             .filter((t) => t.length > 1 && t.length < 30)
-            .slice(0, 6);
+            .slice(0, 8);
 
           if (tags.length > 0) {
             const all = Array.from(new Set([...tags]));
