@@ -1,0 +1,262 @@
+/**
+ * Persona OS — preview backend shim.
+ *
+ * This file mirrors the exact subset of supabase-js used by the app
+ * (auth.getUser / signUp / signInWithPassword / signOut, Postgrest-style
+ * query builder, storage upload/getPublicUrl/remove) but backs it with
+ * local API routes (Prisma/SQLite + on-disk file storage).
+ *
+ * To connect the real Supabase later, restore the original client:
+ *
+ *   import { createClient } from '@supabase/supabase-js'
+ *   export const supabase = createClient(
+ *     process.env.NEXT_PUBLIC_SUPABASE_URL!,
+ *     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+ *   )
+ *
+ * No page code needs to change in either direction.
+ */
+
+const TOKEN_KEY = "persona-os-auth-token";
+
+type MockUser = { id: string; email: string };
+type MockError = { message: string; status?: number } | null;
+type DbResponse<T = any> = { data: T; error: MockError; count?: number | null };
+
+type Filter = { type: "eq" | "in"; column: string; value: unknown };
+
+interface SelectOptions {
+  count?: "exact" | "planned" | "estimated";
+  head?: boolean;
+}
+
+function getStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(TOKEN_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getStoredToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function requestDb(payload: Record<string, unknown>): Promise<DbResponse> {
+  const res = await fetch("/api/local-db", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({ error: { message: "Bad gateway from local-db" } }));
+  return json as DbResponse;
+}
+
+/** Chainable, awaitable query builder that mimics supabase-js. */
+class PostgrestQueryBuilder {
+  private filters: Filter[] = [];
+  private _order?: { column: string; ascending: boolean };
+  private _limit?: number;
+  private _single = false;
+  private _select?: string;
+  private _promise?: Promise<DbResponse<any>>;
+
+  constructor(
+    private table: string,
+    private op: "select" | "insert" | "update" | "delete",
+    private values?: Record<string, unknown>,
+    private options?: SelectOptions
+  ) {}
+
+  select(columns?: string, options?: SelectOptions): PostgrestQueryBuilder {
+    this._select = columns;
+    if (options) this.options = options;
+    return this;
+  }
+
+  insert(values: Record<string, unknown>): PostgrestQueryBuilder {
+    this.op = "insert";
+    this.values = values;
+    return this;
+  }
+
+  update(values: Record<string, unknown>): PostgrestQueryBuilder {
+    this.op = "update";
+    this.values = values;
+    return this;
+  }
+
+  upsert(values: Record<string, unknown>): PostgrestQueryBuilder {
+    this.op = "insert";
+    this.values = values;
+    return this;
+  }
+
+  delete(): PostgrestQueryBuilder {
+    this.op = "delete";
+    return this;
+  }
+
+  eq(column: string, value: unknown): PostgrestQueryBuilder {
+    this.filters.push({ type: "eq", column, value });
+    return this;
+  }
+
+  in(column: string, value: unknown[]): PostgrestQueryBuilder {
+    this.filters.push({ type: "in", column, value });
+    return this;
+  }
+
+  order(column: string, options?: { ascending?: boolean }): PostgrestQueryBuilder {
+    this._order = { column, ascending: options?.ascending ?? false };
+    return this;
+  }
+
+  limit(count: number): PostgrestQueryBuilder {
+    this._limit = count;
+    return this;
+  }
+
+  single(): PostgrestQueryBuilder {
+    this._single = true;
+    return this;
+  }
+
+  private exec(): Promise<DbResponse<any>> {
+    if (!this._promise) {
+      this._promise = requestDb({
+        table: this.table,
+        op: this.op,
+        select: this._select,
+        options: this.options,
+        filters: this.filters,
+        order: this._order,
+        limit: this._limit,
+        single: this._single,
+        values: this.values,
+      });
+    }
+    return this._promise;
+  }
+
+  // Make the builder awaitable (thenable), like supabase-js.
+  then<TResult1 = DbResponse<any>, TResult2 = never>(
+    onfulfilled?: ((value: DbResponse<any>) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+  ): Promise<TResult1 | TResult2> {
+    return this.exec().then(onfulfilled, onrejected);
+  }
+
+  catch<TResult = never>(onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null): Promise<DbResponse<any> | TResult> {
+    return this.exec().catch(onrejected);
+  }
+
+  finally(onfinally?: (() => void) | null): Promise<DbResponse<any>> {
+    return this.exec().finally(onfinally);
+  }
+}
+
+function bucketStorage(bucket: string) {
+  return {
+    async upload(path: string, file: File | Blob): Promise<{ data: { path: string }; error: MockError }> {
+      const form = new FormData();
+      form.append("path", `${bucket}/${path}`);
+      form.append("file", file);
+      try {
+        const res = await fetch("/api/local-storage", { method: "POST", body: form });
+        const json = await res.json();
+        if (json.error) return { data: { path }, error: json.error };
+        return { data: { path }, error: null };
+      } catch (err: unknown) {
+        return { data: { path }, error: { message: err instanceof Error ? err.message : "Upload failed" } };
+      }
+    },
+    getPublicUrl(path: string): { data: { publicUrl: string } } {
+      return {
+        data: { publicUrl: `/api/local-storage?path=${encodeURIComponent(`${bucket}/${path}`)}` },
+      };
+    },
+    async remove(paths: string[]): Promise<{ data: { removed: string[] }; error: MockError }> {
+      try {
+        const res = await fetch("/api/local-storage", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ paths: paths.map((p) => `${bucket}/${p}`) }),
+        });
+        const json = await res.json();
+        if (json.error) return { data: { removed: [] }, error: json.error };
+        return { data: { removed: json.data?.removed ?? [] }, error: null };
+      } catch (err: unknown) {
+        return {
+          data: { removed: [] },
+          error: { message: err instanceof Error ? err.message : "Remove failed" },
+        };
+      }
+    },
+  };
+}
+
+const auth = {
+  async getUser(): Promise<{ data: { user: MockUser | null }; error: MockError }> {
+    const token = getStoredToken();
+    if (!token) return { data: { user: null }, error: null };
+    try {
+      const res = await fetch("/api/local-auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "get", token }),
+      });
+      const json = await res.json();
+      if (!json.user) {
+        if (typeof window !== "undefined") window.localStorage.removeItem(TOKEN_KEY);
+        return { data: { user: null }, error: null };
+      }
+      return { data: { user: json.user as MockUser }, error: null };
+    } catch {
+      return { data: { user: null }, error: null };
+    }
+  },
+
+  async signUp(credentials: { email: string; password: string }) {
+    try {
+      const res = await fetch("/api/local-auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "signup", ...credentials }),
+      });
+      const json = await res.json();
+      if (json.error) return { data: null, error: { message: json.error as string, status: 400 } };
+      if (typeof window !== "undefined") window.localStorage.setItem(TOKEN_KEY, json.token as string);
+      return { data: { session: { token: json.token }, user: json.user as MockUser }, error: null };
+    } catch (err: unknown) {
+      return { data: null, error: { message: err instanceof Error ? err.message : "Sign up failed", status: 500 } };
+    }
+  },
+
+  async signInWithPassword(credentials: { email: string; password: string }) {
+    try {
+      const res = await fetch("/api/local-auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "signin", ...credentials }),
+      });
+      const json = await res.json();
+      if (json.error) return { data: null, error: { message: json.error as string, status: 400 } };
+      if (typeof window !== "undefined") window.localStorage.setItem(TOKEN_KEY, json.token as string);
+      return { data: { session: { token: json.token }, user: json.user as MockUser }, error: null };
+    } catch (err: unknown) {
+      return { data: null, error: { message: err instanceof Error ? err.message : "Sign in failed", status: 500 } };
+    }
+  },
+
+  async signOut(): Promise<{ error: MockError }> {
+    if (typeof window !== "undefined") window.localStorage.removeItem(TOKEN_KEY);
+    return { error: null };
+  },
+};
+
+const storage = { from: bucketStorage };
+
+function from(table: string): PostgrestQueryBuilder {
+  return new PostgrestQueryBuilder(table, "select");
+}
+
+export const supabase = { auth, from, storage };

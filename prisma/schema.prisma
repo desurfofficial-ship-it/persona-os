@@ -1,0 +1,60 @@
+// Persona OS — local preview schema (replaces Supabase tables in supabase/schema.sql)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model LocalUser {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String // stored as "salt:sha256(salt:password)"
+  createdAt DateTime @default(now())
+}
+
+model Persona {
+  id               String   @id @default(uuid())
+  userId           String
+  name             String
+  backstory        String   @default("")
+  visualStyle      String?
+  toneOfVoice      String?
+  lifestylePillars Json?
+  contentRules     Json?
+  forbiddenTopics  Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model ContentDraft {
+  id        String   @id @default(uuid())
+  personaId String
+  userId    String
+  type      String
+  content   String
+  posted    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([personaId])
+}
+
+model Asset {
+  id        String   @id @default(uuid())
+  personaId String
+  userId    String
+  type      String // image | video | text | metric
+  url       String?
+  content   String?
+  tags      Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([personaId])
+}
