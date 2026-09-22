@@ -24,3 +24,24 @@ Stage Summary:
 - Deliverable: fully interactive Persona OS preview running from the workspace root (Next.js 16, port 3000) with working auth, personas, AI generation, drafts, consistency checks, and asset vault — no external Supabase/OpenRouter keys required.
 - Key decision: replace Supabase with a drop-in local backend via the shim in `src/lib/supabase.ts`; restoring the original 5-line client later re-enables real Supabase with zero page changes.
 - Demo account created during verification: demo@persona-os.app / preview123 (data lives in `db/custom.db`).
+
+---
+Task ID: 2
+Agent: Super Z (main agent)
+Task: Round 3 execution — dead-simple first-run flow, posted-aware generation, mobile polish, quick wins (make-all-formats + weekly momentum).
+
+Work Log:
+- Implemented /dashboard/start wizard: paste posts (live post counter) -> AI analyze -> review persona -> auto-redirect to /dashboard/generate?persona={id}&first=1.
+- Dashboard: new-user "Start here" hero (1-2-3 explainer, hides quick-action grid); simplified nav to Dashboard/Generate/Drafts + More dropdown (Series/Ideas/Check/Vault/New Persona); weekly momentum strip "This week: X drafts · Y posted" + day streak + weekly-goal progress (src/lib/momentum.ts, goal in localStorage).
+- Posted-aware generation: /api/generate accepts postedContext (recent posted drafts) and injects "AVOIDING REPEATS" block into system prompt; generate page loads last 20 posted items per persona, shows live amber duplicate warning (debounced word-overlap similarity, src/lib/duplicate.ts) with Low/Medium/High sensitivity persisted in localStorage.
+- Mobile polish: sticky bottom Generate bar (IntersectionObserver on main CTA, safe-area inset padding, sm:hidden), 52px min-height primary buttons, 40px+ type chips/selects.
+- One-tap Copy & open: src/lib/share.ts copyAndOpen() (clipboard write then X intent URL with 280-char prefill / LinkedIn feed) — big buttons on generate results, Open X/LinkedIn buttons on drafts rows.
+- Make all formats: one-click sequential script + caption + image prompt transforms per result, each saved to drafts, rendered as labeled sub-cards with copy actions.
+- from-posts page now routes into first-run loop (generate?first=1); persona command center gains green "Posted" counter (count query posted=true).
+- Verified via agent-browser end-to-end: momentum strip + streak, More dropdown, duplicate warning (54% match shown, sensitivity persisted), real generation taking fresh angle on posted topic, make-all-formats output, new-user signup -> Start-here hero -> full wizard -> first-run banner -> first post -> "Draft saved — last step: post it", mobile 390px layouts, sticky bar trigger. tsc + eslint clean, dev.log clean.
+- Committed as d9e3850 and pushed to private repo branch `round-3-sandbox` (NO force-push to main: remote main has diverged Round-2 history, no common ancestor with sandbox init; PAT scrubbed from git remote config after push).
+
+Stage Summary:
+- All four ICP "want most" items shipped: dead-simple first-run, one-tap copy & open platform, posted-aware generation, cleaner mobile quick-post experience.
+- Sandbox backend remains the local shim (SQLite/localStorage auth) — feature code is portable to the real Supabase app since pages use the same supabase-js surface.
+- Round-3 files for upstream merge: src/app/dashboard/start/page.tsx, src/lib/{share,duplicate,momentum}.ts, dashboard/page.tsx, dashboard/generate/page.tsx, drafts/page.tsx, personas/[id]/page.tsx, personas/from-posts/page.tsx, api/generate/route.ts.
