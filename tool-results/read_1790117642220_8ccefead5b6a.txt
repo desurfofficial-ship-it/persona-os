@@ -1,0 +1,836 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Agent workspace — Persona OS x OpenMuse integration.
+     5→ *
+     6→ * Three columns:
+     7→ *   left (320px)   : persona selector, content type, model pills
+     8→ *   center (flex)  : prompt composer + the agent conversation
+     9→ *   right (340px)  : live preview (last 3 chat messages), auto-save note,
+    10→ *                    Goals & Tracking ("Content Calendar Automation") panel
+    11→ *
+    12→ * The active persona id rides the `x-persona-id` header into /api/copilotkit
+    13→ * where it is injected server-side as system instructions; the same persona
+    14→ * is readable context + the saveToDrafts / saveToVault / createGoal /
+    15→ * scheduleContent actions come from hooks/usePersonaAgent.ts.
+    16→ *
+    17→ * Chat surface: headless useCopilotChat (from @copilotkit/react-core) instead
+    18→ * of the prebuilt @copilotkit/react-ui <CopilotChat/>. Same runtime, actions,
+    19→ * readables and streaming — but the render fits this page's cream/charcoal
+    20→ * identity and keeps the dependency graph small enough for memory-constrained
+    21→ * preview environments (the prebuilt UI pulls in Lit + markdown and can OOM
+    22→ * small dev boxes). To use the stock UI instead, install @copilotkit/react-ui,
+    23→ * import its styles and swap <CopilotChatPane/> for <CopilotChat/>.
+    24→ */
+    25→
+    26→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+    27→import Link from "next/link";
+    28→import { useRouter } from "next/navigation";
+    29→import { CopilotKit, useCopilotChatInternal } from "@copilotkit/react-core";
+    30→import { TextMessage, Role } from "@copilotkit/runtime-client-gql";
+    31→import { supabase, authedFetch, getSessionToken } from "@/lib/supabase";
+    32→import type { Persona } from "@/types/persona";
+    33→import { usePersonaAgent, type AgentContentType } from "@/hooks/usePersonaAgent";
+    34→
+    35→const MODELS = [
+    36→  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini", hint: "fast + cheap" },
+    37→  { id: "anthropic/claude-3-5-haiku", name: "Claude Haiku", hint: "best voice" },
+    38→  { id: "google/gemini-flash-1.5", name: "Gemini Flash", hint: "long context" },
+    39→  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1", hint: "open" },
+    40→];
+    41→
+    42→const CONTENT_TYPES: { id: AgentContentType; label: string; example: string }[] = [
+    43→  { id: "caption", label: "Caption", example: "a post about today's session" },
+    44→  { id: "script", label: "Script", example: "a 30s reel script" },
+    45→  { id: "story_arc", label: "Story arc", example: "a 5-part launch arc" },
+    46→  { id: "image_prompt", label: "Image prompt", example: "a cover visual" },
+    47→];
+    48→
+    49→const ACCENT = "#E76F51";
+    50→const CREAM = "#FFFBF5";
+    51→const CHARCOAL = "#2B2724";
+    52→
+    53→interface GoalRow {
+    54→  id: string;
+    55→  persona_id: string;
+    56→  title: string;
+    57→  recurrence: string;
+    58→  check_url: string;
+    59→  status: string;
+    60→  next_check_at?: string | null;
+    61→  last_checked_at?: string | null;
+    62→  failure_count?: number;
+    63→}
+    64→
+    65→interface AlertRow {
+    66→  id: string;
+    67→  goal_id: string;
+    68→  title: string;
+    69→  body: string;
+    70→  draft_id?: string | null;
+    71→  created_at: string;
+    72→}
+    73→
+    74→interface Notice {
+    75→  id: number;
+    76→  text: string;
+    77→}
+    78→
+    79→function hostOf(url: string): string {
+    80→  try {
+    81→    return new URL(url).host.replace(/^www\./, "");
+    82→  } catch {
+    83→    return url;
+    84→  }
+    85→}
+    86→
+    87→function timeAgo(iso?: string | null): string {
+    88→  if (!iso) return "never";
+    89→  const diff = Date.now() - new Date(iso).getTime();
+    90→  const mins = Math.floor(diff / 60000);
+    91→  if (mins < 1) return "just now";
+    92→  if (mins < 60) return `${mins}m ago`;
+    93→  const hours = Math.floor(mins / 60);
+    94→  if (hours < 24) return `${hours}h ago`;
+    95→  return `${Math.floor(hours / 24)}d ago`;
+    96→}
+    97→
+    98→export default function AgentPage() {
+    99→  const router = useRouter();
+   100→  const [authReady, setAuthReady] = useState(false);
+   101→  const [personas, setPersonas] = useState<Persona[]>([]);
+   102→  const [selectedId, setSelectedId] = useState<string>("");
+   103→
+   104→  // Auth gate + persona load from /api/personas.
+   105→  useEffect(() => {
+   106→    let alive = true;
+   107→    (async () => {
+   108→      const { data } = await supabase.auth.getUser();
+   109→      if (!alive) return;
+   110→      if (!data.user) {
+   111→        router.push("/login");
+   112→        return;
+   113→      }
+   114→      setAuthReady(true);
+   115→      try {
+   116→        const res = await authedFetch("/api/personas");
+   117→        const json = (await res.json()) as { personas?: Persona[] };
+   118→        const list = Array.isArray(json.personas) ? json.personas : [];
+   119→        if (!alive) return;
+   120→        setPersonas(list);
+   121→        if (list.length > 0) setSelectedId((prev) => prev || list[0].id);
+   122→      } catch {
+   123→        if (alive) setPersonas([]);
+   124→      }
+   125→    })();
+   126→    return () => {
+   127→      alive = false;
+   128→    };
+   129→  }, [router]);
+   130→
+   131→  const activePersona = useMemo(
+   132→    () => personas.find((p) => p.id === selectedId) || null,
+   133→    [personas, selectedId]
+   134→  );
+   135→
+   136→  // Headers callback — evaluated per runtime request by CopilotKit; a plain
+   137→  // closure over state (no ref, no render-time writes).
+   138→  const buildHeaders = useCallback((): Record<string, string> => {
+   139→    const token = getSessionToken();
+   140→    return {
+   141→      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+   142→      ...(selectedId ? { "x-persona-id": selectedId } : {}),
+   143→    };
+   144→  }, [selectedId]);
+   145→
+   146→  if (!authReady) {
+   147→    return (
+   148→      <div className="min-h-screen flex items-center justify-center text-sm" style={{ background: CREAM, color: CHARCOAL }}>
+   149→        Loading agent…
+   150→      </div>
+   151→    );
+   152→  }
+   153→
+   154→  return (
+   155→    <CopilotKit runtimeUrl="/api/copilotkit" headers={buildHeaders}>
+   156→      <AgentWorkspace
+   157→        personas={personas}
+   158→        selectedId={selectedId}
+   159→        onSelect={setSelectedId}
+   160→        activePersona={activePersona}
+   161→      />
+   162→    </CopilotKit>
+   163→  );
+   164→}
+   165→
+   166→// ---------------------------------------------------------------------------
+   167→
+   168→function AgentWorkspace({
+   169→  personas,
+   170→  selectedId,
+   171→  onSelect,
+   172→  activePersona,
+   173→}: {
+   174→  personas: Persona[];
+   175→  selectedId: string;
+   176→  onSelect: (id: string) => void;
+   177→  activePersona: Persona | null;
+   178→}) {
+   179→  const [type, setType] = useState<AgentContentType>("caption");
+   180→  const [model, setModel] = useState(MODELS[1].id);
+   181→  const [prompt, setPrompt] = useState("");
+   182→  const [notices, setNotices] = useState<Notice[]>([]);
+   183→
+   184→  const pushNotice = useCallback((text: string) => {
+   185→    const id = Date.now() + Math.random();
+   186→    setNotices((prev) => [...prev.slice(-2), { id, text }]);
+   187→    setTimeout(() => setNotices((prev) => prev.filter((n) => n.id !== id)), 5000);
+   188→  }, []);
+   189→
+   190→  // Bump to make the GoalsPanel re-fetch (agent created a goal).
+   191→  const [goalsRefresh, setGoalsRefresh] = useState(0);
+   192→
+   193→  // The same internal hook the stock CopilotChat UI uses — its `messages`
+   194→  // array carries the AG-UI conversation (user, assistant, tool events).
+   195→  const { messages: rawMessages, appendMessage, isLoading } = useCopilotChatInternal();
+   196→  const visibleMessages: unknown[] = Array.isArray(rawMessages) ? rawMessages : [];
+   197→
+   198→  // Agent auto-save callbacks — surfaced as honest notices.
+   199→  const callbacks = useMemo(
+   200→    () => ({
+   201→      onDraftSaved: (draftId: string, preview: string) =>
+   202→        pushNotice(`Draft saved ${draftId ? "" : ""}→ /dashboard/drafts · “${preview}…”`),
+   203→      onAssetSaved: (_assetId: string, fileName: string) => pushNotice(`Asset saved to vault → ${fileName}`),
+   204→      onGoalCreated: (_goalId: string, title: string) => {
+   205→        pushNotice(`Goal created → ${title}`);
+   206→        setGoalsRefresh((n) => n + 1);
+   207→      },
+   208→      onScheduled: (draftId: string, publishAt: string) => pushNotice(`Draft ${draftId.slice(0, 8)} scheduled for ${publishAt}`),
+   209→    }),
+   210→    [pushNotice]
+   211→  );
+   212→  usePersonaAgent(activePersona, callbacks, { type, model });
+   213→
+   214→  const sendPrompt = async () => {
+   215→    const text = prompt.trim();
+   216→    if (!text || isLoading) return;
+   217→    if (!selectedId) {
+   218→      pushNotice("Select a persona first — the agent refuses to guess who it is.");
+   219→      return;
+   220→    }
+   221→    setPrompt("");
+   222→    // The wire format: model + type + persona ride inside the message so the
+   223→    // transcript always shows exactly what the agent was asked to do.
+   224→    // A typed TextMessage instance — the runtime client calls its type-guard
+   225→    // methods downstream, so plain objects break the pipeline.
+   226→    const message = new TextMessage({ role: Role.User, content: `[Model:${model}] [Type:${type}] [Persona:${selectedId}] ${text}` });
+   227→    await appendMessage(message as unknown as Parameters<typeof appendMessage>[0]);
+   228→  };
+   229→
+   230→  const lastMessages = visibleMessages.slice(-3);
+   231→
+   232→  return (
+   233→    <div
+   234→      className="min-h-screen flex flex-col xl:flex-row"
+   235→      style={{ background: CREAM, color: CHARCOAL }}
+   236→    >
+   237→      {/* Scoped CopilotKit theme: cream / charcoal / coral */}
+   238→      <style>{`
+   239→        .agent-chat {
+   240→          --copilot-kit-background-color: ${CREAM};
+   241→          --copilot-kit-primary-color: ${ACCENT};
+   242→          --copilot-kit-secondary-color: #F4E8DC;
+   243→          --copilot-kit-contrast-color: ${CHARCOAL};
+   244→          --copilot-kit-muted-color: #8A8177;
+   245→          --copilot-kit-separator-color: #EDE3D6;
+   246→          --copilot-kit-input-background-color: #FFFFFF;
+   247→        }
+   248→      `}</style>
+   249→
+   250→      {/* ---------------- LEFT: 320px control sidebar ---------------- */}
+   251→      <aside className="w-full xl:w-[320px] xl:min-w-[320px] border-b xl:border-b-0 xl:border-r p-5 space-y-6" style={{ borderColor: "#EDE3D6" }}>
+   252→        <div>
+   253→          <Link href="/dashboard" className="text-xs underline-offset-2 hover:underline" style={{ color: "#8A8177" }}>
+   254→            ← Dashboard
+   255→          </Link>
+   256→          <h1 className="mt-2 text-2xl leading-tight font-serif" style={{ color: CHARCOAL }}>
+   257→            Agent
+   258→          </h1>
+   259→          <p className="text-xs mt-1" style={{ color: "#8A8177" }}>
+   260→            Research → generate → schedule → vault. In character, always.
+   261→          </p>
+   262→        </div>
+   263→
+   264→        {/* Persona selector */}
+   265→        <div>
+   266→          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+   267→            Persona
+   268→          </label>
+   269→          {personas.length === 0 ? (
+   270→            <p className="text-xs leading-relaxed" style={{ color: "#8A8177" }}>
+   271→              No personas yet.{" "}
+   272→              <Link href="/dashboard/personas/new" className="underline" style={{ color: ACCENT }}>
+   273→                Build one first
+   274→              </Link>{" "}
+   275→              — the agent refuses to guess who it is.
+   276→            </p>
+   277→          ) : (
+   278→            <select
+   279→              value={selectedId}
+   280→              onChange={(e) => onSelect(e.target.value)}
+   281→              className="w-full rounded-lg border px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2"
+   282→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   283→              aria-label="Active persona"
+   284→            >
+   285→              {personas.map((p) => (
+   286→                <option key={p.id} value={p.id}>
+   287→                  {p.name}
+   288→                  {p.forbidden_topics?.length ? ` · ${p.forbidden_topics.length} forbidden` : ""}
+   289→                </option>
+   290→              ))}
+   291→            </select>
+   292→          )}
+   293→        </div>
+   294→
+   295→        {/* Content type */}
+   296→        <div>
+   297→          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+   298→            Content type
+   299→          </label>
+   300→          <div className="grid grid-cols-2 gap-2">
+   301→            {CONTENT_TYPES.map((t) => {
+   302→              const active = type === t.id;
+   303→              return (
+   304→                <button
+   305→                  key={t.id}
+   306→                  type="button"
+   307→                  onClick={() => setType(t.id)}
+   308→                  className="rounded-lg border px-3 py-2 text-left text-xs transition-colors"
+   309→                  style={{
+   310→                    borderColor: active ? ACCENT : "#EDE3D6",
+   311→                    borderWidth: active ? 2 : 1,
+   312→                    background: active ? "#FFF3EC" : "#FFFFFF",
+   313→                    color: CHARCOAL,
+   314→                  }}
+   315→                  title={t.example}
+   316→                >
+   317→                  <span className="block font-medium">{t.label}</span>
+   318→                  <span className="block text-[10px] mt-0.5" style={{ color: "#8A8177" }}>
+   319→                    {t.example}
+   320→                  </span>
+   321→                </button>
+   322→              );
+   323→            })}
+   324→          </div>
+   325→        </div>
+   326→
+   327→        {/* Model pills */}
+   328→        <div>
+   329→          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+   330→            Model
+   331→          </label>
+   332→          <div className="flex flex-wrap gap-2">
+   333→            {MODELS.map((m) => {
+   334→              const active = model === m.id;
+   335→              return (
+   336→                <button
+   337→                  key={m.id}
+   338→                  type="button"
+   339→                  onClick={() => setModel(m.id)}
+   340→                  className="rounded-full border px-3 py-1.5 text-xs transition-colors"
+   341→                  style={{
+   342→                    borderColor: active ? ACCENT : "#EDE3D6",
+   343→                    borderWidth: active ? 2 : 1,
+   344→                    background: active ? "#FFF3EC" : "#FFFFFF",
+   345→                    color: CHARCOAL,
+   346→                  }}
+   347→                  title={m.hint}
+   348→                >
+   349→                  {m.name}
+   350→                </button>
+   351→              );
+   352→            })}
+   353→          </div>
+   354→          <p className="text-[10px] mt-2" style={{ color: "#8A8177" }}>
+   355→            All AI runs through OpenRouter. Selected state shows the coral ring.
+   356→          </p>
+   357→        </div>
+   358→
+   359→        <p className="text-[10px] leading-relaxed" style={{ color: "#8A8177" }}>
+   360→          Prefer the classic engine?{" "}
+   361→          <Link href="/dashboard/studio" className="underline" style={{ color: ACCENT }}>
+   362→            Studio
+   363→          </Link>{" "}
+   364→          has ranked variants, thread composer and voice DNA.
+   365→        </p>
+   366→      </aside>
+   367→
+   368→      {/* ---------------- CENTER: composer + CopilotChat ---------------- */}
+   369→      <main className="flex-1 flex flex-col min-w-0 xl:h-screen">
+   370→        <div className="p-4 border-b" style={{ borderColor: "#EDE3D6" }}>
+   371→          <div className="flex flex-col sm:flex-row gap-2">
+   372→            <textarea
+   373→              value={prompt}
+   374→              onChange={(e) => setPrompt(e.target.value)}
+   375→              onKeyDown={(e) => {
+   376→                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void sendPrompt();
+   377→              }}
+   378→              rows={2}
+   379→              placeholder={
+   380→                activePersona
+   381→                  ? `e.g. Research 5 viral wellness hooks this week, write ${type}s for ${activePersona.name}, schedule them, save assets to vault`
+   382→                  : "Research 5 viral hooks, generate a week of captions, schedule them…"
+   383→              }
+   384→              className="flex-1 rounded-xl border bg-white px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2"
+   385→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   386→              aria-label="Prompt for the agent"
+   387→            />
+   388→            <button
+   389→              type="button"
+   390→              onClick={() => void sendPrompt()}
+   391→              disabled={isLoading || !prompt.trim()}
+   392→              className="rounded-xl px-5 py-3 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+   393→              style={{ background: ACCENT }}
+   394→            >
+   395→              {isLoading ? "Working…" : "Generate"}
+   396→            </button>
+   397→          </div>
+   398→          <p className="text-[10px] mt-1.5" style={{ color: "#8A8177" }}>
+   399→            Sends as [Model:{model}] [Type:{type}]
+   400→            {selectedId ? ` [Persona:${selectedId.slice(0, 8)}…]` : ""} · ⌘/Ctrl+Enter
+   401→          </p>
+   402→        </div>
+   403→
+   404→        <CopilotChatPane
+   405→          visibleMessages={visibleMessages}
+   406→          isLoading={isLoading}
+   407→          type={type}
+   408→          model={model}
+   409→          personaName={activePersona?.name || null}
+   410→        />
+   411→      </main>
+   412→
+   413→      {/* ---------------- RIGHT: 340px preview + goals ---------------- */}
+   414→      <aside className="w-full xl:w-[340px] xl:min-w-[340px] border-t xl:border-t-0 xl:border-l flex flex-col" style={{ borderColor: "#EDE3D6" }}>
+   415→        <div className="p-5 border-b" style={{ borderColor: "#EDE3D6" }}>
+   416→          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+   417→            Live preview
+   418→          </h2>
+   419→          <p className="text-[10px] mb-3" style={{ color: "#8A8177" }}>
+   420→            Last 3 messages · everything the agent saves lands in /dashboard/drafts and /dashboard/vault automatically.
+   421→          </p>
+   422→          <div className="space-y-2 max-h-64 overflow-y-auto">
+   423→            {lastMessages.length === 0 && (
+   424→              <p className="text-xs" style={{ color: "#8A8177" }}>
+   425→                Nothing yet — send the first prompt.
+   426→              </p>
+   427→            )}
+   428→            {lastMessages.map((m, i) => {
+   429→              const raw = m as unknown as { role?: string; content?: unknown; id?: string };
+   430→              const role = raw.role;
+   431→              const content = typeof raw.content === "string" ? raw.content : "";
+   432→              const isUser = role === "user";
+   433→              return (
+   434→                <div
+   435→                  key={raw.id || i}
+   436→                  className="rounded-lg border px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
+   437→                  style={{
+   438→                    borderColor: isUser ? "#EDE3D6" : ACCENT,
+   439→                    background: isUser ? "#FFFFFF" : "#FFF3EC",
+   440→                    color: CHARCOAL,
+   441→                  }}
+   442→                >
+   443→                  <span className="block text-[9px] uppercase tracking-wider mb-1" style={{ color: isUser ? "#8A8177" : ACCENT }}>
+   444→                    {isUser ? "You" : "Agent"}
+   445→                  </span>
+   446→                  {content.slice(0, 600) || (isUser ? "" : "(working — tool call in progress)")}
+   447→                </div>
+   448→              );
+   449→            })}
+   450→          </div>
+   451→          {notices.length > 0 && (
+   452→            <div className="mt-3 space-y-1.5" aria-live="polite">
+   453→              {notices.map((n) => (
+   454→                <div key={n.id} className="text-[11px] rounded-md px-2.5 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
+   455→                  ✓ {n.text}
+   456→                </div>
+   457→              ))}
+   458→            </div>
+   459→          )}
+   460→        </div>
+   461→
+   462→        <GoalsPanel activePersona={activePersona} pushNotice={pushNotice} refreshSignal={goalsRefresh} />
+   463→      </aside>
+   464→    </div>
+   465→  );
+   466→}
+   467→
+   468→// ---------------------------------------------------------------------------
+   469→// CopilotChatPane — headless rendering of the agent conversation.
+   470→// Same stream as the stock <CopilotChat/> (useCopilotChat), styled to this
+   471→// page: cream background, charcoal text, coral agent accents. Text messages,
+   472→// tool-call chips (saveToDrafts, saveToVault, createGoal, scheduleContent…)
+   473→// and tool results are all visible so auto-saves are never a black box.
+   474→// ---------------------------------------------------------------------------
+   475→
+   476→function CopilotChatPane({
+   477→  visibleMessages,
+   478→  isLoading,
+   479→  type,
+   480→  model,
+   481→  personaName,
+   482→}: {
+   483→  visibleMessages: unknown[];
+   484→  isLoading: boolean;
+   485→  type: AgentContentType;
+   486→  model: string;
+   487→  personaName: string | null;
+   488→}) {
+   489→  const scrollRef = useRef<HTMLDivElement | null>(null);
+   490→
+   491→  const items = useMemo(() => {
+   492→    const source = Array.isArray(visibleMessages) ? visibleMessages : [];
+   493→    return source
+   494→      .map((m) => m as { id?: string; type?: string; role?: string; content?: unknown; name?: string; toolCalls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>; result?: unknown })
+   495→      .filter((m) => {
+   496→        // AG-UI shapes (role user/assistant/tool) and legacy class shapes.
+   497→        if (m.type === "ActionExecutionMessage") return true;
+   498→        if (m.type === "ResultMessage") return true;
+   499→        if (m.role === "user" || m.role === "assistant" || m.role === "tool") {
+   500→          const hasText = typeof m.content === "string" && m.content.trim().length > 0;
+   501→          return hasText || (Array.isArray(m.toolCalls) && m.toolCalls.length > 0);
+   502→        }
+   503→        return false;
+   504→      })
+   505→      .slice(-60);
+   506→  }, [visibleMessages]);
+   507→
+   508→  useEffect(() => {
+   509→    const el = scrollRef.current;
+   510→    if (el) el.scrollTop = el.scrollHeight;
+   511→  }, [items.length, isLoading]);
+   512→
+   513→  return (
+   514→    <div className="flex-1 flex flex-col min-h-[50vh] xl:min-h-0">
+   515→      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-3">
+   516→        <div className="rounded-xl border p-4 text-xs leading-relaxed" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+   517→          <p className="font-serif text-sm mb-1" style={{ color: CHARCOAL }}>
+   518→            Persona Agent
+   519→          </p>
+   520→          <p style={{ color: "#8A8177" }}>
+   521→            {personaName
+   522→              ? `Generating ${type} using ${model} for ${personaName}. Ask for research, a week of posts, scheduling or vault saves — the agent acts, not just suggests.`
+   523→              : "Pick a persona on the left, then ask for research, posts, scheduling or vault saves."}
+   524→          </p>
+   525→        </div>
+   526→
+   527→        {items.map((m, i) => {
+   528→          const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+   529→          if (toolCalls.length > 0) {
+   530→            return (
+   531→              <div key={m.id || i} className="flex flex-col gap-1 items-start">
+   532→                {toolCalls.map((tc, j) => (
+   533→                  <div key={tc.id || j} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+   534→                    🔧 {tc.function?.name || "tool"}…
+   535→                  </div>
+   536→                ))}
+   537→              </div>
+   538→            );
+   539→          }
+   540→          if (m.type === "ActionExecutionMessage") {
+   541→            return (
+   542→              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+   543→                🔧 {m.name}…
+   544→              </div>
+   545→            );
+   546→          }
+   547→          if (m.type === "ResultMessage" || m.role === "tool") {
+   548→            const result = String(m.result ?? (typeof m.content === "string" ? m.content : "")).slice(0, 200);
+   549→            return (
+   550→              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
+   551→                ✓ {result}
+   552→              </div>
+   553→            );
+   554→          }
+   555→          const isUser = m.role === "user";
+   556→          const content = typeof m.content === "string" ? m.content : "";
+   557→          return (
+   558→            <div key={m.id || i} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+   559→              <div
+   560→                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${isUser ? "text-white" : ""}`}
+   561→                style={{
+   562→                  background: isUser ? ACCENT : "#FFFFFF",
+   563→                  color: isUser ? "#FFFFFF" : CHARCOAL,
+   564→                  border: isUser ? "none" : "1px solid #EDE3D6",
+   565→                }}
+   566→              >
+   567→                {content}
+   568→              </div>
+   569→            </div>
+   570→          );
+   571→        })}
+   572→
+   573→        {isLoading && (
+   574→          <div className="text-xs px-2" style={{ color: "#8A8177" }} aria-live="polite">
+   575→            Working…
+   576→          </div>
+   577→        )}
+   578→      </div>
+   579→    </div>
+   580→  );
+   581→}
+   582→
+   583→// ---------------------------------------------------------------------------
+   584→// Goals & Tracking — "Content Calendar Automation" (OpenMuse adaptation)
+   585→// ---------------------------------------------------------------------------
+   586→
+   587→function GoalsPanel({
+   588→  activePersona,
+   589→  pushNotice,
+   590→  refreshSignal,
+   591→}: {
+   592→  activePersona: Persona | null;
+   593→  pushNotice: (text: string) => void;
+   594→  refreshSignal: number;
+   595→}) {
+   596→  const [goals, setGoals] = useState<GoalRow[]>([]);
+   597→  const [alerts, setAlerts] = useState<AlertRow[]>([]);
+   598→  const [open, setOpen] = useState(false);
+   599→  const [goalTitle, setGoalTitle] = useState("");
+   600→  const [recurrence, setRecurrence] = useState<"daily" | "weekly">("weekly");
+   601→  const [checkUrl, setCheckUrl] = useState("https://www.tiktok.com/tag/wellness");
+   602→  const [goalPersonaId, setGoalPersonaId] = useState("");
+   603→  const [saving, setSaving] = useState(false);
+   604→  const [checkingId, setCheckingId] = useState<string | null>(null);
+   605→  const [refresh, setRefresh] = useState(0);
+   606→
+   607→  useEffect(() => {
+   608→    setGoalPersonaId((prev) => prev || activePersona?.id || "");
+   609→  }, [activePersona?.id]);
+   610→
+   611→  useEffect(() => {
+   612→    let alive = true;
+   613→    (async () => {
+   614→      try {
+   615→        const res = await authedFetch("/api/goals");
+   616→        if (!res.ok) return;
+   617→        const json = (await res.json()) as { goals?: GoalRow[]; alerts?: AlertRow[] };
+   618→        if (!alive) return;
+   619→        setGoals(Array.isArray(json.goals) ? json.goals : []);
+   620→        setAlerts(Array.isArray(json.alerts) ? json.alerts : []);
+   621→      } catch {
+   622→        // Panel stays empty on failure — never blocks the page.
+   623→      }
+   624→    })();
+   625→    return () => {
+   626→      alive = false;
+   627→    };
+   628→  }, [refresh, refreshSignal]);
+   629→
+   630→  const createGoal = async () => {
+   631→    if (saving) return;
+   632→    setSaving(true);
+   633→    try {
+   634→      const res = await authedFetch("/api/goals", {
+   635→        method: "POST",
+   636→        headers: { "Content-Type": "application/json" },
+   637→        body: JSON.stringify({
+   638→          goalTitle: goalTitle.trim(),
+   639→          recurrence,
+   640→          checkUrl: checkUrl.trim(),
+   641→          persona_id: goalPersonaId || activePersona?.id,
+   642→        }),
+   643→      });
+   644→      const json = (await res.json()) as Record<string, unknown>;
+   645→      if (!res.ok) throw new Error((json.error as string) || "Failed");
+   646→      setGoalTitle("");
+   647→      pushNotice(`Goal created → ${goalTitle.trim()}`);
+   648→      setRefresh((n) => n + 1);
+   649→    } catch (err) {
+   650→      pushNotice(`Goal failed: ${err instanceof Error ? err.message : "error"}`);
+   651→    } finally {
+   652→      setSaving(false);
+   653→    }
+   654→  };
+   655→
+   656→  const runCheck = async (goalId: string) => {
+   657→    setCheckingId(goalId);
+   658→    try {
+   659→      const res = await authedFetch("/api/goals/check", {
+   660→        method: "POST",
+   661→        headers: { "Content-Type": "application/json" },
+   662→        body: JSON.stringify({ goalId }),
+   663→      });
+   664→      const json = (await res.json()) as {
+   665→        results?: Array<{ outcome?: string; detail?: string }>;
+   666→      };
+   667→      const first = json.results?.[0];
+   668→      if (!first) pushNotice("Check ran → goal not due yet (its schedule is respected).");
+   669→      else if (first.outcome === "generated") pushNotice("Check ran → page changed → auto-draft created ✓");
+   670→      else if (first.outcome === "changed") pushNotice("Check ran → page changed ✓ (alert raised)");
+   671→      else if (first.outcome === "baseline") pushNotice("Baseline recorded — next change will trigger.");
+   672→      else if (first.outcome === "unchanged") pushNotice("Check ran → nothing new.");
+   673→      else pushNotice(`Check ran → ${first.outcome || "error"}${first.detail ? ` (${first.detail})` : ""}`);
+   674→      setRefresh((n) => n + 1);
+   675→    } catch {
+   676→      pushNotice("Check failed to run.");
+   677→    } finally {
+   678→      setCheckingId(null);
+   679→    }
+   680→  };
+   681→
+   682→  const removeGoal = async (goalId: string) => {
+   683→    try {
+   684→      await authedFetch(`/api/goals?id=${encodeURIComponent(goalId)}`, { method: "DELETE" });
+   685→      setRefresh((n) => n + 1);
+   686→    } catch {
+   687→      pushNotice("Could not remove the goal.");
+   688→    }
+   689→  };
+   690→
+   691→  return (
+   692→    <div className="p-5 overflow-y-auto">
+   693→      <button
+   694→        type="button"
+   695→        onClick={() => setOpen((o) => !o)}
+   696→        className="w-full flex items-center justify-between text-left"
+   697→        aria-expanded={open}
+   698→      >
+   699→        <div>
+   700→          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+   701→            Content Calendar Automation
+   702→          </h2>
+   703→          <p className="text-[10px]" style={{ color: "#8A8177" }}>
+   704→            Goals &amp; Tracking — recurring page checks that auto-generate drafts
+   705→          </p>
+   706→        </div>
+   707→        <span className="text-xs" style={{ color: ACCENT }}>
+   708→          {open ? "▲" : "▼"}
+   709→        </span>
+   710→      </button>
+   711→
+   712→      {open && (
+   713→        <div className="mt-4 space-y-3">
+   714→          <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+   715→            <input
+   716→              value={goalTitle}
+   717→              onChange={(e) => setGoalTitle(e.target.value)}
+   718→              placeholder="Goal title — e.g. Weekly viral check for MIRA"
+   719→              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
+   720→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   721→            />
+   722→            <div className="flex gap-2">
+   723→              <select
+   724→                value={recurrence}
+   725→                onChange={(e) => setRecurrence(e.target.value as "daily" | "weekly")}
+   726→                className="rounded-lg border px-2 py-2 text-xs bg-white"
+   727→                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   728→                aria-label="Recurrence"
+   729→              >
+   730→                <option value="weekly">Weekly</option>
+   731→                <option value="daily">Daily</option>
+   732→              </select>
+   733→              <select
+   734→                value={goalPersonaId}
+   735→                onChange={(e) => setGoalPersonaId(e.target.value)}
+   736→                className="flex-1 rounded-lg border px-2 py-2 text-xs bg-white"
+   737→                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   738→                aria-label="Goal persona"
+   739→              >
+   740→                <option value="">Persona…</option>
+   741→                {activePersona && (
+   742→                  <option value={activePersona.id}>{activePersona.name}</option>
+   743→                )}
+   744→              </select>
+   745→            </div>
+   746→            <input
+   747→              value={checkUrl}
+   748→              onChange={(e) => setCheckUrl(e.target.value)}
+   749→              placeholder="checkUrl — e.g. https://www.tiktok.com/tag/wellness"
+   750→              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
+   751→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   752→            />
+   753→            <button
+   754→              type="button"
+   755→              onClick={() => void createGoal()}
+   756→              disabled={saving || !goalTitle.trim() || !checkUrl.trim() || !goalPersonaId}
+   757→              className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+   758→              style={{ background: ACCENT }}
+   759→            >
+   760→              {saving ? "Creating…" : "Create goal"}
+   761→            </button>
+   762→            <p className="text-[10px]" style={{ color: "#8A8177" }}>
+   763→              The worker reads the page (browser worker when configured), dedupes alerts per change, and auto-writes one
+   764→              in-character caption per detected change.
+   765→            </p>
+   766→          </div>
+   767→
+   768→          {goals.length > 0 && (
+   769→            <div className="space-y-2">
+   770→              {goals.map((g) => (
+   771→                <div key={g.id} className="rounded-xl border p-3" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+   772→                  <div className="flex items-start justify-between gap-2">
+   773→                    <div className="min-w-0">
+   774→                      <p className="text-xs font-medium truncate" style={{ color: CHARCOAL }}>
+   775→                        {g.title}
+   776→                      </p>
+   777→                      <p className="text-[10px] mt-0.5" style={{ color: "#8A8177" }}>
+   778→                        {g.recurrence} · {hostOf(g.check_url)} · checked {timeAgo(g.last_checked_at)}
+   779→                        {g.failure_count ? ` · ${g.failure_count} failures` : ""}
+   780→                      </p>
+   781→                      <p className="text-[10px] mt-0.5" style={{ color: g.status === "active" ? "#2F6B37" : "#B3261E" }}>
+   782→                        {g.status}
+   783→                        {g.next_check_at ? ` · next ${timeAgo(g.next_check_at) === "just now" ? "due now" : "due soon"}` : ""}
+   784→                      </p>
+   785→                    </div>
+   786→                    <div className="flex flex-col gap-1 shrink-0">
+   787→                      <button
+   788→                        type="button"
+   789→                        onClick={() => void runCheck(g.id)}
+   790→                        disabled={checkingId === g.id}
+   791→                        className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
+   792→                        style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   793→                      >
+   794→                        {checkingId === g.id ? "…" : "Run check"}
+   795→                      </button>
+   796→                      <button
+   797→                        type="button"
+   798→                        onClick={() => void removeGoal(g.id)}
+   799→                        className="text-[10px] rounded-md px-2 py-1"
+   800→                        style={{ color: "#B3261E" }}
+   801→                      >
+   802→                        Remove
+   803→                      </button>
+   804→                    </div>
+   805→                  </div>
+   806→                </div>
+   807→              ))}
+   808→            </div>
+   809→          )}
+   810→
+   811→          {alerts.length > 0 && (
+   812→            <div className="space-y-1.5">
+   813→              <p className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "#8A8177" }}>
+   814→                Recent alerts
+   815→              </p>
+   816→              {alerts.slice(0, 5).map((a) => (
+   817→                <div key={a.id} className="rounded-lg px-2.5 py-1.5 text-[11px]" style={{ background: "#FFF3EC" }}>
+   818→                  <span className="font-medium">{a.title}</span>
+   819→                  <span className="block" style={{ color: "#8A8177" }}>
+   820→                    {a.body}
+   821→                  </span>
+   822→                  {a.draft_id && (
+   823→                    <Link href="/dashboard/drafts" className="underline block mt-0.5" style={{ color: ACCENT }}>
+   824→                      Open the auto-draft →
+   825→                    </Link>
+   826→                  )}
+   827→                </div>
+   828→              ))}
+   829→            </div>
+   830→          )}
+   831→        </div>
+   832→      )}
+   833→    </div>
+   834→  );
+   835→}
+   836→

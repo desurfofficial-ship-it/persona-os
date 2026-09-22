@@ -257,3 +257,23 @@ Stage Summary:
 - Preview is LIVE and the entire OpenMuse agent layer (research -> generate -> saveToDrafts -> drafts DB) verified working after the reset. No fixes were needed this session — Task 11's hardening held.
 - CopilotKit devtools notification bubble appears in dev mode only (dismissable, does not affect the app).
 - PAT rotation reminder: the GitHub PAT remains exposed in chat history — rotate it at github.com/settings/tokens.
+
+---
+Task ID: 13
+Agent: Super Z (main agent)
+Task: "Yes" — fresh red-team pass over the agent workspace (Break -> Fix -> Harden) + queued ICP backlog (goals history view, scan streaming).
+
+Work Log:
+- BREAK pass found 7 real defects: (1) SECURITY — /api/copilotkit had NO auth gate (every other agent route 401s anonymous callers; this one served the full runtime to anyone who spoke the protocol); (2) the Model Selector was a lie — OpenAIAdapter was pinned to gpt-4o-mini at module load, so the [Model:claude-haiku] tag never changed what actually served the conversation; (3) GoalsPanel read snake_case fields (check_url, last_checked_at, next_check_at, draft_id...) off camelCase Prisma JSON — rendered "undefined · checked never", every goal claimed "due now" (timeAgo of a future date), alert draft-links never appeared; (4) goal form's persona dropdown only rendered the ACTIVE persona (spec requires any persona); (5) raw wire tags [Model:...][Type:...][Persona:uuid] leaked into the chat bubble and live preview; (6) dead code ${draftId ? "" : ""}; (7) no persona-switch identity guard for mid-conversation persona changes.
+- FIXES: resolveUserId 401 gate at the top of POST /api/copilotkit; per-request adapter honoring [Model:...] from the latest user message (allowlist of the 4 UI pills, adapter cache, shared OpenAI client); GoalRow/AlertRow -> camelCase + new timeUntil() ("due in 6d") + lastStateSample preview on goal cards; GoalsPanel receives full personas list (both personas verified selectable, goal created for the non-active one); stripMeta() display filter in chat bubble + preview rail, shortUuids() collapses ids to 8 chars; identity-guard line appended to the server-injected persona block ("you are {name} now, never blend identities").
+- BUILD 1 — Goal history: per-goal alert lines with timeAgo + "open the auto-draft" deep links, plus a cross-goal "Goal history" timeline (15 newest alerts, goal recurrence/host context, "goal removed" fallback) and an honest empty state explaining baseline-then-schedule.
+- BUILD 2 — Scan streaming: /api/consistency-scan now speaks SSE when Accept: text/event-stream (JSON back-compat preserved; one shared performScan feeds both so they can't drift). Real events: stage (reading/layer1/layer2/scoring with pct), info (Layer-1 pair count the moment it lands), result, error. ConsistencyPanel replaced the 6s fake-interval progress with a stream reader; shows live stage label, real pct, and "Layer 1 found N exact-claim pairs" while Layer 2 runs.
+- One self-inflicted bug caught by tsc: a curly quote corrupted a ternary string in the goals rewrite — patched, tsc clean.
+- Verified live (browser): anonymous /api/copilotkit -> 401 while authed traffic reaches the runtime; goals form shows both personas, goal created for Ambitious Founder renders "weekly · tiktok.com · checked never · active · due now", Run check recorded a real TikTok baseline ("TikTok TikTok Watch now Dear Users...") and now shows "checked just now · due in 6d" + snapshot preview; scan streamed Layer 2 at 6s with "Layer 1 found 0 exact-claim pairs" info line, then landed 10/100 with 8 contradictions (5am-157d vs 5am-92d, ribeye-vs-vegan); agent run displayed the CLEAN prompt bubble and shortened UUID in the preview rail, saveToDrafts persisted (cedced61...).
+- Tests: 45+33+24+38+15 = 155/155 green. tsc clean, eslint clean.
+- Committed 132922b, pushed four-pillars (one-time PAT push URL, remote config scrubbed).
+
+Stage Summary:
+- The agent workspace now passes its own red team: no anonymous runtime access, model pills genuinely route to different OpenRouter models in production, goals render true state with a full history timeline, and the consistency scan streams honest progress.
+- Remaining backlog: scan progress could stream per-item counts mid-Layer-2; goal pause/resume UI; alert "mark read".
+- PAT rotation reminder re-issued (PAT used for one push this session).
