@@ -70,12 +70,25 @@ function GenerateContent() {
   const [variantCount, setVariantCount] = useState(3);
   const [platform, setPlatform] = useState<PlatformId>("x");
   const [results, setResults] = useState<VariantResult[]>([]);
-  const [fingerprintMeta, setFingerprintMeta] = useState<{ used: boolean; samples: number; summary: string } | null>(null);
+  const [fingerprintMeta, setFingerprintMeta] = useState<{ used: boolean; samples: number; summary: string; source?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadStage, setLoadStage] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
+
+  // High polish: editor pass that tightens hooks and cuts flab (default ON)
+  const [highPolish, setHighPolish] = useState(true);
+  // "3 more of this one": grouped follow-up variants per result card
+  const [moreResults, setMoreResults] = useState<Record<number, VariantResult[]>>({});
+  const [loadingMore, setLoadingMore] = useState<number | null>(null);
+  // One idea -> every platform
+  const [platformResults, setPlatformResults] = useState<{ platform: PlatformId; variant: VariantResult }[]>([]);
+  const [loadingPlatforms, setLoadingPlatforms] = useState(false);
+  // Image prompt -> rendered image (preview + save to vault)
+  const [renderedImages, setRenderedImages] = useState<Record<number, string>>({});
+  const [loadingRender, setLoadingRender] = useState<number | null>(null);
+  const [savedToVault, setSavedToVault] = useState<Record<number, boolean>>({});
 
   // Posted-aware state
   const [postedPosts, setPostedPosts] = useState<PostedPost[]>([]);
@@ -169,10 +182,26 @@ function GenerateContent() {
     };
   }, [selectedId]);
 
+  const selectedPersona = personas.find((p) => p.id === selectedId);
+
+  // Curated gold set takes priority; drafts are the fallback voice source.
+  const goldSamples = useMemo(
+    () =>
+      (selectedPersona?.voice_samples || ([] as unknown[])).filter(
+        (s): s is { id: string; text: string; enabled: boolean } =>
+          !!s && typeof s === "object" && typeof (s as { text?: unknown }).text === "string"
+      ).filter((s) => s.enabled && s.text.trim().length > 20).map((s) => s.text),
+    [selectedPersona]
+  );
+  const voiceSource = useMemo(
+    () => (goldSamples.length ? goldSamples : voiceSamples),
+    [goldSamples, voiceSamples]
+  );
+
   // Client-side Voice DNA preview — instant, before any generation.
   const localFingerprint = useMemo(
-    () => extractVoiceFingerprint(voiceSamples),
-    [voiceSamples]
+    () => extractVoiceFingerprint(voiceSource),
+    [voiceSource]
   );
 
   // Welcome-back prefill
@@ -239,8 +268,6 @@ function GenerateContent() {
     return () => clearInterval(t);
   }, [loading, variantCount]);
 
-  const selectedPersona = personas.find((p) => p.id === selectedId);
-
   // Live duplicate warning (debounced)
   const [similarPosts, setSimilarPosts] = useState<SimilarPost[]>([]);
   useEffect(() => {
@@ -272,7 +299,9 @@ function GenerateContent() {
     model,
     platform,
     voiceSamples,
+    goldSamples: goldSamples.length ? goldSamples : undefined,
     postedContext: postedPosts,
+    polish: highPolish,
     assetContext: assetCtx
       ? { type: assetCtx.type, tags: assetCtx.tags || [], content: assetCtx.content || "" }
       : undefined,
@@ -296,6 +325,8 @@ function GenerateContent() {
     setError(null);
     setResults([]);
     setAllFormats({});
+    setMoreResults({});
+    setPlatformResults([]);
 
     try {
       const data = await postGenerate(buildBody({ variants: variantCount }));
@@ -311,6 +342,130 @@ function GenerateContent() {
       setError(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // "3 more of this one": the user flagged a winner — generate 3 fresh
+  // variations of THAT post, avoiding the original and each other.
+  const handleMoreLike = async (index: number) => {
+    if (!selectedPersona || !results[index] || loadingMore !== null) return;
+    setLoadingMore(index);
+    setError(null);
+    const winner = results[index].content;
+    const avoid = [
+      ...results.map((r) => r.content),
+      ...(moreResults[index] || []).map((r) => r.content),
+    ].filter((c) => c !== winner);
+    try {
+      const data = await postGenerate(
+        buildBody({ variants: 3, moreLike: { original: winner, avoid } })
+      );
+      const fresh = (data.variants as VariantResult[]).filter(
+        (v) => v.content !== winner
+      );
+      setMoreResults((prev) => ({ ...prev, [index]: [...(prev[index] || []), ...fresh] }));
+      for (const v of fresh) {
+        await saveDraft(v.content, type);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Couldn't generate more like this");
+    } finally {
+      setLoadingMore(null);
+    }
+  };
+
+  // One idea -> every platform, formatted natively for each.
+  const handleAllPlatforms = async () => {
+    if (!selectedPersona || loadingPlatforms) return;
+    setLoadingPlatforms(true);
+    setError(null);
+    try {
+      const jobs: PlatformId[] = ["x", "linkedin", "instagram", "threads"];
+      const settled = await Promise.allSettled(
+        jobs.map((p) => postGenerate(buildBody({ platform: p, variants: 1 })))
+      );
+      const out: { platform: PlatformId; variant: VariantResult }[] = [];
+      for (let i = 0; i < jobs.length; i++) {
+        const s = settled[i];
+        if (s.status === "fulfilled") {
+          const v = (s.value.variants as VariantResult[])[0];
+          if (v) {
+            out.push({ platform: jobs[i], variant: v });
+            await saveDraft(v.content, type);
+          }
+        }
+      }
+      if (!out.length) throw new Error("Couldn't generate for any platform");
+      setPlatformResults(out);
+      const failedCount = jobs.length - out.length;
+      if (failedCount) setError(`${failedCount} platform${failedCount > 1 ? "s" : ""} failed — showing the ones that made it.`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "All-platforms generation failed");
+    } finally {
+      setLoadingPlatforms(false);
+    }
+  };
+
+  // Undo a quality-gate scrub: restore the author's original wording.
+  const handleUndoScrub = (index: number) => {
+    const v = results[index];
+    if (!v?.original) return;
+    const next = [...results];
+    next[index] = { ...v, content: v.original, original: undefined };
+    setResults(next);
+  };
+
+  // Render an image prompt into an actual image.
+  const handleRenderImage = async (index: number) => {
+    if (!results[index] || loadingRender !== null) return;
+    setLoadingRender(index);
+    setError(null);
+    try {
+      const res = await fetch("/api/render-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: results[index].content,
+          visualStyle: selectedPersona?.visual_style || "",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Image render failed");
+      setRenderedImages((prev) => ({ ...prev, [index]: data.image }));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Image render failed");
+    } finally {
+      setLoadingRender(null);
+    }
+  };
+
+  // Save a rendered image into the Asset Vault.
+  const handleSaveToVault = async (index: number) => {
+    const dataUrl = renderedImages[index];
+    if (!dataUrl || !selectedPersona) return;
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], `rendered-${Date.now()}.png`, { type: "image/png" });
+      const fileName = `${selectedPersona.id}/rendered-${Date.now()}.png`;
+      const { error: uploadError } = await supabase.storage
+        .from("assets")
+        .upload(fileName, file);
+      if (uploadError) throw new Error(uploadError.message);
+      const { data: urlData } = supabase.storage.from("assets").getPublicUrl(fileName);
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      await supabase.from("assets").insert({
+        persona_id: selectedPersona.id,
+        user_id: user?.id,
+        type: "image",
+        url: urlData.publicUrl,
+        content: topic || "",
+        tags: ["rendered", "generated"],
+      });
+      setSavedToVault((prev) => ({ ...prev, [index]: true }));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Couldn't save to Vault");
     }
   };
 
@@ -427,11 +582,11 @@ function GenerateContent() {
     }
   };
 
-  const handleCopyOnly = async (content: string, index: number) => {
+  const handleCopyOnly = async (content: string, key: string) => {
     const ok = await copyToClipboard(content);
     if (ok) {
-      setCopiedIndex(index);
-      setTimeout(() => setCopiedIndex((c) => (c === index ? null : c)), 1500);
+      setCopiedIndex(key);
+      setTimeout(() => setCopiedIndex((c) => (c === key ? null : c)), 1500);
     }
   };
 
@@ -526,13 +681,25 @@ function GenerateContent() {
                 </div>
                 <span
                   className={`shrink-0 text-[10px] px-2 py-1 rounded-full border ${
-                    localFingerprint.samples >= 3
-                      ? "border-emerald-700 text-emerald-400 bg-emerald-950/40"
-                      : "border-zinc-700 text-zinc-500"
+                    goldSamples.length >= 3
+                      ? "border-emerald-500 text-emerald-300 bg-emerald-950/40"
+                      : localFingerprint.samples >= 3
+                        ? "border-emerald-700 text-emerald-400 bg-emerald-950/40"
+                        : "border-zinc-700 text-zinc-500"
                   }`}
-                  title={localFingerprint.samples >= 3 ? "Learned from this persona's drafts" : "Add 3+ drafts to lock the voice"}
+                  title={
+                    goldSamples.length >= 3
+                      ? "Learning from the curated Gold Set"
+                      : localFingerprint.samples >= 3
+                        ? "Learned from this persona's drafts — curate a Gold Set to lock it"
+                        : "Add 3+ samples to lock the voice"
+                  }
                 >
-                  {localFingerprint.samples >= 3 ? "VOICE DNA ✓" : "VOICE DNA: LEARNING"}
+                  {goldSamples.length >= 3
+                    ? `GOLD SET ✓ ${goldSamples.length}`
+                    : localFingerprint.samples >= 3
+                      ? "VOICE DNA ✓"
+                      : "VOICE DNA: LEARNING"}
                 </span>
               </div>
               {localFingerprint.samples > 0 && (
@@ -626,7 +793,7 @@ function GenerateContent() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm text-zinc-400 mb-2">Model</label>
               <select
@@ -652,6 +819,27 @@ function GenerateContent() {
                 <option value={2}>2 variants</option>
                 <option value={3}>3 variants — different structures</option>
               </select>
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">Quality</label>
+              <button
+                onClick={() => setHighPolish(!highPolish)}
+                title="An editor pass re-checks every draft: tighter hooks, less flab, zero generic lines"
+                className={`w-full px-4 py-3 min-h-[48px] rounded-lg text-sm font-medium border flex items-center justify-between ${
+                  highPolish
+                    ? "bg-emerald-950/40 border-emerald-700 text-emerald-300"
+                    : "bg-zinc-900 border-zinc-700 text-zinc-400"
+                }`}
+              >
+                <span>High polish</span>
+                <span
+                  className={`w-10 h-6 rounded-full relative transition shrink-0 ${highPolish ? "bg-emerald-600" : "bg-zinc-700"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-all ${highPolish ? "left-[18px]" : "left-0.5"}`}
+                  />
+                </span>
+              </button>
             </div>
           </div>
 
@@ -713,7 +901,30 @@ function GenerateContent() {
             </p>
           )}
 
-          {generateButton("", generateBtnRef)}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {generateButton("", generateBtnRef)}
+            <button
+              onClick={handleAllPlatforms}
+              disabled={loadingPlatforms || loading || !selectedPersona || !topic.trim()}
+              title="Generate this idea for X, LinkedIn, Instagram and Threads — each formatted natively"
+              className="min-h-[52px] px-4 border border-zinc-600 text-zinc-200 font-medium rounded-xl hover:bg-zinc-800 disabled:opacity-50 text-sm"
+            >
+              {loadingPlatforms ? (
+                <span className="inline-flex items-center gap-2">
+                  <span className="w-4 h-4 border-2 border-zinc-500 border-t-white rounded-full animate-spin" />
+                  Writing for all 4 platforms…
+                </span>
+              ) : (
+                "⇄ All platforms"
+              )}
+            </button>
+            <a
+              href={`/dashboard/personas/${selectedId}`}
+              className="min-h-[52px] px-4 border border-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-900 text-sm flex items-center justify-center"
+            >
+              Tune their voice →
+            </a>
+          </div>
 
           {error && (
             <div className="p-4 bg-amber-950/40 border border-amber-700 rounded-lg text-amber-200 text-sm">
@@ -739,13 +950,21 @@ function GenerateContent() {
                       BEST MATCH
                     </span>
                   )}
+                  {variant.polished && (
+                    <span
+                      className="text-[10px] px-2 py-0.5 rounded-full bg-sky-950 border border-sky-800 text-sky-400"
+                      title="The editor pass tightened this draft"
+                    >
+                      POLISHED
+                    </span>
+                  )}
                   {isFirstRun && idx === 0 && (
                     <span className="text-xs text-green-400 font-normal">
                       Draft saved — last step: post it
                     </span>
                   )}
                 </div>
-                {copiedIndex === idx && <span className="text-xs text-green-400">Copied ✓</span>}
+                {copiedIndex === String(idx) && <span className="text-xs text-green-400">Copied ✓</span>}
               </div>
 
               {/* Quality strip: voice match · length · fit */}
@@ -803,8 +1022,8 @@ function GenerateContent() {
                         <button
                           onClick={async () => {
                             if (await copyToClipboard(post)) {
-                              setCopiedIndex(idx);
-                              setTimeout(() => setCopiedIndex((c) => (c === idx ? null : c)), 1200);
+                              setCopiedIndex(String(idx));
+                              setTimeout(() => setCopiedIndex((c) => (c === String(idx) ? null : c)), 1200);
                             }
                           }}
                           className="text-[10px] px-2 py-1 border border-zinc-700 rounded text-zinc-400 hover:text-white shrink-0"
@@ -832,22 +1051,39 @@ function GenerateContent() {
                   Open {platform === "linkedin" ? "X" : "LinkedIn"} instead
                 </button>
                 <button
-                  onClick={() => handleCopyOnly(variant.content, idx)}
+                  onClick={() => handleCopyOnly(variant.content, String(idx))}
                   className="min-h-[46px] px-4 border border-zinc-600 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800"
                 >
-                  {copiedIndex === idx ? "Copied ✓" : "Copy only"}
+                  {copiedIndex === String(idx) ? "Copied ✓" : "Copy only"}
                 </button>
               </div>
 
               {/* Quick actions */}
               <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
                 <button
+                  onClick={() => handleMoreLike(idx)}
+                  disabled={loadingMore !== null || rewritingIndex === idx || makingAll === idx}
+                  title="3 fresh variations of THIS post — same idea, new angles"
+                  className="text-xs px-3 py-2 min-h-[38px] bg-white text-black rounded-lg font-medium hover:bg-zinc-200 disabled:opacity-50"
+                >
+                  {loadingMore === idx ? "Writing 3 more…" : "⊕ 3 more of this one"}
+                </button>
+                <button
                   onClick={() => handleRegenerate(idx)}
-                  disabled={rewritingIndex === idx || makingAll === idx}
+                  disabled={rewritingIndex === idx || makingAll === idx || loadingMore === idx}
                   className="text-xs px-3 py-2 min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg font-medium hover:bg-zinc-700 disabled:opacity-50"
                 >
                   ↻ Regenerate
                 </button>
+                {variant.original && (
+                  <button
+                    onClick={() => handleUndoScrub(idx)}
+                    title="Restore the wording before the automatic scrub"
+                    className="text-xs px-3 py-2 min-h-[38px] border border-amber-700 text-amber-400 rounded hover:bg-amber-950/40"
+                  >
+                    ↩ Undo scrub
+                  </button>
+                )}
                 <button
                   onClick={() => handleMakeAllFormats(idx)}
                   disabled={makingAll === idx || rewritingIndex === idx}
@@ -910,6 +1146,51 @@ function GenerateContent() {
                 </button>
               </div>
 
+              {/* Render image: image prompts become actual images */}
+              {(type === "image_prompt" || /image prompt/i.test(variant.hookType || "")) && (
+                <div className="mb-4">
+                  {!renderedImages[idx] ? (
+                    <button
+                      onClick={() => handleRenderImage(idx)}
+                      disabled={loadingRender !== null}
+                      className="min-h-[46px] px-4 w-full sm:w-auto border border-zinc-600 rounded-lg text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      {loadingRender === idx ? "Rendering image… (up to 2 min)" : "🖼 Render this image"}
+                    </button>
+                  ) : (
+                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+                      <img
+                        src={renderedImages[idx]}
+                        alt="Rendered from the image prompt"
+                        className="w-full max-w-sm rounded-lg mb-3"
+                      />
+                      <div className="flex flex-wrap items-center gap-3">
+                        {savedToVault[idx] ? (
+                          <span className="text-xs text-green-400">Saved to your Asset Vault ✓</span>
+                        ) : (
+                          <button
+                            onClick={() => handleSaveToVault(idx)}
+                            className="min-h-[40px] px-4 bg-white text-black rounded-lg text-xs font-medium hover:bg-zinc-200"
+                          >
+                            Save to Vault
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleRenderImage(idx)}
+                          disabled={loadingRender !== null}
+                          className="text-xs text-zinc-400 hover:text-white disabled:opacity-50"
+                        >
+                          {loadingRender === idx ? "Rendering…" : "Render again"}
+                        </button>
+                        <a href="/dashboard/vault" className="text-xs text-zinc-400 hover:text-white">
+                          Open Vault →
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Make-all-formats results */}
               {allFormats[idx] && (
                 <div className="mt-4 pt-4 border-t border-zinc-800 space-y-4">
@@ -944,8 +1225,86 @@ function GenerateContent() {
                   ))}
                 </div>
               )}
+
+              {/* "3 more of this one" follow-up variants */}
+              {moreResults[idx]?.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-zinc-800 space-y-3">
+                  <p className="text-xs text-green-400 font-medium">
+                    {moreResults[idx].length} more like this — saved to Drafts
+                  </p>
+                  {moreResults[idx].map((v, mi) => (
+                    <div key={mi} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] text-zinc-500">
+                          {v.hookType} · voice match {v.voiceMatch}%
+                          {v.polished ? " · polished" : ""}
+                        </span>
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => copyAndOpen(v.content, sharePlatform[platform])}
+                            className="text-xs text-white font-medium hover:text-zinc-300"
+                          >
+                            Copy &amp; open {PLATFORMS[platform].name}
+                          </button>
+                          <button
+                            onClick={() => handleCopyOnly(v.content, `${idx}-${mi}`)}
+                            className="text-xs text-zinc-400 hover:text-white"
+                          >
+                            {copiedIndex === `${idx}-${mi}` ? "Copied ✓" : "Copy"}
+                          </button>
+                        </div>
+                      </div>
+                      <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+                        {v.content}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
+
+          {/* One idea, every platform */}
+          {platformResults.length > 0 && (
+            <div className="border border-zinc-700 rounded-2xl p-5 sm:p-6">
+              <h2 className="font-bold text-lg mb-1">Same idea, every platform</h2>
+              <p className="text-xs text-zinc-500 mb-4">
+                Each version is formatted natively — X hook line, LinkedIn fold, Instagram hashtags,
+                Threads casual. All saved to Drafts.
+              </p>
+              <div className="space-y-3">
+                {platformResults.map(({ platform: p, variant }, pi) => (
+                  <div key={p} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2 gap-2">
+                      <span className="text-xs font-medium text-white">
+                        {PLATFORMS[p].name}
+                        <span className="text-zinc-500 font-normal ml-2">
+                          {variant.fit.length}/{variant.fit.limit} · voice match {variant.voiceMatch}%
+                        </span>
+                      </span>
+                      <div className="flex gap-3 shrink-0">
+                        <button
+                          onClick={() => copyAndOpen(variant.content, sharePlatform[p])}
+                          className="text-xs bg-white text-black font-medium px-3 py-1.5 rounded-md hover:bg-zinc-200"
+                        >
+                          Copy &amp; open
+                        </button>
+                        <button
+                          onClick={() => handleCopyOnly(variant.content, `p-${pi}`)}
+                          className="text-xs text-zinc-400 hover:text-white"
+                        >
+                          {copiedIndex === `p-${pi}` ? "Copied ✓" : "Copy"}
+                        </button>
+                      </div>
+                    </div>
+                    <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+                      {variant.content}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -99,5 +99,34 @@ const goodGate = qualityGate("i post like i talk. that's the whole trick.", {
 check("good post not blocked", !goodGate.report.blocked);
 check("detects repetition against posted", goodGate.repetition.score > 60, `got ${goodGate.repetition.score}`);
 
+
+console.log("\n== ENGINE v2.5: EXEMPLARS + MORE-LIKE ==");
+import { renderExemplarBlock, buildSystemPrompt } from "../src/lib/generation";
+const exBlock = renderExemplarBlock(["short real post here that is definitely longer than forty chars to pass the filter"]);
+check("exemplar block renders gold samples", exBlock.includes("VOICE EXEMPLARS") && exBlock.includes("short real post"));
+check("exemplar block skips short junk", !renderExemplarBlock(["too short"]).includes("VOICE EXEMPLARS"));
+const sysP = buildSystemPrompt(
+  { name: "Test", backstory: "b" },
+  extractVoiceFingerprint(posts),
+  ["another real exemplar post that easily clears the forty character bar for inclusion"]
+);
+check("system prompt embeds exemplars", sysP.includes("VOICE EXEMPLARS") && sysP.includes("another real exemplar"));
+const capped = renderExemplarBlock(["a".repeat(60), "b".repeat(60), "c".repeat(60), "d".repeat(60)]);
+check("exemplar count capped at 3", capped.includes("a".repeat(40)) && capped.includes("c".repeat(40)) && !capped.includes("d".repeat(40)));
+
+const gate2 = qualityGate("let me be honest: this journey was a game-changer for me.", {
+  personaName: "Test",
+  platform: "x",
+});
+check("gate preserves pre-scrub text basis", gate2.report.clichesRemoved.length >= 2, gate2.report.clichesRemoved.join(","));
+check("scrubbed text differs from raw", gate2.text !== "let me be honest: this journey was a game-changer for me.");
+
+const rep = qualityGate("completely fresh content nobody has seen before with new words", {
+  personaName: "Test",
+  platform: "x",
+  posted: [{ content: "totally different topic about coffee and mornings entirely" }],
+});
+check("no false repetition flag", rep.repetition.score < 35, `got ${rep.repetition.score}`);
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail > 0 ? 1 : 0);

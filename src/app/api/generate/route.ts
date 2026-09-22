@@ -39,17 +39,38 @@ export async function POST(req: NextRequest) {
     const voiceSamples = Array.isArray(body.voiceSamples)
       ? (body.voiceSamples as string[]).filter((s: unknown) => typeof s === "string" && s.length > 20)
       : [];
+    // Curated gold set wins when present — it is the voice the user chose to
+    // represent them, and it keeps AI-generated drafts from teaching the AI
+    // its own voice (drift loop).
+    const goldSamples = Array.isArray(body.goldSamples)
+      ? (body.goldSamples as string[]).filter((s: unknown) => typeof s === "string" && s.length > 20)
+      : [];
+    const voiceSource = goldSamples.length ? goldSamples : voiceSamples;
     const postedContext = Array.isArray(body.postedContext)
       ? (body.postedContext as { content?: string }[])
       : [];
+    const polish = body.polish === true;
+    const moreLike =
+      body.moreLike &&
+      typeof body.moreLike === "object" &&
+      typeof (body.moreLike as { original?: unknown }).original === "string"
+        ? {
+            original: (body.moreLike as { original: string }).original,
+            avoid: Array.isArray((body.moreLike as { avoid?: unknown }).avoid)
+              ? ((body.moreLike as { avoid: unknown[] }).avoid as unknown[]).filter(
+                  (s): s is string => typeof s === "string"
+                )
+              : [],
+          }
+        : undefined;
 
-    // Voice DNA: measured from the persona's real writing (pasted posts,
-    // drafts, posted content — whatever the client sends).
+    // Voice DNA: measured from the persona's real writing (gold set when
+    // curated, otherwise drafts + posted content).
     const fingerprint = fingerprintFrom([
-      ...voiceSamples,
+      ...voiceSource,
       ...postedContext.map((p) => p.content || ""),
     ]);
-    const systemBase = buildSystemPrompt(persona, fingerprint);
+    const systemBase = buildSystemPrompt(persona, fingerprint, voiceSource);
     const strategies = strategiesFor(type);
 
     // strategyOffset lets per-card regeneration rotate structures instead of
@@ -75,6 +96,8 @@ export async function POST(req: NextRequest) {
           posted: postedContext,
           asset: body.assetContext,
           rewrite: body.rewrite,
+          moreLike,
+          polish,
           model: body.model,
         })
       )
@@ -110,8 +133,9 @@ export async function POST(req: NextRequest) {
           used: true,
           samples: fingerprint.samples,
           summary: `${fingerprint.sentenceSpread} rhythm · ${fingerprint.avgSentenceWords} words/sentence · ${fingerprint.casing} casing${fingerprint.topEmojis.length ? ` · uses ${fingerprint.topEmojis.join("")}` : " · no emoji"}`,
+          source: goldSamples.length ? "gold" : "drafts",
         }
-      : { used: false, samples: 0, summary: "No real posts to learn from yet" };
+      : { used: false, samples: 0, summary: "No real posts to learn from yet", source: "none" };
 
     return NextResponse.json({
       engine: "v2",

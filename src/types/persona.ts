@@ -8,8 +8,18 @@ export interface Persona {
   lifestyle_pillars: string[];
   content_rules: string[];
   forbidden_topics: string[];
+  /** Curated gold-set voice samples the engine learns voice from. */
+  voice_samples?: VoiceSample[] | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface VoiceSample {
+  id: string;
+  text: string;
+  source: "curated" | "draft" | "posted";
+  enabled: boolean;
+  addedAt: string;
 }
 
 export interface Asset {

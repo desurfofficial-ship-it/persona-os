@@ -26,6 +26,8 @@ model Persona {
   lifestylePillars Json?
   contentRules     Json?
   forbiddenTopics  Json?
+  /// Curated "gold set" voice samples: [{ id, text, source, enabled, addedAt }]
+  voiceSamples     Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

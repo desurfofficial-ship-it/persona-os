@@ -23,7 +23,7 @@ import {
   voiceMatchNote,
   type VoiceFingerprint,
 } from "./voice";
-import { qualityGate, type QualityReport } from "./quality";
+import { qualityGate, stripMetaWrapping, type QualityReport } from "./quality";
 
 /* ---------------------------------- types ---------------------------------- */
 
@@ -47,14 +47,23 @@ export interface GenerateRequest {
   variants: number;
   model?: string;
   voiceSamples?: string[];
+  /** Curated gold-set samples — when present they override voiceSamples. */
+  goldSamples?: string[];
   postedContext?: { content?: string; created_at?: string }[];
   assetContext?: { type?: string; tags?: string[]; content?: string; description?: string };
   /** Quick-rewrite: transform an existing draft with an instruction. */
   rewrite?: { original: string; instruction: string };
+  /** "3 more of this one": fresh variations of a winner. */
+  moreLike?: { original: string; avoid?: string[] };
+  /** Editor polish pass (critique + refine) after the quality gate. */
+  polish?: boolean;
 }
 
 export interface VariantResult {
   content: string;
+  /** Pre-scrub text, present only when the quality gate removed something —
+   * powers the "Undo scrub" control. */
+  original?: string;
   rank: number;
   voiceMatch: number;
   voiceNote: string;
@@ -66,6 +75,8 @@ export interface VariantResult {
   fit: { fits: boolean; overBy: number; length: number; limit: number };
   blocked: boolean;
   blockReason: string | null;
+  /** True when the editor polish pass improved this variant. */
+  polished?: boolean;
 }
 
 export interface GenerateResponse {
@@ -90,9 +101,9 @@ export interface LlmResult {
 
 type ChatMessage = { role: "system" | "user"; content: string };
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
@@ -100,7 +111,7 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-async function callOpenRouter(key: string, model: string, messages: ChatMessage[], temp: number, json: boolean) {
+async function callOpenRouter(key: string, model: string, messages: ChatMessage[], temp: number, json: boolean, timeoutMs = TIMEOUT_MS) {
   const res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -116,7 +127,7 @@ async function callOpenRouter(key: string, model: string, messages: ChatMessage[
       max_tokens: 1600,
       ...(json ? { response_format: { type: "json_object" } } : {}),
     }),
-  });
+  }, timeoutMs);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || data.message || "OpenRouter error");
   const content = data.choices?.[0]?.message?.content;
@@ -124,7 +135,7 @@ async function callOpenRouter(key: string, model: string, messages: ChatMessage[
   return content as string;
 }
 
-async function callOpenAI(key: string, messages: ChatMessage[], temp: number, json: boolean) {
+async function callOpenAI(key: string, messages: ChatMessage[], temp: number, json: boolean, timeoutMs = TIMEOUT_MS) {
   const res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
@@ -135,7 +146,7 @@ async function callOpenAI(key: string, messages: ChatMessage[], temp: number, js
       max_tokens: 1600,
       ...(json ? { response_format: { type: "json_object" } } : {}),
     }),
-  });
+  }, timeoutMs);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || "OpenAI error");
   const content = data.choices?.[0]?.message?.content;
@@ -143,7 +154,7 @@ async function callOpenAI(key: string, messages: ChatMessage[], temp: number, js
   return content as string;
 }
 
-async function callAnthropic(key: string, messages: ChatMessage[], temp: number) {
+async function callAnthropic(key: string, messages: ChatMessage[], temp: number, timeoutMs = TIMEOUT_MS) {
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
   const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -159,7 +170,7 @@ async function callAnthropic(key: string, messages: ChatMessage[], temp: number)
       temperature: temp,
       messages: messages.filter((m) => m.role === "user"),
     }),
-  });
+  }, timeoutMs);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || "Anthropic error");
   const content = data.content?.[0]?.text;
@@ -168,11 +179,11 @@ async function callAnthropic(key: string, messages: ChatMessage[], temp: number)
 }
 
 let zaiPromise: Promise<ZAI> | null = null;
-async function callBuiltIn(messages: ChatMessage[], temp: number) {
+async function callBuiltIn(messages: ChatMessage[], temp: number, timeoutMs = TIMEOUT_MS) {
   if (!zaiPromise) zaiPromise = ZAI.create();
   const zai = await zaiPromise;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const completion = await Promise.race([
       zai.chat.completions.create({
@@ -181,7 +192,7 @@ async function callBuiltIn(messages: ChatMessage[], temp: number) {
         thinking: { type: "disabled" },
       }),
       new Promise<never>((_, rej) =>
-        setTimeout(() => rej(new Error("Generation timed out")), TIMEOUT_MS)
+        setTimeout(() => rej(new Error("Generation timed out")), timeoutMs)
       ),
     ]);
     const content = (completion as { choices?: { message?: { content?: string } }[] })
@@ -198,22 +209,27 @@ async function callBuiltIn(messages: ChatMessage[], temp: number) {
  * Each provider gets 2 attempts (transient 429/5xx are common);
  * the first provider that answers wins.
  */
-export async function llmComplete(messages: ChatMessage[], temp: number, opts?: { model?: string; json?: boolean }): Promise<LlmResult> {
+export async function llmComplete(
+  messages: ChatMessage[],
+  temp: number,
+  opts?: { model?: string; json?: boolean; timeoutMs?: number }
+): Promise<LlmResult> {
   const providers: { name: string; run: () => Promise<string> }[] = [];
   const orKey = process.env.OPENROUTER_API_KEY;
   const oaKey = process.env.OPENAI_API_KEY;
   const anKey = process.env.ANTHROPIC_API_KEY;
 
+  const t = opts?.timeoutMs ?? TIMEOUT_MS;
   if (orKey)
     providers.push({
       name: `openrouter:${opts?.model || "gpt-4o-mini"}`,
-      run: () => callOpenRouter(orKey, opts?.model || "openai/gpt-4o-mini", messages, temp, !!opts?.json),
+      run: () => callOpenRouter(orKey, opts?.model || "openai/gpt-4o-mini", messages, temp, !!opts?.json, t),
     });
   if (oaKey)
-    providers.push({ name: "openai:gpt-4o-mini", run: () => callOpenAI(oaKey, messages, temp, !!opts?.json) });
+    providers.push({ name: "openai:gpt-4o-mini", run: () => callOpenAI(oaKey, messages, temp, !!opts?.json, t) });
   if (anKey)
-    providers.push({ name: "anthropic:haiku", run: () => callAnthropic(anKey, messages, temp) });
-  providers.push({ name: "built-in", run: () => callBuiltIn(messages, temp) });
+    providers.push({ name: "anthropic:haiku", run: () => callAnthropic(anKey, messages, temp, t) });
+  providers.push({ name: "built-in", run: () => callBuiltIn(messages, temp, t) });
 
   const errors: string[] = [];
   let degraded = false;
@@ -391,6 +407,30 @@ ${bits.join("\n")}
 - Do NOT invent visual details that contradict the asset.`;
 }
 
+/**
+ * "3 more of this one" block: the user flagged a post as a winner; every
+ * variant must take the SAME idea somewhere new, not paraphrase it.
+ */
+function moreLikeBlock(ml: { original: string; avoid?: string[] }): string {
+  const avoid = (ml.avoid || [])
+    .filter((s) => typeof s === "string" && s.trim())
+    .slice(0, 4)
+    .map((s, i) => `${i + 1}. ${s.replace(/\s+/g, " ").slice(0, 160)}`)
+    .join("\n");
+  return `
+
+MORE LIKE THIS — the user picked the post below as one that WORKS. Write a NEW post with the same underlying idea and energy, but NOT a copy:
+
+WINNER POST:
+${ml.original.replace(/\s+/g, " ").slice(0, 600)}
+
+VARIATION RULES:
+- Different opening words and a different hook architecture than the winner.
+- Same topic territory, NEW angle: next step, opposite take, deeper layer, a specific story, or a surprising consequence.
+- It must stand alone — a reader who never saw the winner still gets the full value.
+- Do NOT reuse any sentence or phrase from the winner${avoid ? ` or from these variations that already exist:\n${avoid}` : ""}.`;
+}
+
 function platformBlock(platform: PlatformId, type: GenType): string {
   const spec = PLATFORMS[platform];
   const rules = type === "image_prompt" ? "" : `\nPLATFORM FORMATTING (${spec.name}):\n` + spec.formatRules.map((r) => `- ${r}`).join("\n");
@@ -443,6 +483,70 @@ ${persona.visual_style ? `- Their visual style: ${persona.visual_style}` : ""}`;
 
 /* ------------------------------- post-process ------------------------------- */
 
+/**
+ * Few-shot exemplars: real posts by this person, verbatim in the system
+ * prompt. Statistics describe a voice; examples demonstrate it. Showing the
+ * model 2-3 gold samples is the single highest-leverage quality input.
+ */
+export function renderExemplarBlock(samples: string[]): string {
+  const gold = samples
+    .map((s) => (s || "").trim())
+    .filter((s) => s.length > 40)
+    .slice(0, 3);
+  if (!gold.length) return "";
+  return (
+    "\n\nVOICE EXEMPLARS — actual posts by this person. Match this exact feel (rhythm, attitude, vocabulary, line breaks), not a generic 'social media' voice:\n" +
+    gold.map((s) => `---\n${s.slice(0, 420)}`).join("\n---\n") +
+    "\n---\nWrite like these. If the Voice DNA stats and these examples ever conflict, the examples win."
+  );
+}
+
+/**
+ * Editor polish pass: a fast critique-and-refine call that tightens hooks,
+ * cuts flab, and de-generifies the draft. The polished version only ships if
+ * it scores at least as well on voice match as the original — polish never
+ * makes a draft worse.
+ */
+async function polishDraft(
+  text: string,
+  opts: { persona: PersonaInput; fingerprint: VoiceFingerprint; type: GenType; systemBase: string; model?: string }
+): Promise<{ text: string; polished: boolean }> {
+  const messages: ChatMessage[] = [
+    { role: "system", content: opts.systemBase },
+    {
+      role: "user",
+      content: `EDIT this ${opts.type.replace("_", " ")} — make it impossible to ignore while keeping ${opts.persona.name}'s exact voice.
+
+Fix, in priority order:
+1. HOOK: is the first line a reason to stop scrolling? If not, rebuild it (specific moment, bold claim, or sharp question).
+2. FLAB: cut every word that isn't earning its place. One idea per line.
+3. GENERIC: replace any sentence that could appear in anyone's post with one only ${opts.persona.name} would write (concrete detail, number, name, or opinion).
+4. LANDING: the last line should stick, not summarize.
+
+Keep the same format, same language, and the same core message. Do not add meta commentary. Output ONLY the improved ${opts.type.replace("_", " ")}, nothing else.
+
+DRAFT TO EDIT:
+${text}`,
+    },
+  ];
+  try {
+    const res = await llmComplete(messages, 0.4, {
+      model: opts.model,
+      timeoutMs: 20_000,
+    });
+    const candidate = stripMetaWrapping(res.content);
+    if (!candidate || candidate.length < 20) return { text, polished: false };
+    // Polish must never regress: keep it only if it scores >= the original.
+    const before = voiceMatchScore(text, opts.fingerprint);
+    const after = voiceMatchScore(candidate, opts.fingerprint);
+    // Small tolerance: an equal-or-better score wins; a 3+ point gain is a clear win.
+    if (after >= before - 2) return { text: candidate, polished: true };
+    return { text, polished: false };
+  } catch {
+    return { text, polished: false };
+  }
+}
+
 export interface RunVariantArgs {
   persona: PersonaInput;
   type: GenType;
@@ -456,15 +560,18 @@ export interface RunVariantArgs {
   posted?: { content?: string }[];
   asset?: GenerateRequest["assetContext"];
   rewrite?: { original: string; instruction: string };
+  moreLike?: { original: string; avoid?: string[] };
+  polish?: boolean;
   model?: string;
 }
 
-/** One variant = one LLM call + full post-processing. */
+/** One variant = one LLM call + full post-processing (+ optional polish). */
 export async function runVariant(args: RunVariantArgs): Promise<VariantResult> {
   const { persona, type, topic, platform, strategy, fingerprint, systemBase } = args;
 
   const userPrompt =
     typeTask(type, topic || "", persona, strategy, args.rewrite) +
+    (args.moreLike ? moreLikeBlock(args.moreLike) : "") +
     (args.includePlatformBlock ? platformBlock(platform, type) : "");
 
   const messages: ChatMessage[] = [
@@ -515,6 +622,33 @@ export async function runVariant(args: RunVariantArgs): Promise<VariantResult> {
     }
   }
 
+  const preScrub = gate.text;
+
+  // Editor polish (optional): tighten hook/flab/generic phrasing. Only kept
+  // when it doesn't regress the voice-match score.
+  let polished = false;
+  if (args.polish && !gate.report.blocked && preScrub.length > 40) {
+    const result = await polishDraft(preScrub, {
+      persona,
+      fingerprint,
+      type,
+      systemBase,
+      model: args.model,
+    });
+    if (result.polished) {
+      const polishedGate = qualityGate(result.text, {
+        personaName: persona.name,
+        forbidden: persona.forbidden_topics || [],
+        platform,
+        posted: args.posted,
+      });
+      if (!polishedGate.report.blocked) {
+        gate = polishedGate;
+        polished = true;
+      }
+    }
+  }
+
   const voiceMatch = voiceMatchScore(gate.text, fingerprint);
   const wordCount = gate.text.split(/\s+/).filter(Boolean).length;
 
@@ -538,6 +672,8 @@ export async function runVariant(args: RunVariantArgs): Promise<VariantResult> {
 
   return {
     content: gate.text,
+    original:
+      !polished && gate.report.clichesRemoved.length && preScrub !== gate.text ? preScrub : undefined,
     rank: 0,
     voiceMatch,
     voiceNote: voiceMatchNote(voiceMatch),
@@ -549,18 +685,21 @@ export async function runVariant(args: RunVariantArgs): Promise<VariantResult> {
     fit: { fits: gate.fit.fits, overBy: gate.fit.overBy, length: gate.fit.length, limit: gate.fit.limit },
     blocked: gate.report.blocked,
     blockReason: gate.report.blockReason,
+    polished,
   };
 }
 
-/** Build the shared system prompt (persona + fingerprint + anti-slop). */
+/** Build the shared system prompt (persona + fingerprint + exemplars + anti-slop). */
 export function buildSystemPrompt(
   persona: PersonaInput,
-  fingerprint: VoiceFingerprint
+  fingerprint: VoiceFingerprint,
+  exemplars?: string[]
 ): string {
   const fingerprintBlock = renderFingerprintBlock(fingerprint);
+  const exemplarBlock = renderExemplarBlock(exemplars || []);
   return `You are the personal content engine for ${persona.name}. You write AS them — their rhythm, their vocabulary, their attitude. Not a brand version of them. Them.
 
-${personaBlock(persona)}${fingerprintBlock}
+${personaBlock(persona)}${fingerprintBlock}${exemplarBlock}
 
 HARD RULES:
 - Never break character. Never mention being an AI or that content is generated.

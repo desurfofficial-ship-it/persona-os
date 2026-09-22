@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { fetchVoiceSamples } from "@/lib/voiceSamples";
+import VoiceCurator from "@/components/VoiceCurator";
 
 interface Draft {
   id: string;
@@ -150,6 +151,14 @@ export default function PersonaDetailPage() {
     setSampleLoading(true);
     setSample("");
     try {
+      // Gold set first — the curated voice beats auto-collected drafts.
+      const gold = (persona.voice_samples || [])
+        .filter(
+          (s): s is { id: string; text: string; source: "curated" | "draft" | "posted"; enabled: boolean; addedAt: string } =>
+            !!s && typeof s === "object" && typeof (s as { text?: unknown }).text === "string"
+        )
+        .filter((s) => s.enabled && s.text.trim().length > 20)
+        .map((s) => s.text);
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -157,6 +166,7 @@ export default function PersonaDetailPage() {
           persona,
           type: "caption",
           voiceSamples: await fetchVoiceSamples(persona.id),
+          ...(gold.length ? { goldSamples: gold } : {}),
           topic: "Write one short sample post that perfectly demonstrates this persona's voice and energy.",
           model: "openai/gpt-4o-mini",
         }),
@@ -312,6 +322,8 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
             Check
           </a>
         </div>
+
+        <VoiceCurator persona={persona} />
 
         {editing ? (
           <div className="space-y-5 mb-10">
