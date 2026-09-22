@@ -125,7 +125,23 @@ export default function NewPersonaPage() {
           <h1 className="text-3xl font-bold">Create Persona</h1>
         </div>
 
-        {/* Templates */}
+        {/* Two paths */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+          <a
+            href="/dashboard/personas/from-posts"
+            className="p-5 bg-zinc-900 border border-zinc-700 rounded-xl hover:border-zinc-500 transition"
+          >
+            <h3 className="font-semibold mb-1">Build from your posts</h3>
+            <p className="text-sm text-zinc-400">
+              Paste real posts → auto-extract voice, tone & rules
+            </p>
+          </a>
+          <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-xl">
+            <h3 className="font-semibold mb-1">Start from template</h3>
+            <p className="text-sm text-zinc-400">Pick a starting point below and customize</p>
+          </div>
+        </div>
+
         <div className="mb-8">
           <p className="text-sm text-zinc-400 mb-3">Quick start templates</p>
           <div className="grid grid-cols-2 gap-3">

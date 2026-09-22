@@ -11,6 +11,7 @@ interface Draft {
   type: string;
   content: string;
   created_at: string;
+  posted?: boolean;
   personas?: { name: string };
 }
 
@@ -21,6 +22,7 @@ export default function DraftsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterPersona, setFilterPersona] = useState("all");
+  const [filterPosted, setFilterPosted] = useState("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [improvingId, setImprovingId] = useState<string | null>(null);
   const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
@@ -59,7 +61,12 @@ export default function DraftsPage() {
       ((d.personas as any)?.name || "").toLowerCase().includes(search.toLowerCase());
 
     const matchesPersona = filterPersona === "all" || d.persona_id === filterPersona;
-    return matchesSearch && matchesPersona;
+    const matchesPosted =
+      filterPosted === "all" ||
+      (filterPosted === "posted" && d.posted) ||
+      (filterPosted === "unposted" && !d.posted);
+
+    return matchesSearch && matchesPersona && matchesPosted;
   });
 
   const toggleSelect = (id: string) => {
@@ -85,11 +92,29 @@ export default function DraftsPage() {
     if (!confirm("Delete this draft?")) return;
     await supabase.from("content_drafts").delete().eq("id", id);
     setDrafts((prev) => prev.filter((d) => d.id !== id));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
+  };
+
+  const togglePosted = async (draft: Draft) => {
+    const newValue = !draft.posted;
+    // Optimistic update
+    setDrafts((prev) =>
+      prev.map((d) => (d.id === draft.id ? { ...d, posted: newValue } : d))
+    );
+
+    // Note: requires a `posted` boolean column on content_drafts.
+    // If the column doesn't exist yet, this will fail silently in UI but we try.
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ posted: newValue })
+      .eq("id", draft.id);
+
+    if (error) {
+      // Revert on error
+      setDrafts((prev) =>
+        prev.map((d) => (d.id === draft.id ? { ...d, posted: draft.posted } : d))
+      );
+      console.error("Posted flag error (you may need to add a boolean column 'posted' to content_drafts):", error);
+    }
   };
 
   const handleImprove = async (draft: Draft) => {
@@ -138,7 +163,7 @@ export default function DraftsPage() {
         (d) =>
           `=== ${(d.personas as any)?.name || "Unknown"} | ${d.type} | ${new Date(
             d.created_at
-          ).toLocaleString()} ===\n${d.content}\n`
+          ).toLocaleString()} ${d.posted ? "| POSTED" : ""} ===\n${d.content}\n`
       )
       .join("\n\n");
 
@@ -173,7 +198,7 @@ export default function DraftsPage() {
             {selectedIds.size > 0 && (
               <button
                 onClick={handleBulkDelete}
-                className="px-4 py-2 bg-red-900/50 border border-red-800 text-red-200 rounded-lg text-sm hover:bg-red-900/70"
+                className="px-4 py-2 bg-red-900/50 border border-red-800 text-red-200 rounded-lg text-sm"
               >
                 Delete ({selectedIds.size})
               </button>
@@ -207,6 +232,15 @@ export default function DraftsPage() {
               </option>
             ))}
           </select>
+          <select
+            value={filterPosted}
+            onChange={(e) => setFilterPosted(e.target.value)}
+            className="px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+          >
+            <option value="all">All</option>
+            <option value="posted">Posted</option>
+            <option value="unposted">Not Posted</option>
+          </select>
         </div>
 
         {filtered.length === 0 ? (
@@ -229,9 +263,7 @@ export default function DraftsPage() {
               <div
                 key={draft.id}
                 className={`bg-zinc-900 border rounded-xl p-5 transition ${
-                  selectedIds.has(draft.id)
-                    ? "border-zinc-500"
-                    : "border-zinc-800"
+                  selectedIds.has(draft.id) ? "border-zinc-500" : "border-zinc-800"
                 }`}
               >
                 <div className="flex items-start justify-between mb-3 gap-4">
@@ -243,20 +275,33 @@ export default function DraftsPage() {
                       className="mt-1"
                     />
                     <div>
-                      <span className="text-xs uppercase tracking-wide text-zinc-500">
-                        {draft.type.replace("_", " ")}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs uppercase tracking-wide text-zinc-500">
+                          {draft.type.replace("_", " ")}
+                        </span>
+                        {draft.posted && (
+                          <span className="text-xs px-1.5 py-0.5 bg-green-900/40 text-green-300 rounded">
+                            Posted
+                          </span>
+                        )}
+                      </div>
                       <p className="text-sm text-zinc-400 mt-0.5">
                         {(draft.personas as any)?.name || "Unknown"} ·{" "}
                         {new Date(draft.created_at).toLocaleString()}
                       </p>
                     </div>
                   </div>
-                  <div className="flex gap-2 shrink-0">
+                  <div className="flex flex-wrap gap-2 shrink-0">
+                    <button
+                      onClick={() => togglePosted(draft)}
+                      className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
+                    >
+                      {draft.posted ? "Unmark" : "Mark Posted"}
+                    </button>
                     <button
                       onClick={() => handleImprove(draft)}
                       disabled={improvingId === draft.id}
-                      className="text-xs text-zinc-400 hover:text-white px-2 py-1 border border-zinc-700 rounded disabled:opacity-50"
+                      className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                     >
                       {improvingId === draft.id ? "Improving..." : "Improve"}
                     </button>
