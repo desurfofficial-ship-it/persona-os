@@ -30,8 +30,9 @@ export default function Home() {
           <span className="text-zinc-400">Every single post.</span>
         </h1>
         <p className="mt-6 text-lg text-zinc-400 max-w-xl">
-          Persona OS helps creators and founders build coherent digital identities
-          and generate high-quality content that never breaks character.
+          Paste 3–10 of your best posts. Persona OS learns your actual voice — rhythm, casing,
+          vocabulary — then writes captions, scripts and threads that sound like you wrote them
+          on your best day. Formatted for every platform. Clichés scrubbed before you see them.
         </p>
         <div className="mt-10 flex flex-col sm:flex-row gap-4">
           <Link
@@ -53,21 +54,26 @@ export default function Home() {
       <section className="px-6 py-20 border-t border-zinc-900">
         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
           <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-            <h3 className="text-lg font-semibold mb-2">Persona Profiles</h3>
+            <h3 className="text-lg font-semibold mb-2">Voice DNA Engine</h3>
             <p className="text-zinc-400 text-sm leading-relaxed">
-              Define backstory, tone, lifestyle pillars, content rules and forbidden topics.
+              Your real posts become a measured fingerprint: sentence rhythm, emoji policy,
+              signature words. Every draft is scored against it — “Voice match 94%” — before
+              you ever see it.
             </p>
           </div>
           <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-            <h3 className="text-lg font-semibold mb-2">AI Content Engine</h3>
+            <h3 className="text-lg font-semibold mb-2">3 structures, 4 platforms</h3>
             <p className="text-zinc-400 text-sm leading-relaxed">
-              Generate captions, scripts, story arcs and image prompts that stay 100% in character.
+              Every generation gives you ranked variants — story, bold take, framework — built
+              natively for X, LinkedIn, Instagram or Threads. Over the limit? It becomes a
+              ready-to-paste thread.
             </p>
           </div>
           <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-            <h3 className="text-lg font-semibold mb-2">Asset Vault</h3>
+            <h3 className="text-lg font-semibold mb-2">Quality gate</h3>
             <p className="text-zinc-400 text-sm leading-relaxed">
-              Store photos and videos tied to each persona so everything stays organized.
+              “Here's your caption” wrappers, game-changers, and assistant leaks never reach
+              your screen. The consistency checker quotes exact lines and hands you fixes.
             </p>
           </div>
         </div>

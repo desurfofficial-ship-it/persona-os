@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
+import { fetchVoiceSamples } from "@/lib/voiceSamples";
 
 export default function SeriesPlannerPage() {
   const router = useRouter();
@@ -52,7 +53,8 @@ export default function SeriesPlannerPage() {
         body: JSON.stringify({
           persona: selectedPersona,
           type: "story_arc",
-          topic: `Create a ${days}-day content series${theme ? ` around the theme: ${theme}` : ""}. 
+          voiceSamples: await fetchVoiceSamples(selectedPersona.id),
+          topic: `Create a ${days}-day content series${theme ? ` around the theme: ${theme}` : ""}.
 For each day provide:
 - Day number
 - Post type (caption / short script / carousel idea)

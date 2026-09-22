@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
+import { fetchVoiceSamples } from "@/lib/voiceSamples";
 import { copyAndOpen } from "@/lib/share";
 import { nextSevenDays } from "@/lib/calendar";
 
@@ -151,6 +152,7 @@ export default function DraftsPage() {
         body: JSON.stringify({
           persona,
           type: draft.type,
+          voiceSamples: await fetchVoiceSamples(draft.persona_id),
           topic: `Improve and tighten this existing ${draft.type}. Keep the same core message but make it stronger, more in character, and higher quality:\n\n${draft.content}`,
           model: "openai/gpt-4o-mini",
         }),

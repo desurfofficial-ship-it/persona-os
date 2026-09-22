@@ -1,209 +1,132 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import {
+  buildSystemPrompt,
+  fingerprintFrom,
+  rankVariants,
+  runVariant,
+  strategiesFor,
+  type GenType,
+  type PersonaInput,
+  type VariantResult,
+} from "@/lib/generation";
+import type { PlatformId } from "@/lib/platforms";
 
-interface PostedContextItem {
-  content?: string;
-  created_at?: string;
-}
-
-interface AssetContext {
-  type?: string;
-  tags?: string[];
-  content?: string;
-  description?: string;
-}
+const VALID_TYPES: GenType[] = ["caption", "script", "story_arc", "image_prompt"];
+const VALID_PLATFORMS: PlatformId[] = ["x", "linkedin", "instagram", "threads"];
 
 export async function POST(req: NextRequest) {
   try {
-    const { persona, type, topic, model, postedContext, assetContext } = await req.json();
+    const body = await req.json();
+    const persona = body.persona as PersonaInput | undefined;
+    const type = body.type as GenType | undefined;
 
-    if (!persona || !type) {
-      return NextResponse.json({ error: "Missing persona or type" }, { status: 400 });
+    if (!persona || !type || !VALID_TYPES.includes(type)) {
+      return NextResponse.json(
+        { error: "Missing or invalid persona/type" },
+        { status: 400 }
+      );
     }
 
-    // Posted-aware generation: tell the model what the user already published
-    // so it produces fresh angles instead of repeating them.
-    let postedBlock = "";
-    if (Array.isArray(postedContext) && postedContext.length > 0) {
-      const list = (postedContext as PostedContextItem[])
-        .slice(0, 12)
-        .map((p, i) => {
-          const excerpt = String(p.content || "").replace(/\s+/g, " ").slice(0, 220);
-          return `${i + 1}. ${excerpt}`;
+    // Legacy callers (ideas, series, drafts improve, persona sample) omit
+    // `platform` — they get the old single-string response, no platform
+    // formatting, one variant. The generate page sends the full request.
+    const legacy = !body.platform;
+    const platform: PlatformId = VALID_PLATFORMS.includes(body.platform)
+      ? body.platform
+      : "x";
+    const variants = legacy ? 1 : Math.max(1, Math.min(3, Number(body.variants) || 3));
+
+    const voiceSamples = Array.isArray(body.voiceSamples)
+      ? (body.voiceSamples as string[]).filter((s: unknown) => typeof s === "string" && s.length > 20)
+      : [];
+    const postedContext = Array.isArray(body.postedContext)
+      ? (body.postedContext as { content?: string }[])
+      : [];
+
+    // Voice DNA: measured from the persona's real writing (pasted posts,
+    // drafts, posted content — whatever the client sends).
+    const fingerprint = fingerprintFrom([
+      ...voiceSamples,
+      ...postedContext.map((p) => p.content || ""),
+    ]);
+    const systemBase = buildSystemPrompt(persona, fingerprint);
+    const strategies = strategiesFor(type);
+
+    // strategyOffset lets per-card regeneration rotate structures instead of
+    // always producing the same first strategy.
+    const offset = Number.isFinite(Number(body.strategyOffset))
+      ? Math.abs(Math.floor(Number(body.strategyOffset)))
+      : 0;
+    const jobs = Array.from({ length: variants }, (_, i) =>
+      strategies[(i + offset) % strategies.length]
+    );
+
+    const settled = await Promise.allSettled(
+      jobs.map((strategy) =>
+        runVariant({
+          persona,
+          type,
+          topic: body.topic,
+          platform,
+          includePlatformBlock: !legacy,
+          strategy,
+          fingerprint,
+          systemBase,
+          posted: postedContext,
+          asset: body.assetContext,
+          rewrite: body.rewrite,
+          model: body.model,
         })
-        .join("\n");
-      postedBlock = `
+      )
+    );
 
-RECENTLY POSTED BY THIS USER (their real published content, newest first):
-${list}
-
-AVOIDING REPEATS:
-- Do NOT reuse the topics, hooks, claims, or angles listed above.
-- If the requested topic is close to a posted item, take a noticeably different angle (new insight, opposite take, next step, deeper layer).
-- The output must feel like the next post, not a rerun.`;
-    }
-
-    // Vault-aware generation: when the post will sit alongside a specific
-    // asset (photo/video/text from the vault), tell the model about it so
-    // the words fit the image instead of floating free.
-    let assetBlock = "";
-    const ac = assetContext as AssetContext | undefined;
-    if (ac && (ac.description || ac.content || (ac.tags && ac.tags.length > 0))) {
-      const bits: string[] = [];
-      if (ac.description) bits.push(`what it shows: ${String(ac.description).slice(0, 300)}`);
-      if (ac.content) bits.push(`attached note/text: ${String(ac.content).slice(0, 300)}`);
-      if (ac.tags && ac.tags.length) bits.push(`tags: ${ac.tags.join(", ")}`);
-      assetBlock = `\n\nTHE POST WILL ACCOMPANY A VAULT ASSET (${ac.type || "image"}):
-${bits.join("\n")}
-- Write the words so they naturally pair with this asset (caption what's visible, build on the note).
-- Do NOT invent visual details that contradict the asset.`;
-    }
-
-    const systemPrompt = `You are a content writer that MUST stay 100% in character for the following persona.
-
-PERSONA NAME: ${persona.name}
-BACKSTORY: ${persona.backstory}
-TONE OF VOICE: ${persona.tone_of_voice || "natural and authentic"}
-LIFESTYLE PILLARS: ${(persona.lifestyle_pillars || []).join(", ") || "none specified"}
-CONTENT RULES: ${(persona.content_rules || []).join("; ") || "none"}
-FORBIDDEN TOPICS: ${(persona.forbidden_topics || []).join(", ") || "none"}
-
-STRICT RULES:
-- Never break character.
-- Never mention that you are an AI or that this is generated.
-- Match the tone of voice exactly.
-- Stay consistent with the backstory and lifestyle pillars.
-- Follow every content rule.
-- Completely avoid any forbidden topics.
-- If the requested topic conflicts with the persona, reframe it or refuse politely in character.` + postedBlock + assetBlock;
-
-    let userPrompt = "";
-    switch (type) {
-      case "caption":
-        userPrompt = `Write a short, high-performing social media caption${topic ? ` about: ${topic}` : ""}. Keep it punchy and under 280 characters if possible. Make it feel completely native to this persona.`;
-        break;
-      case "script":
-        userPrompt = `Write a short video script (30-60 seconds spoken)${topic ? ` about: ${topic}` : ""}. Include a strong hook in the first 3 seconds and natural spoken language.`;
-        break;
-      case "story_arc":
-        userPrompt = `Create a short content series outline (3-5 posts)${topic ? ` around: ${topic}` : ""}. Each post should feel like a natural progression for this persona.`;
-        break;
-      case "image_prompt":
-        userPrompt = `Write a detailed image generation prompt that would produce a photo matching this persona's world${topic ? ` related to: ${topic}` : ""}. Be specific about lighting, setting, clothing, expression, and mood.`;
-        break;
-      default:
-        userPrompt = `Generate content of type "${type}"${topic ? ` about ${topic}` : ""}.`;
-    }
-
-    const openrouterKey = process.env.OPENROUTER_API_KEY;
-    const openaiKey = process.env.OPENAI_API_KEY;
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
-
-    const selectedModel = model || "openai/gpt-4o-mini";
-
-    if (openrouterKey) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openrouterKey}`,
-          "HTTP-Referer": "https://persona-os.app",
-          "X-Title": "Persona OS",
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.75,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        console.error("OpenRouter error:", data);
-        throw new Error(data.error?.message || data.message || "OpenRouter error");
+    const ok: VariantResult[] = [];
+    let failed = 0;
+    for (const s of settled) {
+      if (s.status === "fulfilled") ok.push(s.value);
+      else {
+        failed++;
+        console.error("Variant failed:", s.reason);
       }
-
-      const content = data.choices?.[0]?.message?.content || "No content generated";
-      return NextResponse.json({ content });
     }
 
-    if (openaiKey) {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openaiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.75,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || "OpenAI error");
-
-      return NextResponse.json({
-        content: data.choices[0]?.message?.content || "No content generated",
-      });
+    if (ok.length === 0) {
+      const reason = settled[0]?.status === "rejected" ? String(settled[0].reason?.message || settled[0].reason) : "unknown";
+      return NextResponse.json(
+        { error: `Generation failed on every provider — ${reason.slice(0, 200)}` },
+        { status: 502 }
+      );
     }
 
-    if (anthropicKey) {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": anthropicKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-3-5-haiku-20241022",
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-        }),
-      });
+    const ranked = rankVariants(ok);
+    const best = ranked.find((v) => !v.blocked) || ranked[0];
+    const provider = (settled.find((s) => s.status === "fulfilled") as PromiseFulfilledResult<VariantResult> | undefined)
+      ? "chain"
+      : "chain";
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || "Anthropic error");
-
-      return NextResponse.json({
-        content: data.content[0]?.text || "No content generated",
-      });
-    }
-
-    // Preview fallback: use the built-in LLM SDK when no external keys are set.
-    try {
-      const zai = await ZAI.create();
-      const completion = await zai.chat.completions.create({
-        messages: [
-          { role: "assistant", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        thinking: { type: "disabled" },
-      });
-      const content = completion.choices[0]?.message?.content;
-      if (content && content.trim()) {
-        return NextResponse.json({ content });
-      }
-    } catch (sdkErr) {
-      console.error("Built-in LLM fallback failed:", sdkErr);
-    }
+    const usable = ranked.filter((v) => !v.blocked);
+    const fingerprintMeta = fingerprint.samples
+      ? {
+          used: true,
+          samples: fingerprint.samples,
+          summary: `${fingerprint.sentenceSpread} rhythm · ${fingerprint.avgSentenceWords} words/sentence · ${fingerprint.casing} casing${fingerprint.topEmojis.length ? ` · uses ${fingerprint.topEmojis.join("")}` : " · no emoji"}`,
+        }
+      : { used: false, samples: 0, summary: "No real posts to learn from yet" };
 
     return NextResponse.json({
-      content: `[Simulated ${type} — ${persona.name}]\n\n${userPrompt}\n\n---\nAI generation is currently unavailable. Add OPENROUTER_API_KEY to .env.local for real generation.`,
+      engine: "v2",
+      variants: legacy ? [best] : ranked,
+      fingerprint: fingerprintMeta,
+      provider,
+      degraded: failed > 0,
+      failed,
+      // Legacy single-string shape for ideas / series / drafts / persona sample.
+      ...(legacy ? { content: best.content } : {}),
+      ...(usable.length === 0 ? { warning: "All variants failed the quality gate — shown with reasons" } : {}),
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Server error";
-    console.error(err);
+    console.error("generate error:", err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

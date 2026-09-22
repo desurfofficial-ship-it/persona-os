@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
+import { fetchVoiceSamples } from "@/lib/voiceSamples";
 
 interface Draft {
   id: string;
@@ -155,6 +156,7 @@ export default function PersonaDetailPage() {
         body: JSON.stringify({
           persona,
           type: "caption",
+          voiceSamples: await fetchVoiceSamples(persona.id),
           topic: "Write one short sample post that perfectly demonstrates this persona's voice and energy.",
           model: "openai/gpt-4o-mini",
         }),

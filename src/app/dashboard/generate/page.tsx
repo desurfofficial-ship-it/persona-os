@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState, useRef, Suspense, type RefObject } from "react";
+import { useEffect, useMemo, useState, useRef, Suspense, type RefObject } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
-import { copyAndOpen, copyToClipboard } from "@/lib/share";
+import { copyAndOpen, copyToClipboard, type Platform } from "@/lib/share";
 import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
 import {
   findSimilarPosts,
@@ -14,6 +14,9 @@ import {
   type Sensitivity,
   type SimilarPost,
 } from "@/lib/duplicate";
+import { extractVoiceFingerprint } from "@/lib/voice";
+import { splitThread, PLATFORMS, type PlatformId } from "@/lib/platforms";
+import type { VariantResult } from "@/lib/generation";
 
 const MODELS = [
   { id: "openai/gpt-4o-mini", name: "GPT-4o Mini (Fast)" },
@@ -25,6 +28,13 @@ const MODELS = [
 const SENSITIVITY_KEY = "persona-os-dup-sensitivity";
 
 type ContentType = "caption" | "script" | "story_arc" | "image_prompt";
+
+const PLATFORM_TABS: { id: PlatformId; label: string; hint: string }[] = [
+  { id: "x", label: "X", hint: "280 chars, thread-aware" },
+  { id: "linkedin", label: "LinkedIn", hint: "first 210 chars decide it" },
+  { id: "instagram", label: "Instagram", hint: "caption + hashtags" },
+  { id: "threads", label: "Threads", hint: "casual, 500 chars" },
+];
 
 interface AssetCtx {
   id: string;
@@ -50,16 +60,19 @@ function GenerateContent() {
   const isWelcomeBack = searchParams.get("welcome") === "1";
 
   const WELCOME_PROMPT =
-    "I've been quiet for a few days — write an honest come-back post about where I've been and what I learned in the gap. No apology theater, just real.";
+    "I've been away from posting for a while. Write a come-back post that owns the gap honestly and turns it into the point of the post.";
 
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [selectedId, setSelectedId] = useState(preselectedId || "");
   const [type, setType] = useState<ContentType>("caption");
   const [topic, setTopic] = useState("");
   const [model, setModel] = useState("openai/gpt-4o-mini");
-  const [variations, setVariations] = useState(1);
-  const [results, setResults] = useState<string[]>([]);
+  const [variantCount, setVariantCount] = useState(3);
+  const [platform, setPlatform] = useState<PlatformId>("x");
+  const [results, setResults] = useState<VariantResult[]>([]);
+  const [fingerprintMeta, setFingerprintMeta] = useState<{ used: boolean; samples: number; summary: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadStage, setLoadStage] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -67,6 +80,9 @@ function GenerateContent() {
   // Posted-aware state
   const [postedPosts, setPostedPosts] = useState<PostedPost[]>([]);
   const [sensitivity, setSensitivity] = useState<Sensitivity>("medium");
+
+  // Voice DNA samples: this persona's real drafts + posted writing
+  const [voiceSamples, setVoiceSamples] = useState<string[]>([]);
 
   // Vault asset context (write-for-this-asset loop)
   const [assetCtx, setAssetCtx] = useState<AssetCtx | null>(null);
@@ -112,7 +128,6 @@ function GenerateContent() {
         setSelectedId(preselectedId);
         setActivePersonaId(preselectedId);
       } else {
-        // Default to the user's active voice when there is one.
         const active = getActivePersonaId();
         if (active && data?.some((p) => p.id === active)) setSelectedId(active);
         else if (data && data.length > 0) setSelectedId(data[0].id);
@@ -121,30 +136,46 @@ function GenerateContent() {
     load();
   }, [router, preselectedId]);
 
-  // Load already-posted content for the selected persona (for repeat-avoidance)
+  // Load posted content (repeat-avoidance) AND all drafts (voice samples)
+  // for the selected persona in one go.
   useEffect(() => {
     if (!selectedId) return;
     let cancelled = false;
 
-    const loadPosted = async () => {
-      const { data } = await supabase
-        .from("content_drafts")
-        .select("id, content, created_at")
-        .eq("persona_id", selectedId)
-        .eq("posted", true)
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      if (!cancelled) setPostedPosts((data || []) as PostedPost[]);
+    const load = async () => {
+      const [{ data: posted }, { data: drafts }] = await Promise.all([
+        supabase
+          .from("content_drafts")
+          .select("id, content, created_at")
+          .eq("persona_id", selectedId)
+          .eq("posted", true)
+          .order("created_at", { ascending: false })
+          .limit(20),
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .order("created_at", { ascending: false })
+          .limit(30),
+      ]);
+      if (cancelled) return;
+      setPostedPosts((posted || []) as PostedPost[]);
+      setVoiceSamples((drafts || []).map((d: { content: string }) => d.content).filter(Boolean));
     };
-    loadPosted();
+    load();
 
     return () => {
       cancelled = true;
     };
   }, [selectedId]);
 
-  // Welcome-back prefill: absence as content.
+  // Client-side Voice DNA preview — instant, before any generation.
+  const localFingerprint = useMemo(
+    () => extractVoiceFingerprint(voiceSamples),
+    [voiceSamples]
+  );
+
+  // Welcome-back prefill
   useEffect(() => {
     if (isWelcomeBack) setTopic(WELCOME_PROMPT);
   }, [isWelcomeBack]);
@@ -192,6 +223,22 @@ function GenerateContent() {
     return () => observer.disconnect();
   }, []);
 
+  // Loading stage rotation
+  useEffect(() => {
+    if (!loading) {
+      setLoadStage(0);
+      return;
+    }
+    const stages = [
+      "Reading their voice…",
+      `Writing ${variantCount > 1 ? `${variantCount} variants` : "your draft"}…`,
+      "Quality pass — scrubbing clichés, checking platform fit…",
+      "Ranking by voice match…",
+    ];
+    const t = setInterval(() => setLoadStage((s) => (s + 1) % stages.length), 1800);
+    return () => clearInterval(t);
+  }, [loading, variantCount]);
+
   const selectedPersona = personas.find((p) => p.id === selectedId);
 
   // Live duplicate warning (debounced)
@@ -218,7 +265,21 @@ function GenerateContent() {
     }
   };
 
-  const callGenerate = async (body: Record<string, unknown>) => {
+  const buildBody = (extra: Record<string, unknown> = {}) => ({
+    persona: selectedPersona,
+    type,
+    topic,
+    model,
+    platform,
+    voiceSamples,
+    postedContext: postedPosts,
+    assetContext: assetCtx
+      ? { type: assetCtx.type, tags: assetCtx.tags || [], content: assetCtx.content || "" }
+      : undefined,
+    ...extra,
+  });
+
+  const postGenerate = async (body: Record<string, unknown>) => {
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -226,7 +287,7 @@ function GenerateContent() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Generation failed");
-    return data.content as string;
+    return data;
   };
 
   const handleGenerate = async () => {
@@ -237,131 +298,130 @@ function GenerateContent() {
     setAllFormats({});
 
     try {
-      const allResults: string[] = [];
-
-      for (let i = 0; i < variations; i++) {
-        const content = await callGenerate({
-          persona: selectedPersona,
-          type,
-          topic,
-          model,
-          postedContext: postedPosts,
-          assetContext: assetCtx
-            ? {
-                type: assetCtx.type,
-                tags: assetCtx.tags || [],
-                content: assetCtx.content || "",
-              }
-            : undefined,
-        });
-        allResults.push(content);
-        await saveDraft(content, type);
+      const data = await postGenerate(buildBody({ variants: variantCount }));
+      setFingerprintMeta(data.fingerprint || null);
+      setResults(data.variants as VariantResult[]);
+      for (const v of data.variants as VariantResult[]) {
+        await saveDraft(v.content, type);
       }
-
-      setResults(allResults);
-    } catch (err: any) {
-      setError(err.message);
+      if (data.degraded) {
+        setError(`${data.failed} of ${variantCount} variants failed to generate — showing the ones that made it.`);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setLoading(false);
     }
   };
 
+  // Regenerate ONE card in place (keeps the others). Rotates the structural
+  // strategy so "regenerate" never repeats the same architecture twice.
+  const handleRegenerate = async (index: number) => {
+    if (!selectedPersona) return;
+    setRewritingIndex(index);
+    try {
+      const data = await postGenerate(
+        buildBody({ variants: 1, strategyOffset: Math.floor(Math.random() * 4) })
+      );
+      const fresh = (data.variants as VariantResult[])[0];
+      if (fresh) {
+        const next = [...results];
+        next[index] = fresh;
+        setResults(next);
+        await saveDraft(fresh.content, type);
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Regeneration failed");
+    } finally {
+      setRewritingIndex(null);
+    }
+  };
+
   const handleQuickRewrite = async (index: number, instruction: string) => {
-    if (!selectedPersona) return;
+    if (!selectedPersona || !results[index]) return;
     setRewritingIndex(index);
-
     try {
-      const content = await callGenerate({
-        persona: selectedPersona,
-        type,
-        topic: `${instruction}\n\nOriginal:\n${results[index]}`,
-        model,
-      });
-
-      const newResults = [...results];
-      newResults[index] = content;
-      setResults(newResults);
-      await saveDraft(content, type);
-    } catch (err: any) {
-      alert(err.message);
+      const data = await postGenerate(
+        buildBody({ variants: 1, rewrite: { original: results[index].content, instruction } })
+      );
+      const fresh = (data.variants as VariantResult[])[0];
+      if (fresh) {
+        const next = [...results];
+        next[index] = fresh;
+        setResults(next);
+        await saveDraft(fresh.content, type);
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Rewrite failed");
     } finally {
       setRewritingIndex(null);
     }
   };
 
-  const handleTransform = async (index: number, newType: string, instruction: string) => {
-    if (!selectedPersona) return;
+  const handleTransform = async (index: number, newType: ContentType, instruction: string) => {
+    if (!selectedPersona || !results[index]) return;
     setRewritingIndex(index);
-
     try {
-      const content = await callGenerate({
-        persona: selectedPersona,
-        type: newType,
-        topic: `${instruction}\n\nOriginal content:\n${results[index]}`,
-        model,
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona: selectedPersona,
+          type: newType,
+          model,
+          platform,
+          voiceSamples,
+          variants: 1,
+          rewrite: { original: results[index].content, instruction },
+        }),
       });
-
-      const newResults = [...results];
-      newResults[index] = content;
-      setResults(newResults);
-      await saveDraft(content, newType);
-    } catch (err: any) {
-      alert(err.message);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Transform failed");
+      const fresh = (data.variants as VariantResult[])[0];
+      if (fresh) {
+        const next = [...results];
+        next[index] = { ...fresh, hookType: `→ ${newType.replace("_", " ")}` };
+        setResults(next);
+        await saveDraft(fresh.content, newType);
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Transform failed");
     } finally {
       setRewritingIndex(null);
     }
   };
 
-  // One click → script + caption + image prompt, all in persona voice
   const handleMakeAllFormats = async (index: number) => {
-    if (!selectedPersona || makingAll !== null) return;
+    if (!selectedPersona || makingAll !== null || !results[index]) return;
     setMakingAll(index);
     setError(null);
 
     const jobs: { label: string; type: ContentType; instruction: string }[] = [
-      {
-        label: "Script",
-        type: "script",
-        instruction:
-          "Turn this into a short video script (30-45 seconds) while keeping the exact same voice and message",
-      },
-      {
-        label: "Caption",
-        type: "caption",
-        instruction:
-          "Turn this into a strong social media caption while keeping the exact same voice and message",
-      },
-      {
-        label: "Image prompt",
-        type: "image_prompt",
-        instruction:
-          "Turn this into a detailed image generation prompt that matches the persona's world and the content",
-      },
+      { label: "Script", type: "script", instruction: "Turn this into a short video script (30-45 seconds) keeping the exact same voice and message" },
+      { label: "Caption", type: "caption", instruction: "Turn this into a strong social media caption keeping the exact same voice and message" },
+      { label: "Image prompt", type: "image_prompt", instruction: "Turn this into a detailed image generation prompt that matches the persona's world and this content" },
     ];
 
     try {
       const formats: FormatResult[] = [];
-      // Sequential (not parallel): keeps preview LLM within rate limits and
-      // gives users a stable order Script → Caption → Image prompt.
       for (const j of jobs) {
         try {
-          const content = await callGenerate({
-            persona: selectedPersona,
-            type: j.type,
-            topic: `${j.instruction}\n\nOriginal content:\n${results[index]}`,
-            model,
-          });
-          formats.push({ label: j.label, type: j.type, content });
-          await saveDraft(content, j.type);
+          const data = await postGenerate(
+            buildBody({ type: j.type, variants: 1, rewrite: { original: results[index].content, instruction: j.instruction } })
+          );
+          const fresh = (data.variants as VariantResult[])[0];
+          if (fresh) {
+            formats.push({ label: j.label, type: j.type, content: fresh.content });
+            await saveDraft(fresh.content, j.type);
+          }
         } catch {
-          // One format failing shouldn't kill the others
+          // one format failing shouldn't kill the others
         }
       }
-
       if (formats.length === 0) throw new Error("All transforms failed");
       setAllFormats((prev) => ({ ...prev, [index]: formats }));
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Transform failed");
     } finally {
       setMakingAll(null);
     }
@@ -375,6 +435,13 @@ function GenerateContent() {
     }
   };
 
+  const sharePlatform: Record<PlatformId, Platform> = {
+    x: "twitter",
+    linkedin: "linkedin",
+    instagram: "instagram",
+    threads: "threads",
+  };
+
   const generateButton = (
     extraClass: string = "",
     ref?: RefObject<HTMLButtonElement | null>
@@ -385,9 +452,14 @@ function GenerateContent() {
       disabled={loading || !selectedPersona}
       className={`w-full min-h-[52px] bg-white text-black font-medium rounded-xl hover:bg-zinc-200 disabled:opacity-50 text-base ${extraClass}`}
     >
-      {loading
-        ? `Generating ${variations > 1 ? variations + " variations" : "..."}`
-        : "Generate"}
+      {loading ? (
+        <span className="inline-flex items-center gap-2">
+          <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+          {["Reading their voice…", "Writing…", "Quality pass…", "Ranking…"][loadStage % 4]}
+        </span>
+      ) : (
+        `Generate ${variantCount > 1 ? `${variantCount} variants` : ""}`
+      )}
     </button>
   );
 
@@ -444,7 +516,36 @@ function GenerateContent() {
             )}
           </div>
 
-          {/* Vault asset chip: the words will match this asset */}
+          {/* Voice DNA preview — measured from their real drafts */}
+          {selectedPersona && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium text-zinc-200">{selectedPersona.name}</p>
+                  <p className="text-xs text-zinc-500 line-clamp-1">{selectedPersona.backstory}</p>
+                </div>
+                <span
+                  className={`shrink-0 text-[10px] px-2 py-1 rounded-full border ${
+                    localFingerprint.samples >= 3
+                      ? "border-emerald-700 text-emerald-400 bg-emerald-950/40"
+                      : "border-zinc-700 text-zinc-500"
+                  }`}
+                  title={localFingerprint.samples >= 3 ? "Learned from this persona's drafts" : "Add 3+ drafts to lock the voice"}
+                >
+                  {localFingerprint.samples >= 3 ? "VOICE DNA ✓" : "VOICE DNA: LEARNING"}
+                </span>
+              </div>
+              {localFingerprint.samples > 0 && (
+                <p className="mt-2 text-[11px] text-zinc-500">
+                  {localFingerprint.sentenceSpread} rhythm · ~{localFingerprint.avgSentenceWords} words/sentence ·{" "}
+                  {localFingerprint.emojiPer100 >= 0.5 ? "uses emoji" : "no emoji"} · {localFingerprint.casing} casing
+                  {localFingerprint.topEmojis.length ? ` · ${localFingerprint.topEmojis.join("")}` : ""}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Vault asset chip */}
           {assetCtx && (
             <div className="bg-zinc-900 border border-zinc-600 rounded-xl p-4 flex items-center gap-4">
               {assetCtx.type === "image" && assetCtx.url ? (
@@ -482,12 +583,29 @@ function GenerateContent() {
             </div>
           )}
 
-          {selectedPersona && (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
-              <p className="font-medium text-zinc-200 mb-1">{selectedPersona.name}</p>
-              <p className="line-clamp-2">{selectedPersona.backstory}</p>
+          <div>
+            <label className="block text-sm text-zinc-400 mb-2">Where is this going?</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {PLATFORM_TABS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setPlatform(p.id)}
+                  title={p.hint}
+                  className={`px-3 py-2 min-h-[44px] rounded-lg text-sm font-medium ${
+                    platform === p.id
+                      ? "bg-white text-black"
+                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
-          )}
+            <p className="mt-2 text-[11px] text-zinc-500">
+              {PLATFORMS[platform].name}: {PLATFORMS[platform].limit} char limit · formatted natively ·
+              over-limit posts become ready-to-paste threads
+            </p>
+          </div>
 
           <div>
             <label className="block text-sm text-zinc-400 mb-2">Content Type</label>
@@ -524,15 +642,15 @@ function GenerateContent() {
               </select>
             </div>
             <div>
-              <label className="block text-sm text-zinc-400 mb-2">Variations</label>
+              <label className="block text-sm text-zinc-400 mb-2">Variants</label>
               <select
-                value={variations}
-                onChange={(e) => setVariations(Number(e.target.value))}
+                value={variantCount}
+                onChange={(e) => setVariantCount(Number(e.target.value))}
                 className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
               >
-                <option value={1}>1 variation</option>
-                <option value={2}>2 variations</option>
-                <option value={3}>3 variations</option>
+                <option value={1}>1 variant (fastest)</option>
+                <option value={2}>2 variants</option>
+                <option value={3}>3 variants — different structures</option>
               </select>
             </div>
           </div>
@@ -598,47 +716,123 @@ function GenerateContent() {
           {generateButton("", generateBtnRef)}
 
           {error && (
-            <div className="p-4 bg-red-900/40 border border-red-700 rounded-lg text-red-200 text-sm">
+            <div className="p-4 bg-amber-950/40 border border-amber-700 rounded-lg text-amber-200 text-sm">
               {error}
             </div>
           )}
 
-          {results.map((result, idx) => (
-            <div key={idx} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 sm:p-6">
-              <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
-                <h3 className="font-medium">
-                  {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
+          {/* Ranked variant cards */}
+          {results.map((variant, idx) => (
+            <div
+              key={idx}
+              className={`bg-zinc-900 border rounded-xl p-5 sm:p-6 ${
+                variant.rank === 1 && results.length > 1 ? "border-emerald-700/60" : "border-zinc-800"
+              }`}
+            >
+              <div className="flex flex-wrap justify-between items-start gap-2 mb-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-medium">
+                    {results.length > 1 ? `#${variant.rank} · ${variant.hookType}` : variant.hookType}
+                  </h3>
+                  {variant.rank === 1 && results.length > 1 && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-400">
+                      BEST MATCH
+                    </span>
+                  )}
                   {isFirstRun && idx === 0 && (
-                    <span className="ml-2 text-xs text-green-400 font-normal">
+                    <span className="text-xs text-green-400 font-normal">
                       Draft saved — last step: post it
                     </span>
                   )}
-                </h3>
-                {copiedIndex === idx && (
-                  <span className="text-xs text-green-400">Copied ✓</span>
+                </div>
+                {copiedIndex === idx && <span className="text-xs text-green-400">Copied ✓</span>}
+              </div>
+
+              {/* Quality strip: voice match · length · fit */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500 mb-3">
+                {fingerprintMeta?.used && (
+                  <span
+                    className={
+                      variant.voiceMatch >= 70
+                        ? "text-emerald-400"
+                        : variant.voiceMatch >= 55
+                          ? "text-zinc-400"
+                          : "text-amber-400"
+                    }
+                    title={variant.voiceNote}
+                  >
+                    Voice match {variant.voiceMatch}%
+                  </span>
+                )}
+                <span>{variant.wordCount} words</span>
+                <span className={variant.fit.fits ? "" : "text-amber-400"}>
+                  {variant.fit.length}/{variant.fit.limit} chars{variant.fit.fits ? "" : ` (${variant.fit.overBy} over)`}
+                </span>
+                {variant.repetition.score >= 35 && (
+                  <span className="text-amber-400" title={variant.repetition.against || ""}>
+                    {variant.repetition.score}% similar to a posted post
+                  </span>
                 )}
               </div>
 
-              <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-4">
-                {rewritingIndex === idx ? "Working..." : result}
-              </pre>
+              {variant.flags.length > 0 && (
+                <div className="mb-3 space-y-1">
+                  {variant.flags.map((f, i) => (
+                    <p key={i} className="text-[11px] text-amber-500/90">⚑ {f}</p>
+                  ))}
+                </div>
+              )}
 
-              {/* Copy & open platform — the one-tap handoff */}
+              <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-1">
+                {rewritingIndex === idx ? "Working…" : variant.content}
+              </pre>
+              <p className="text-[11px] text-zinc-600 mb-4">{variant.why}</p>
+
+              {/* Over-limit: ready-to-paste thread */}
+              {!variant.fit.fits && (
+                <div className="mb-4 bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+                  <p className="text-xs font-medium text-zinc-300 mb-3">
+                    Over the {variant.fit.limit}-char limit — here it is as a {PLATFORMS[platform].name} thread, ready to paste:
+                  </p>
+                  <div className="space-y-3">
+                    {splitThread(variant.content, variant.fit.limit).map((post, ti) => (
+                      <div key={ti} className="flex items-start gap-2">
+                        <pre className="flex-1 whitespace-pre-wrap text-xs text-zinc-300 leading-relaxed">
+                          {post}
+                        </pre>
+                        <button
+                          onClick={async () => {
+                            if (await copyToClipboard(post)) {
+                              setCopiedIndex(idx);
+                              setTimeout(() => setCopiedIndex((c) => (c === idx ? null : c)), 1200);
+                            }
+                          }}
+                          className="text-[10px] px-2 py-1 border border-zinc-700 rounded text-zinc-400 hover:text-white shrink-0"
+                        >
+                          Copy {ti + 1}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Copy & open — matched to the selected platform */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
                 <button
-                  onClick={() => copyAndOpen(result, "twitter")}
+                  onClick={() => copyAndOpen(variant.content, sharePlatform[platform])}
                   className="min-h-[46px] px-4 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
                 >
-                  Copy &amp; open X
+                  Copy &amp; open {PLATFORMS[platform].name}
                 </button>
                 <button
-                  onClick={() => copyAndOpen(result, "linkedin")}
-                  className="min-h-[46px] px-4 bg-[#0a66c2] text-white rounded-lg text-sm font-medium hover:bg-[#004182]"
+                  onClick={() => copyAndOpen(variant.content, platform === "linkedin" ? "twitter" : "linkedin")}
+                  className="min-h-[46px] px-4 border border-zinc-600 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800"
                 >
-                  Copy &amp; open LinkedIn
+                  Open {platform === "linkedin" ? "X" : "LinkedIn"} instead
                 </button>
                 <button
-                  onClick={() => handleCopyOnly(result, idx)}
+                  onClick={() => handleCopyOnly(variant.content, idx)}
                   className="min-h-[46px] px-4 border border-zinc-600 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800"
                 >
                   {copiedIndex === idx ? "Copied ✓" : "Copy only"}
@@ -648,11 +842,29 @@ function GenerateContent() {
               {/* Quick actions */}
               <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
                 <button
+                  onClick={() => handleRegenerate(idx)}
+                  disabled={rewritingIndex === idx || makingAll === idx}
+                  className="text-xs px-3 py-2 min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg font-medium hover:bg-zinc-700 disabled:opacity-50"
+                >
+                  ↻ Regenerate
+                </button>
+                <button
                   onClick={() => handleMakeAllFormats(idx)}
                   disabled={makingAll === idx || rewritingIndex === idx}
                   className="text-xs px-3 py-2 min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg font-medium hover:bg-zinc-700 disabled:opacity-50"
                 >
                   {makingAll === idx ? "Making all formats..." : "⚡ Make all formats"}
+                </button>
+                <button
+                  onClick={() =>
+                    router.push(
+                      `/dashboard/check?persona=${selectedPersona?.id || ""}&text=${encodeURIComponent(variant.content.slice(0, 2000))}`
+                    )
+                  }
+                  disabled={rewritingIndex === idx || makingAll === idx}
+                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  ✓ Check it
                 </button>
                 <button
                   onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
@@ -669,48 +881,28 @@ function GenerateContent() {
                   Longer
                 </button>
                 <button
-                  onClick={() =>
-                    handleQuickRewrite(idx, "Make this more aggressive and high-energy")
-                  }
+                  onClick={() => handleQuickRewrite(idx, "Make this more aggressive and high-energy")}
                   disabled={rewritingIndex === idx || makingAll === idx}
                   className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                 >
                   More Punch
                 </button>
                 <button
-                  onClick={() =>
-                    handleTransform(
-                      idx,
-                      "script",
-                      "Turn this into a short video script (30-45 seconds) while keeping the exact same voice and message"
-                    )
-                  }
+                  onClick={() => handleTransform(idx, "script", "Turn this into a short video script (30-45 seconds) keeping the exact same voice and message")}
                   disabled={rewritingIndex === idx || makingAll === idx}
                   className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                 >
                   → Script
                 </button>
                 <button
-                  onClick={() =>
-                    handleTransform(
-                      idx,
-                      "caption",
-                      "Turn this into a strong social media caption while keeping the exact same voice and message"
-                    )
-                  }
+                  onClick={() => handleTransform(idx, "caption", "Turn this into a strong social media caption keeping the exact same voice and message")}
                   disabled={rewritingIndex === idx || makingAll === idx}
                   className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                 >
                   → Caption
                 </button>
                 <button
-                  onClick={() =>
-                    handleTransform(
-                      idx,
-                      "image_prompt",
-                      "Turn this into a detailed image generation prompt that matches the persona's world and the content"
-                    )
-                  }
+                  onClick={() => handleTransform(idx, "image_prompt", "Turn this into a detailed image generation prompt that matches the persona's world and this content")}
                   disabled={rewritingIndex === idx || makingAll === idx}
                   className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                 >

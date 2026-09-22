@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
+import { fetchVoiceSamples } from "@/lib/voiceSamples";
 
 export default function IdeasPage() {
   const router = useRouter();
@@ -51,7 +52,8 @@ export default function IdeasPage() {
         body: JSON.stringify({
           persona: selectedPersona,
           type: "story_arc",
-          topic: `Generate ${count} high-quality content topic ideas that are perfect for this persona. 
+          voiceSamples: await fetchVoiceSamples(selectedPersona.id),
+          topic: `Generate ${count} high-quality content topic ideas that are perfect for this persona.
 For each idea provide:
 - A short punchy title
 - One sentence explaining why it fits the persona

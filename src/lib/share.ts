@@ -7,7 +7,7 @@
  * text and open the feed/composer directly.
  */
 
-export type Platform = "twitter" | "linkedin";
+export type Platform = "twitter" | "linkedin" | "instagram" | "threads";
 
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -31,14 +31,17 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-function twitterIntent(text: string): string {
-  // X hard-caps tweets at 280 chars — trim the prefill so nothing is lost.
-  const trimmed = text.length > 280 ? `${text.slice(0, 277).trimEnd()}...` : text;
-  return `https://twitter.com/intent/tweet?text=${encodeURIComponent(trimmed)}`;
-}
-
-function linkedinComposer(): string {
-  return "https://www.linkedin.com/feed/";
+function composeUrlFor(platform: Platform): string {
+  switch (platform) {
+    case "twitter":
+      return "https://twitter.com/intent/tweet";
+    case "linkedin":
+      return "https://www.linkedin.com/feed/";
+    case "instagram":
+      return "https://www.instagram.com/";
+    case "threads":
+      return "https://www.threads.net/";
+  }
 }
 
 export async function copyAndOpen(
@@ -47,7 +50,13 @@ export async function copyAndOpen(
 ): Promise<{ copied: boolean }> {
   const copied = await copyToClipboard(text);
 
-  const url = platform === "twitter" ? twitterIntent(text) : linkedinComposer();
+  // Only X supports text prefill; every other platform gets a plain composer.
+  const url =
+    platform === "twitter"
+      ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(
+          text.length > 280 ? `${text.slice(0, 277).trimEnd()}...` : text
+        )}`
+      : composeUrlFor(platform);
 
   // Open after the clipboard write so mobile Safari/Chrome keep the
   // user-gesture context for both actions.
@@ -59,4 +68,6 @@ export async function copyAndOpen(
 export const PLATFORM_LABEL: Record<Platform, string> = {
   twitter: "X / Twitter",
   linkedin: "LinkedIn",
+  instagram: "Instagram",
+  threads: "Threads",
 };
