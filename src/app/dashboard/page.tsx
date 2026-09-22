@@ -65,15 +65,21 @@ export default function DashboardPage() {
               <p className="text-sm text-zinc-500 mt-1">{userEmail}</p>
             )}
           </div>
-          <nav className="flex items-center gap-6 text-sm">
+          <nav className="flex items-center gap-5 text-sm">
             <a href="/dashboard" className="text-white">
               Dashboard
             </a>
             <a href="/dashboard/generate" className="text-zinc-400 hover:text-white">
               Generate
             </a>
+            <a href="/dashboard/vault" className="text-zinc-400 hover:text-white">
+              Vault
+            </a>
+            <a href="/dashboard/drafts" className="text-zinc-400 hover:text-white">
+              Drafts
+            </a>
             <a href="/dashboard/personas/new" className="text-zinc-400 hover:text-white">
-              + New Persona
+              + New
             </a>
             <button
               onClick={handleLogout}
@@ -140,20 +146,34 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <a
             href="/dashboard/generate"
             className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-600 transition"
           >
             <h2 className="text-lg font-semibold mb-2">AI Generate</h2>
             <p className="text-zinc-400 text-sm">
-              Create captions, scripts, story arcs & image prompts that stay in character
+              Captions, scripts, story arcs & image prompts that stay in character
             </p>
           </a>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 opacity-60">
+          <a
+            href="/dashboard/vault"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-600 transition"
+          >
             <h2 className="text-lg font-semibold mb-2">Asset Vault</h2>
-            <p className="text-zinc-400 text-sm">Coming soon</p>
-          </div>
+            <p className="text-zinc-400 text-sm">
+              Upload and organize photos & videos for each persona
+            </p>
+          </a>
+          <a
+            href="/dashboard/drafts"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-zinc-600 transition"
+          >
+            <h2 className="text-lg font-semibold mb-2">Content Drafts</h2>
+            <p className="text-zinc-400 text-sm">
+              All previously generated content in one place
+            </p>
+          </a>
         </div>
       </div>
     </div>
