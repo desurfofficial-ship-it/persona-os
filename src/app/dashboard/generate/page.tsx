@@ -53,6 +53,21 @@ function GenerateContent() {
 
   const selectedPersona = personas.find((p) => p.id === selectedId);
 
+  const saveDraft = async (content: string, contentType: string) => {
+    if (!selectedPersona) return;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      await supabase.from("content_drafts").insert({
+        persona_id: selectedPersona.id,
+        user_id: user.id,
+        type: contentType,
+        content,
+      });
+    }
+  };
+
   const handleGenerate = async () => {
     if (!selectedPersona) return;
     setLoading(true);
@@ -78,18 +93,7 @@ function GenerateContent() {
         if (!res.ok) throw new Error(data.error || "Generation failed");
 
         allResults.push(data.content);
-
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user) {
-          await supabase.from("content_drafts").insert({
-            persona_id: selectedPersona.id,
-            user_id: user.id,
-            type,
-            content: data.content,
-          });
-        }
+        await saveDraft(data.content, type);
       }
 
       setResults(allResults);
@@ -122,18 +126,37 @@ function GenerateContent() {
       const newResults = [...results];
       newResults[index] = data.content;
       setResults(newResults);
+      await saveDraft(data.content, type);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRewritingIndex(null);
+    }
+  };
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from("content_drafts").insert({
-          persona_id: selectedPersona.id,
-          user_id: user.id,
-          type,
-          content: data.content,
-        });
-      }
+  const handleTransform = async (index: number, newType: string, instruction: string) => {
+    if (!selectedPersona) return;
+    setRewritingIndex(index);
+
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona: selectedPersona,
+          type: newType,
+          topic: `${instruction}\n\nOriginal content:\n${results[index]}`,
+          model,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Transform failed");
+
+      const newResults = [...results];
+      newResults[index] = data.content;
+      setResults(newResults);
+      await saveDraft(data.content, newType);
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -254,41 +277,83 @@ function GenerateContent() {
                 <h3 className="font-medium">
                   {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
                 </h3>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
-                    disabled={rewritingIndex === idx}
-                    className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                  >
-                    Shorter
-                  </button>
-                  <button
-                    onClick={() => handleQuickRewrite(idx, "Make this longer and more detailed")}
-                    disabled={rewritingIndex === idx}
-                    className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                  >
-                    Longer
-                  </button>
-                  <button
-                    onClick={() =>
-                      handleQuickRewrite(idx, "Make this more aggressive and high-energy")
-                    }
-                    disabled={rewritingIndex === idx}
-                    className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                  >
-                    More Punch
-                  </button>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(result)}
-                    className="text-xs text-zinc-400 hover:text-white px-2 py-1"
-                  >
-                    Copy
-                  </button>
-                </div>
+                <button
+                  onClick={() => navigator.clipboard.writeText(result)}
+                  className="text-xs text-zinc-400 hover:text-white"
+                >
+                  Copy
+                </button>
               </div>
-              <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed">
-                {rewritingIndex === idx ? "Rewriting..." : result}
+
+              <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-4">
+                {rewritingIndex === idx ? "Working..." : result}
               </pre>
+
+              {/* Quick actions */}
+              <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
+                <button
+                  onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
+                  disabled={rewritingIndex === idx}
+                  className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  Shorter
+                </button>
+                <button
+                  onClick={() => handleQuickRewrite(idx, "Make this longer and more detailed")}
+                  disabled={rewritingIndex === idx}
+                  className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  Longer
+                </button>
+                <button
+                  onClick={() =>
+                    handleQuickRewrite(idx, "Make this more aggressive and high-energy")
+                  }
+                  disabled={rewritingIndex === idx}
+                  className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  More Punch
+                </button>
+                <button
+                  onClick={() =>
+                    handleTransform(
+                      idx,
+                      "script",
+                      "Turn this into a short video script (30-45 seconds) while keeping the exact same voice and message"
+                    )
+                  }
+                  disabled={rewritingIndex === idx}
+                  className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  → Script
+                </button>
+                <button
+                  onClick={() =>
+                    handleTransform(
+                      idx,
+                      "caption",
+                      "Turn this into a strong social media caption while keeping the exact same voice and message"
+                    )
+                  }
+                  disabled={rewritingIndex === idx}
+                  className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  → Caption
+                </button>
+                <button
+                  onClick={() =>
+                    handleTransform(
+                      idx,
+                      "image_prompt",
+                      "Turn this into a detailed image generation prompt that matches the persona's world and the content"
+                    )
+                  }
+                  disabled={rewritingIndex === idx}
+                  className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  → Image Prompt
+                </button>
+              </div>
             </div>
           ))}
         </div>

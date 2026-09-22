@@ -5,16 +5,26 @@ import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
+interface Draft {
+  id: string;
+  type: string;
+  content: string;
+  created_at: string;
+}
+
 export default function PersonaDetailPage() {
   const router = useRouter();
   const params = useParams();
   const id = params.id as string;
 
   const [persona, setPersona] = useState<Persona | null>(null);
+  const [recentDrafts, setRecentDrafts] = useState<Draft[]>([]);
   const [draftCount, setDraftCount] = useState(0);
   const [assetCount, setAssetCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
+  const [sample, setSample] = useState("");
+  const [sampleLoading, setSampleLoading] = useState(false);
 
   const [name, setName] = useState("");
   const [backstory, setBackstory] = useState("");
@@ -54,8 +64,7 @@ export default function PersonaDetailPage() {
       setRules((data.content_rules || []).join("\n"));
       setForbidden((data.forbidden_topics || []).join(", "));
 
-      // Counts
-      const [draftsRes, assetsRes] = await Promise.all([
+      const [draftsRes, assetsRes, recentRes] = await Promise.all([
         supabase
           .from("content_drafts")
           .select("id", { count: "exact", head: true })
@@ -64,10 +73,17 @@ export default function PersonaDetailPage() {
           .from("assets")
           .select("id", { count: "exact", head: true })
           .eq("persona_id", id),
+        supabase
+          .from("content_drafts")
+          .select("id, type, content, created_at")
+          .eq("persona_id", id)
+          .order("created_at", { ascending: false })
+          .limit(5),
       ]);
 
       setDraftCount(draftsRes.count || 0);
       setAssetCount(assetsRes.count || 0);
+      setRecentDrafts(recentRes.data || []);
       setLoading(false);
     };
 
@@ -82,12 +98,10 @@ export default function PersonaDetailPage() {
       .split(",")
       .map((p) => p.trim())
       .filter(Boolean);
-
     const content_rules = rules
       .split("\n")
       .map((r) => r.trim())
       .filter(Boolean);
-
     const forbidden_topics = forbidden
       .split(",")
       .map((t) => t.trim())
@@ -122,6 +136,31 @@ export default function PersonaDetailPage() {
     setSaving(false);
   };
 
+  const handleSample = async () => {
+    if (!persona) return;
+    setSampleLoading(true);
+    setSample("");
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona,
+          type: "caption",
+          topic: "Write one short sample post that perfectly demonstrates this persona's voice and energy.",
+          model: "openai/gpt-4o-mini",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
+      setSample(data.content);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setSampleLoading(false);
+    }
+  };
+
   const handleExportPersona = () => {
     if (!persona) return;
     const text = `PERSONA: ${persona.name}
@@ -141,7 +180,6 @@ ${(persona.content_rules || []).map((r) => `- ${r}`).join("\n") || "—"}
 FORBIDDEN TOPICS:
 ${(persona.forbidden_topics || []).join(", ") || "—"}
 `;
-
     const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -163,24 +201,13 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
 
   return (
     <div className="min-h-screen p-6 sm:p-8">
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
             ← Dashboard
           </a>
-          <div className="flex gap-2">
-            <a
-              href={`/dashboard/generate?persona=${persona.id}`}
-              className="px-4 py-2 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
-            >
-              Generate
-            </a>
-            <button
-              onClick={handleExportPersona}
-              className="px-4 py-2 border border-zinc-600 rounded-lg text-sm hover:bg-zinc-800"
-            >
-              Export
-            </button>
+          <div className="flex flex-wrap gap-2">
             {!editing && (
               <button
                 onClick={() => setEditing(true)}
@@ -189,23 +216,60 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
                 Edit
               </button>
             )}
+            <button
+              onClick={handleExportPersona}
+              className="px-4 py-2 border border-zinc-600 rounded-lg text-sm hover:bg-zinc-800"
+            >
+              Export
+            </button>
           </div>
         </div>
 
-        {/* Stats */}
-        <div className="flex gap-4 mb-8 text-sm">
-          <div className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg">
-            <span className="text-zinc-500">Drafts</span>{" "}
-            <span className="font-medium ml-1">{draftCount}</span>
+        {/* Title + Stats */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold mb-3">{persona.name}</h1>
+          <div className="flex flex-wrap gap-3 text-sm">
+            <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+              <span className="text-zinc-500">Drafts</span>{" "}
+              <span className="font-medium ml-1">{draftCount}</span>
+            </div>
+            <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+              <span className="text-zinc-500">Assets</span>{" "}
+              <span className="font-medium ml-1">{assetCount}</span>
+            </div>
           </div>
-          <div className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg">
-            <span className="text-zinc-500">Assets</span>{" "}
-            <span className="font-medium ml-1">{assetCount}</span>
-          </div>
+        </div>
+
+        {/* Command Center Actions */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10">
+          <a
+            href={`/dashboard/generate?persona=${persona.id}`}
+            className="bg-white text-black rounded-xl p-4 text-center font-medium hover:bg-zinc-200 transition"
+          >
+            Generate
+          </a>
+          <a
+            href={`/dashboard/series?persona=${persona.id}`}
+            className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 text-center hover:border-zinc-500 transition"
+          >
+            Series
+          </a>
+          <a
+            href={`/dashboard/ideas?persona=${persona.id}`}
+            className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 text-center hover:border-zinc-500 transition"
+          >
+            Ideas
+          </a>
+          <a
+            href={`/dashboard/check?persona=${persona.id}`}
+            className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 text-center hover:border-zinc-500 transition"
+          >
+            Check
+          </a>
         </div>
 
         {editing ? (
-          <div className="space-y-5">
+          <div className="space-y-5 mb-10">
             <div>
               <label className="block text-sm text-zinc-400 mb-2">Name</label>
               <input
@@ -273,14 +337,10 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
             </div>
           </div>
         ) : (
-          <div className="space-y-8">
-            <h1 className="text-3xl font-bold">{persona.name}</h1>
-
+          <div className="space-y-8 mb-10">
             <div>
               <h2 className="text-sm font-medium text-zinc-400 mb-2">Backstory</h2>
-              <p className="text-zinc-200 whitespace-pre-wrap leading-relaxed">
-                {persona.backstory}
-              </p>
+              <p className="text-zinc-200 whitespace-pre-wrap leading-relaxed">{persona.backstory}</p>
             </div>
 
             {persona.tone_of_voice && (
@@ -295,10 +355,7 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
                 <h2 className="text-sm font-medium text-zinc-400 mb-2">Lifestyle Pillars</h2>
                 <div className="flex flex-wrap gap-2">
                   {persona.lifestyle_pillars.map((p) => (
-                    <span
-                      key={p}
-                      className="px-3 py-1 bg-zinc-800 rounded-full text-sm text-zinc-300"
-                    >
+                    <span key={p} className="px-3 py-1 bg-zinc-800 rounded-full text-sm text-zinc-300">
                       {p}
                     </span>
                   ))}
@@ -332,6 +389,50 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
                 </div>
               </div>
             )}
+
+            {/* Sample Voice */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-medium text-zinc-400">Sample Voice</h2>
+                <button
+                  onClick={handleSample}
+                  disabled={sampleLoading}
+                  className="text-xs px-3 py-1.5 border border-zinc-600 rounded-lg hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  {sampleLoading ? "Generating..." : "Generate Sample"}
+                </button>
+              </div>
+              {sample ? (
+                <pre className="whitespace-pre-wrap text-sm text-zinc-200">{sample}</pre>
+              ) : (
+                <p className="text-sm text-zinc-500">
+                  Generate a sample post to hear how this persona sounds.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Recent Drafts for this persona */}
+        {recentDrafts.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Recent Drafts</h2>
+              <a href="/dashboard/drafts" className="text-sm text-zinc-400 hover:text-white">
+                View all →
+              </a>
+            </div>
+            <div className="space-y-3">
+              {recentDrafts.map((d) => (
+                <div key={d.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2 text-xs text-zinc-500">
+                    <span className="uppercase">{d.type.replace("_", " ")}</span>
+                    <span>{new Date(d.created_at).toLocaleDateString()}</span>
+                  </div>
+                  <p className="text-sm text-zinc-300 line-clamp-2">{d.content}</p>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
