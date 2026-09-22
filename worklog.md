@@ -111,3 +111,27 @@ Work Log:
 Stage Summary:
 - Generation is now a multi-layer engine: measured voice fingerprint in, structural variants out, every output gated (meta-strip -> cliche scrub -> AI-tell/forbidden/repetition/fit checks -> voice-match ranking). 15-round Break->Fix->Harden->ICP dossier delivered in chat; remaining ICP wants queued: voice-sample curation, 3-more-of-this-one, scrub undo, inline check chip, per-platform batch, image-gen from prompts.
 - PAT rotation reminder re-issued to user (PAT appeared in chat again this session).
+
+---
+Task ID: 6
+Agent: Super Z (main agent)
+Task: Voice-sample curation UI + "3 more of this one" + harden content generation to multi-billion-dollar bar; 15-round iteration.
+
+Work Log:
+- Data: Persona.voiceSamples Json (Prisma push + shim PERSONA_COLS + Persona/VoiceSample types). Real Supabase needs: ALTER TABLE personas ADD COLUMN voice_samples jsonb.
+- Engine v2.5 (src/lib/generation.ts): renderExemplarBlock (3 gold samples verbatim in system prompt — few-shot beats stats alone), moreLikeBlock ("3 more of this one" with avoid-original-and-siblings rules), polishDraft (critique+refine pass kept only when voice-match doesn't regress; POLISHED badge), VariantResult.original preserved for scrub-undo, per-call timeoutMs plumbing.
+- Route: goldSamples override voiceSamples (anti-drift: curated voice beats AI drafts), polish + moreLike passthrough, fingerprintMeta.source gold/drafts/none.
+- /api/render-image: image prompt -> PNG via zai.images (1024x1024), auth-gated (userFromRequest), 2000-char prompt cap, visual-style preamble.
+- VoiceCurator component on persona page: paste (blank-line/--- split), import-from-drafts (starts disabled), per-sample toggle/source badge/remove, coverage meter (guessing/warming/locked/gold), ENGINE SEES live fingerprint readout.
+- Generate page: GOLD SET badge, High polish toggle (default on), "⊕ 3 more of this one" grouped follow-ups, "⇄ All platforms" batch (Promise.allSettled, partial results + honest failure count), "↩ Undo scrub", render-image preview + Save to Vault (storage upload + asset insert).
+- persona-page sample voice now sends goldSamples.
+- 15-round Break→Fix→Harden→ICP iteration delivered in chat; real defects found & fixed: (1) dev server held stale Prisma client -> voice_samples silently null -> restarted server, verified persist; (2) render button hidden on transformed image-prompt cards (hookType check added); (3) /api/render-image lacked auth + prompt cap; (4) legacy sample-voice path missed gold set; (5) copiedIndex type widened to string keys.
+- tests 45/45 (new: exemplar render/skip/cap, pre-scrub basis, no false repetition), tsc clean, eslint clean.
+- Browser-verified: gold set add->persist (DB row confirmed), GOLD SET badge, 3 variants 100/100 voice match + POLISHED, 3-more (99/84/84% distinct structures), all-platforms 3/4 with graceful "1 platform failed", drafts saved, mobile 390px, zero console errors. Screenshots: download/engine-v25-{drafts,mobile}.png.
+- Committed, pushed to branch generation-engine-v2-5 (one-time PAT in push URL, remote config scrubbed, no force-push).
+
+Stage Summary:
+- User's two named next moves shipped: voice-sample curation UI (Voice Gold Set) and "3 more of this one".
+- Generation is now: gold exemplars + measured DNA in -> structural variants -> quality gate -> polish (non-regressing) -> voice-ranked out; image prompts render to real vault assets.
+- Remaining ICP wants queued for next round: per-sample reorder (drag), scrub-undo for polish (restore pre-polish), platform-aware thread composer UI, scheduled auto-generate.
+- PAT rotation reminder re-issued (PAT used for push this session).
