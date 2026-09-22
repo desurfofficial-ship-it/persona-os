@@ -4,6 +4,45 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
+const TEMPLATES = [
+  {
+    name: "Ambitious Founder",
+    backstory:
+      "Early-stage founder building in public. Obsessed with speed, clarity, and results. Shares the real journey — wins, losses, and lessons — without the corporate fluff.",
+    tone: "Direct, confident, slightly irreverent, no-nonsense",
+    pillars: "Building in public, high agency, shipping fast, mental toughness",
+    rules: "Always speak in first person\nKeep it short and punchy\nNever sound corporate\nShare real numbers when possible",
+    forbidden: "politics, personal drama, empty motivation",
+  },
+  {
+    name: "Fitness Creator",
+    backstory:
+      "Dedicated to progressive training, recovery, and sustainable performance. Focuses on evidence-based methods and long-term consistency over quick fixes.",
+    tone: "Motivational but realistic, knowledgeable, encouraging",
+    pillars: "Strength training, recovery, nutrition, consistency",
+    rules: "Never promote extreme diets\nFocus on sustainable habits\nBe encouraging without toxic positivity",
+    forbidden: "steroids, extreme cuts, body shaming",
+  },
+  {
+    name: "Luxury Lifestyle",
+    backstory:
+      "Curates a high-end but intentional lifestyle. Values quality, experiences, and refined taste. Content feels aspirational yet grounded.",
+    tone: "Calm, sophisticated, understated confidence",
+    pillars: "Quality over quantity, travel, design, personal standards",
+    rules: "Never flex excessively\nFocus on taste and intention\nKeep language elegant and minimal",
+    forbidden: "cheap promotions, desperation, oversharing finances",
+  },
+  {
+    name: "Tech Operator",
+    backstory:
+      "Operator who has scaled products and teams. Shares practical systems, decision frameworks, and hard-earned lessons from the trenches.",
+    tone: "Precise, analytical, experienced, low-ego",
+    pillars: "Systems thinking, execution, product, leadership",
+    rules: "Prefer frameworks over opinions\nBe specific\nAvoid buzzwords",
+    forbidden: "hype, vague advice, guru energy",
+  },
+];
+
 export default function NewPersonaPage() {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -14,6 +53,15 @@ export default function NewPersonaPage() {
   const [forbidden, setForbidden] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const applyTemplate = (template: (typeof TEMPLATES)[0]) => {
+    setName(template.name);
+    setBackstory(template.backstory);
+    setTone(template.tone);
+    setPillars(template.pillars);
+    setRules(template.rules);
+    setForbidden(template.forbidden);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,7 +75,7 @@ export default function NewPersonaPage() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setError("You must be logged in to create a persona.");
+        setError("You must be logged in.");
         setLoading(false);
         return;
       }
@@ -61,7 +109,6 @@ export default function NewPersonaPage() {
 
       router.push("/dashboard");
     } catch (err: any) {
-      console.error(err);
       setError(err.message || "Failed to create persona");
     } finally {
       setLoading(false);
@@ -69,13 +116,31 @@ export default function NewPersonaPage() {
   };
 
   return (
-    <div className="min-h-screen p-8">
+    <div className="min-h-screen p-6 sm:p-8">
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
           <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
             ← Dashboard
           </a>
-          <h1 className="text-3xl font-bold">Create New Persona</h1>
+          <h1 className="text-3xl font-bold">Create Persona</h1>
+        </div>
+
+        {/* Templates */}
+        <div className="mb-8">
+          <p className="text-sm text-zinc-400 mb-3">Quick start templates</p>
+          <div className="grid grid-cols-2 gap-3">
+            {TEMPLATES.map((t) => (
+              <button
+                key={t.name}
+                type="button"
+                onClick={() => applyTemplate(t)}
+                className="text-left p-3 bg-zinc-900 border border-zinc-800 rounded-lg hover:border-zinc-600 transition"
+              >
+                <p className="font-medium text-sm">{t.name}</p>
+                <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{t.tone}</p>
+              </button>
+            ))}
+          </div>
         </div>
 
         {error && (
@@ -84,45 +149,36 @@ export default function NewPersonaPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-2">
-              Persona Name *
-            </label>
+            <label className="block text-sm font-medium text-zinc-300 mb-2">Name *</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
-              placeholder="e.g. Alex Rivera — Founder"
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-2">
-              Backstory *
-            </label>
+            <label className="block text-sm font-medium text-zinc-300 mb-2">Backstory *</label>
             <textarea
               value={backstory}
               onChange={(e) => setBackstory(e.target.value)}
-              rows={5}
-              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
-              placeholder="Who is this persona? Background, current life, goals, personality..."
+              rows={4}
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-2">
-              Tone of Voice
-            </label>
+            <label className="block text-sm font-medium text-zinc-300 mb-2">Tone of Voice</label>
             <input
               type="text"
               value={tone}
               onChange={(e) => setTone(e.target.value)}
-              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
-              placeholder="e.g. Confident, slightly irreverent, direct, no fluff"
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
             />
           </div>
 
@@ -134,8 +190,7 @@ export default function NewPersonaPage() {
               type="text"
               value={pillars}
               onChange={(e) => setPillars(e.target.value)}
-              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
-              placeholder="e.g. Building in public, fitness, high-agency living"
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
             />
           </div>
 
@@ -147,8 +202,7 @@ export default function NewPersonaPage() {
               value={rules}
               onChange={(e) => setRules(e.target.value)}
               rows={3}
-              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
-              placeholder={"Always speak in first person\nNever apologize\nKeep sentences short and punchy"}
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
             />
           </div>
 
@@ -160,15 +214,14 @@ export default function NewPersonaPage() {
               type="text"
               value={forbidden}
               onChange={(e) => setForbidden(e.target.value)}
-              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
-              placeholder="e.g. politics, crypto prices, personal relationships"
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 transition disabled:opacity-50"
+            className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
           >
             {loading ? "Creating..." : "Create Persona"}
           </button>
