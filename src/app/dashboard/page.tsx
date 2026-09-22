@@ -2,10 +2,10 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { computeMomentum, type MomentumStats } from "@/lib/momentum";
-import { buildWeek, dueQueue, isOverdue, type DayCell, type CalendarDraft } from "@/lib/calendar";
+import { buildWeek, dueQueue, isOverdue, nextSevenDays, type DayCell, type CalendarDraft } from "@/lib/calendar";
 import { computeInsights, daysSinceLastPost, type InsightDraft, type Insights } from "@/lib/insights";
 import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
 
@@ -16,6 +16,9 @@ interface Draft {
   created_at: string;
   posted?: boolean;
   planned_for?: string | null;
+  topic?: string | null;
+  auto_fill?: boolean;
+  persona_id?: string;
   personas?: { name: string };
 }
 
@@ -35,7 +38,111 @@ export default function DashboardPage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
-  const due = dueQueue(allDrafts as CalendarDraft[]);
+  // Scheduled auto-generate: queued ideas waiting to be drafted on their day.
+  const [ideaTopic, setIdeaTopic] = useState("");
+  const [ideaDay, setIdeaDay] = useState<string>(nextSevenDays()[0]?.key || "");
+  const [ideaPersona, setIdeaPersona] = useState<string>("");
+  const [scheduling, setScheduling] = useState(false);
+  const [draftingIdea, setDraftingIdea] = useState<string | null>(null);
+  const [ideaNotice, setIdeaNotice] = useState<string | null>(null);
+  const [autoWrite, setAutoWrite] = useState(false);
+  const autoWriteFired = useRef(false);
+
+  const AUTO_WRITE_KEY = "persona-os-auto-write";
+
+  const isUntouchedIdea = (d: Draft) => d.type === "scheduled_idea" && !d.content;
+  const scheduledIdeas = allDrafts.filter(isUntouchedIdea);
+
+  const draftIdeaNow = async (idea: Draft) => {
+    if (draftingIdea) return;
+    setDraftingIdea(idea.id);
+    setIdeaNotice(null);
+    try {
+      const res = await authedFetch("/api/scheduled-ideas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ideaId: idea.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't draft the idea");
+      setAllDrafts((prev) =>
+        prev.map((d) =>
+          d.id === idea.id ? { ...d, content: data.content, type: "caption", auto_fill: false } : d
+        )
+      );
+      setIdeaNotice("Scheduled idea drafted — it's in Due today and in Drafts.");
+    } catch (err: unknown) {
+      setIdeaNotice(err instanceof Error ? err.message : "Couldn't draft the idea");
+    } finally {
+      setDraftingIdea(null);
+    }
+  };
+
+  // Auto-write: when enabled and the user opens the app on/after the due
+  // day, the oldest due idea drafts itself (one per visit — no surprise
+  // generation bursts). This is the honest version of "scheduled": no
+  // server cron, so the write happens on first open of the day.
+  useEffect(() => {
+    if (!autoWrite || autoWriteFired.current || loading) return;
+    const dueIdea = scheduledIdeas.find(
+      (d) => d.planned_for && new Date(d.planned_for) <= new Date(new Date().setHours(23, 59, 59, 999))
+    );
+    if (dueIdea) {
+      autoWriteFired.current = true;
+      draftIdeaNow(dueIdea);
+    }
+     
+  }, [autoWrite, loading, scheduledIdeas.length]);
+
+  const scheduleIdea = async () => {
+    const topic = ideaTopic.trim();
+    if (!topic || !ideaPersona || scheduling) return;
+    setScheduling(true);
+    const planned = new Date(`${ideaDay}T09:00:00`).toISOString();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { data: created, error } = await supabase
+      .from("content_drafts")
+      .insert({
+        persona_id: ideaPersona,
+        user_id: user?.id,
+        type: "scheduled_idea",
+        content: "",
+        topic,
+        planned_for: planned,
+        auto_fill: true,
+      })
+      .select("id, type, content, created_at, posted, planned_for, topic, auto_fill, persona_id")
+      .single();
+    setScheduling(false);
+    // The shim returns an array from insert even with .single() — unwrap it.
+    const row = Array.isArray(created) ? created[0] : created;
+    if (error || !row) {
+      alert(error?.message || "Couldn't schedule the idea");
+      return;
+    }
+    const personaName = personas.find((p) => p.id === ideaPersona)?.name;
+    setAllDrafts((prev) => [
+      { ...(row as unknown as Draft), personas: { name: personaName || "" } },
+      ...prev,
+    ]);
+    setIdeaTopic("");
+    setIdeaNotice(
+      `Queued for ${new Date(planned).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} — Persona OS writes the draft that morning.`
+    );
+  };
+
+  const removeIdea = async (idea: Draft) => {
+    setAllDrafts((prev) => prev.filter((d) => d.id !== idea.id));
+    const { error } = await supabase.from("content_drafts").delete().eq("id", idea.id);
+    if (error) alert(error.message);
+  };
+
+  // Untouched scheduled ideas (empty content) are not posts — they must not
+  // leak into the due queue or the calendar's drafted counts.
+  const realDrafts = allDrafts.filter((d) => !d.auto_fill || d.content);
+  const due = dueQueue(realDrafts as CalendarDraft[]);
 
   const markPostedFromQueue = async (draft: Draft) => {
     setAllDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, posted: true } : d)));
@@ -89,7 +196,7 @@ export default function DashboardPage() {
           .order("created_at", { ascending: false }),
         supabase
           .from("content_drafts")
-          .select("id, type, content, created_at, posted, planned_for, personas(name)")
+          .select("id, type, content, created_at, posted, planned_for, topic, auto_fill, persona_id, personas(name)")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
           .limit(90),
@@ -99,11 +206,15 @@ export default function DashboardPage() {
       setPersonas(personasRes.data || []);
       setAllDrafts(drafts);
       setRecentDrafts(drafts.slice(0, 5));
-      setMomentum(computeMomentum(drafts));
-      setWeek(buildWeek(drafts as CalendarDraft[]));
+      // Scheduled ideas aren't drafts yet — they don't count toward momentum.
+      const realDrafts = drafts.filter((d) => !d.auto_fill || d.content);
+      setMomentum(computeMomentum(realDrafts));
+      setWeek(buildWeek(realDrafts as CalendarDraft[]));
       setInsights(computeInsights(drafts as InsightDraft[]));
       setDaysSince(daysSinceLastPost(drafts as InsightDraft[]));
       setActiveId(getActivePersonaId());
+      setIdeaPersona(getActivePersonaId() || (personasRes.data || [])[0]?.id || "");
+      setAutoWrite(window.localStorage.getItem(AUTO_WRITE_KEY) === "on");
       setLoading(false);
     };
 
@@ -387,6 +498,13 @@ export default function DashboardPage() {
                       >
                         ✓ Mark posted
                       </button>
+                      <a
+                        href={`/dashboard/drafts?log=${draft.id}`}
+                        title="Log the numbers after you post"
+                        className="min-h-[40px] px-3 flex items-center border border-zinc-700 rounded-lg text-xs hover:bg-zinc-800"
+                      >
+                        Log numbers
+                      </a>
                       <button
                         onClick={() => snoozeFromQueue(draft)}
                         title="Push to tomorrow"
@@ -407,6 +525,142 @@ export default function DashboardPage() {
                 </p>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Scheduled auto-generate: queue an idea, Persona OS writes it on the day */}
+        {personas.length > 0 && (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-8">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+              <h2 className="text-sm font-medium">Scheduled ideas</h2>
+              <button
+                onClick={() => {
+                  const next = !autoWrite;
+                  setAutoWrite(next);
+                  window.localStorage.setItem(AUTO_WRITE_KEY, next ? "on" : "off");
+                }}
+                title="When on, the oldest due idea drafts itself the first time you open Persona OS that day"
+                className={`text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${
+                  autoWrite
+                    ? "border-emerald-700 text-emerald-300 bg-emerald-950/40"
+                    : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${autoWrite ? "bg-emerald-400" : "bg-zinc-600"}`} />
+                Auto-write when due {autoWrite ? "ON" : "OFF"}
+              </button>
+            </div>
+            <p className="text-xs text-zinc-500 mb-4">
+              Park a topic on a day — Persona OS writes the draft that morning (when you first open
+              the app), so you never face the blank page.
+            </p>
+
+            {ideaNotice && (
+              <p className="text-xs text-green-300 bg-green-950/40 border border-green-900 rounded-lg p-2.5 mb-3">
+                {ideaNotice}
+              </p>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2 mb-4">
+              <input
+                value={ideaTopic}
+                onChange={(e) => setIdeaTopic(e.target.value)}
+                placeholder="Idea, e.g. why I stopped discounting my retainers"
+                className="flex-1 px-3 py-2.5 min-h-[44px] bg-zinc-950 border border-zinc-700 rounded-lg text-sm"
+              />
+              <select
+                value={ideaPersona}
+                onChange={(e) => setIdeaPersona(e.target.value)}
+                className="px-3 py-2.5 min-h-[44px] bg-zinc-950 border border-zinc-700 rounded-lg text-sm"
+              >
+                {personas.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={ideaDay}
+                onChange={(e) => setIdeaDay(e.target.value)}
+                className="px-3 py-2.5 min-h-[44px] bg-zinc-950 border border-zinc-700 rounded-lg text-sm"
+              >
+                {nextSevenDays().map((d) => (
+                  <option key={d.key} value={d.key}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={scheduleIdea}
+                disabled={!ideaTopic.trim() || !ideaPersona || scheduling}
+                className="min-h-[44px] px-4 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200 disabled:opacity-40"
+              >
+                {scheduling ? "Scheduling…" : "Schedule"}
+              </button>
+            </div>
+
+            {scheduledIdeas.length > 0 ? (
+              <div className="space-y-2">
+                {scheduledIdeas.map((idea) => {
+                  const dueToday =
+                    idea.planned_for &&
+                    new Date(idea.planned_for) <= new Date(new Date().setHours(23, 59, 59, 999));
+                  return (
+                    <div
+                      key={idea.id}
+                      className={`flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border p-3 ${
+                        dueToday
+                          ? "border-amber-700/50 bg-amber-950/20"
+                          : "border-zinc-800 bg-zinc-950/50"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-zinc-200 truncate">
+                          {idea.topic || "(untitled idea)"}
+                        </p>
+                        <p className="text-xs text-zinc-500">
+                          {(idea.personas as any)?.name || "Persona"} ·{" "}
+                          {idea.planned_for
+                            ? dueToday
+                              ? "due today"
+                              : new Date(idea.planned_for).toLocaleDateString("en-US", {
+                                  weekday: "short",
+                                  month: "short",
+                                  day: "numeric",
+                                })
+                            : "no day set"}
+                        </p>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <button
+                          onClick={() => draftIdeaNow(idea)}
+                          disabled={draftingIdea !== null}
+                          className={`min-h-[38px] px-4 rounded-lg text-xs font-semibold disabled:opacity-50 ${
+                            dueToday
+                              ? "bg-amber-200 text-amber-950 hover:bg-amber-100"
+                              : "bg-zinc-800 border border-zinc-600 text-zinc-200 hover:bg-zinc-700"
+                          }`}
+                        >
+                          {draftingIdea === idea.id ? "Writing…" : "✍ Draft it now"}
+                        </button>
+                        <button
+                          onClick={() => removeIdea(idea)}
+                          title="Remove this scheduled idea"
+                          className="min-h-[38px] px-3 border border-zinc-700 rounded-lg text-xs hover:bg-zinc-800"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-600">
+                Nothing queued. Schedule an idea above — future-you opens the app to a finished
+                draft.
+              </p>
+            )}
           </div>
         )}
 

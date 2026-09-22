@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import PostImport from "@/components/PostImport";
 
 export default function FromPostsPage() {
@@ -94,6 +94,13 @@ export default function FromPostsPage() {
             break;
           }
         }
+        // Fire-and-forget: tag the imported posts (topic/mood) so the drafts
+        // page gains a working filter dimension. Must not block the redirect.
+        void authedFetch("/api/tag-drafts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personaId: newId }),
+        }).catch(() => {});
       }
 
       // Keep the loop going: persona created → first generation immediately.

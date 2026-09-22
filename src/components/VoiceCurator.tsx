@@ -134,6 +134,19 @@ export default function VoiceCurator({ persona }: { persona: Persona }) {
     await persist(samples.filter((s) => s.id !== id));
   };
 
+  // Order matters: the earliest enabled samples anchor the voice fingerprint.
+  const move = async (from: number, to: number) => {
+    if (to < 0 || to >= samples.length || from === to) return;
+    const next = [...samples];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    await persist(next);
+  };
+
+  // HTML5 drag-and-drop (desktop); ↑/↓ buttons cover touch + keyboard.
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
   const pasteCount = splitSamples(paste).length;
 
   return (
@@ -202,12 +215,60 @@ export default function VoiceCurator({ persona }: { persona: Persona }) {
         </p>
       ) : (
         <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-          {samples.map((s) => (
+          {samples.map((s, i) => (
             <div
               key={s.id}
-              className={`border rounded-lg p-3 ${s.enabled ? "border-zinc-700 bg-zinc-900" : "border-zinc-800 bg-zinc-950 opacity-70"}`}
+              draggable
+              onDragStart={(e) => {
+                setDragIndex(i);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setOverIndex(i);
+              }}
+              onDragEnd={() => {
+                setDragIndex(null);
+                setOverIndex(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragIndex !== null) move(dragIndex, i);
+                setDragIndex(null);
+                setOverIndex(null);
+              }}
+              className={`border rounded-lg p-3 ${
+                s.enabled ? "border-zinc-700 bg-zinc-900" : "border-zinc-800 bg-zinc-950 opacity-70"
+              } ${overIndex === i && dragIndex !== null && dragIndex !== i ? "border-emerald-600" : ""} ${
+                dragIndex === i ? "opacity-50" : ""
+              }`}
             >
               <div className="flex items-start justify-between gap-3">
+                <div className="shrink-0 flex flex-col items-center gap-0.5">
+                  <span
+                    className="text-zinc-600 cursor-grab active:cursor-grabbing text-xs leading-none select-none"
+                    title="Drag to reorder — first samples anchor the voice"
+                    aria-hidden
+                  >
+                    ⠿
+                  </span>
+                  <button
+                    onClick={() => move(i, i - 1)}
+                    disabled={i === 0}
+                    title="Move up"
+                    className="text-[10px] text-zinc-500 hover:text-white disabled:opacity-20 leading-none"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    onClick={() => move(i, i + 1)}
+                    disabled={i === samples.length - 1}
+                    title="Move down"
+                    className="text-[10px] text-zinc-500 hover:text-white disabled:opacity-20 leading-none"
+                  >
+                    ▼
+                  </button>
+                </div>
                 <button
                   onClick={() => toggle(s.id)}
                   title={s.enabled ? "Exclude from voice" : "Include in voice"}
@@ -245,6 +306,11 @@ export default function VoiceCurator({ persona }: { persona: Persona }) {
               </div>
             </div>
           ))}
+          {samples.length > 2 && (
+            <p className="text-[11px] text-zinc-600 pt-1">
+              Order matters — the first 3 enabled samples anchor the voice. Drag ⠿ or use ▲▼.
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -43,7 +43,14 @@ model ContentDraft {
   posted     Boolean   @default(false)
   plannedFor DateTime?
   /// Manual performance log: { platform, views, likes, comments, loggedAt }
+  /// or { entries: [{ platform, views, likes, comments, loggedAt }, ...] }
   metrics    Json?
+  /// Scheduled auto-generate: the queued idea text before drafting.
+  topic      String?
+  /// True while the row is an idea waiting to be drafted on its due day.
+  autoFill   Boolean   @default(false)
+  /// Auto-extracted topic/mood tags (imported posts, vault pairing).
+  tags       Json?
   createdAt  DateTime  @default(now())
 
   @@index([userId])

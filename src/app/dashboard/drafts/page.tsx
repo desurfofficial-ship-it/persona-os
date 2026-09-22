@@ -7,7 +7,8 @@ import type { Persona } from "@/types/persona";
 import { fetchVoiceSamples } from "@/lib/voiceSamples";
 import { copyAndOpen } from "@/lib/share";
 import { nextSevenDays } from "@/lib/calendar";
-import { compactNumber, parseCount } from "@/lib/metrics";
+import { compactNumber, parseCount, metricEntries, appendEntry, type DraftMetrics } from "@/lib/metrics";
+import ThreadComposer from "@/components/ThreadComposer";
 
 interface Draft {
   id: string;
@@ -18,30 +19,16 @@ interface Draft {
   posted?: boolean;
   planned_for?: string | null;
   metrics?: unknown;
+  tags?: unknown;
+  topic?: string | null;
+  auto_fill?: boolean;
   personas?: { name: string };
-}
-
-interface DraftMetrics {
-  platform: string;
-  views: number;
-  likes: number;
-  comments: number;
-  loggedAt: string;
 }
 
 const PLATFORMS = ["X", "LinkedIn", "Instagram", "Threads", "TikTok", "YouTube", "Other"];
 
-function asMetrics(raw: unknown): DraftMetrics | null {
-  if (!raw || typeof raw !== "object") return null;
-  const m = raw as Record<string, unknown>;
-  if (!m.platform) return null;
-  return {
-    platform: String(m.platform),
-    views: Number(m.views) || 0,
-    likes: Number(m.likes) || 0,
-    comments: Number(m.comments) || 0,
-    loggedAt: String(m.loggedAt || ""),
-  };
+function draftTags(raw: unknown): string[] {
+  return Array.isArray(raw) ? (raw as unknown[]).filter((t): t is string => typeof t === "string") : [];
 }
 
 export default function DraftsPage() {
@@ -60,15 +47,30 @@ export default function DraftsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [composingId, setComposingId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const planDays = nextSevenDays();
   const searchParams = useSearchParams();
 
-  // Deep link from the Consistency Engine: /dashboard/drafts?q=<quote fragment>
+  // Deep links:
+  //   ?q=<quote> — from the Consistency Engine, prefill search
+  //   ?log=<id>  — from the dashboard due-today queue, open the log form
   useEffect(() => {
     const q = searchParams.get("q");
     if (q) setSearch(q);
   }, [searchParams]);
+
+  const [logAutoOpened, setLogAutoOpened] = useState(false);
+  useEffect(() => {
+    const logId = searchParams.get("log");
+    if (!logId || loading || logAutoOpened) return;
+    const target = drafts.find((d) => d.id === logId);
+    if (target) {
+      setLogAutoOpened(true);
+      openLogForm(target);
+    }
+     
+  }, [searchParams, loading, drafts]);
 
   useEffect(() => {
     const load = async () => {
@@ -97,10 +99,15 @@ export default function DraftsPage() {
   }, [router]);
 
   const filtered = drafts.filter((d) => {
+    // Scheduled ideas without content live on the dashboard board, not here.
+    if (d.auto_fill && !d.content) return false;
+
+    const tagList = draftTags(d.tags);
     const matchesSearch =
       !search ||
       d.content.toLowerCase().includes(search.toLowerCase()) ||
       d.type.toLowerCase().includes(search.toLowerCase()) ||
+      tagList.some((t) => t.includes(search.toLowerCase().replace(/^#/, ""))) ||
       ((d.personas as any)?.name || "").toLowerCase().includes(search.toLowerCase());
 
     const matchesPersona = filterPersona === "all" || d.persona_id === filterPersona;
@@ -177,16 +184,20 @@ export default function DraftsPage() {
     }
 
     // First time marking posted -> invite logging performance right away.
-    if (newValue && !draft.metrics) {
+    if (newValue && !metricEntries(draft.metrics).length) {
       setLogForm({ platform: "X", views: "", likes: "", comments: "" });
       setLoggingId(draft.id);
     }
   };
 
-  const openLogForm = (draft: Draft) => {
-    const existing = asMetrics(draft.metrics);
+  const openLogForm = (draft: Draft, platform?: string) => {
+    // Prefill from the entry the user is editing (default: most recent).
+    const entries = metricEntries(draft.metrics);
+    const existing = platform
+      ? entries.find((e) => e.platform === platform)
+      : entries[entries.length - 1];
     setLogForm({
-      platform: existing?.platform || "X",
+      platform: existing?.platform || platform || "X",
       views: existing ? String(existing.views) : "",
       likes: existing ? String(existing.likes) : "",
       comments: existing ? String(existing.comments) : "",
@@ -195,7 +206,7 @@ export default function DraftsPage() {
   };
 
   const saveMetrics = async (draft: Draft) => {
-    const metrics: DraftMetrics = {
+    const entry: DraftMetrics = {
       platform: logForm.platform,
       views: parseCount(logForm.views) ?? 0,
       likes: parseCount(logForm.likes) ?? 0,
@@ -203,7 +214,9 @@ export default function DraftsPage() {
       loggedAt: new Date().toISOString(),
     };
     // Never store an all-zero junk row — it would skew every average.
-    if (metrics.views + metrics.likes + metrics.comments === 0) return;
+    if (entry.views + entry.likes + entry.comments === 0) return;
+    // One truth per platform per post: re-logging X replaces the X entry.
+    const metrics = appendEntry(draft.metrics, entry);
     // Optimistic
     setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics } : d)));
     setLoggingId(null);
@@ -435,17 +448,36 @@ export default function DraftsPage() {
                             Posted
                           </span>
                         )}
-                        {asMetrics(draft.metrics) && (
-                          <span className="text-xs px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded whitespace-nowrap">
-                            {asMetrics(draft.metrics)!.platform} · {compactNumber(asMetrics(draft.metrics)!.views)} views
-                          </span>
-                        )}
+                        {metricEntries(draft.metrics).map((e, ei) => (
+                          <button
+                            key={`${e.platform}-${ei}`}
+                            onClick={() => openLogForm(draft, e.platform)}
+                            title={`Edit ${e.platform} numbers`}
+                            className="text-xs px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded whitespace-nowrap hover:bg-blue-900/70"
+                          >
+                            {e.platform} · {compactNumber(e.views)} views
+                          </button>
+                        ))}
                         {draft.planned_for && !draft.posted && (
                           <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded whitespace-nowrap">
                             Planned {new Date(draft.planned_for).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
                           </span>
                         )}
                       </div>
+                      {draftTags(draft.tags).length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                          {draftTags(draft.tags).map((t) => (
+                            <button
+                              key={t}
+                              onClick={() => setSearch(t)}
+                              title={`Show everything tagged ${t}`}
+                              className="text-[10px] px-1.5 py-0.5 rounded-full border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+                            >
+                              #{t}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       <p className="text-sm text-zinc-400 mt-0.5">
                         {(draft.personas as any)?.name || "Unknown"} ·{" "}
                         {new Date(draft.created_at).toLocaleString()}
@@ -487,10 +519,10 @@ export default function DraftsPage() {
                     {draft.posted && (
                       <button
                         onClick={() => openLogForm(draft)}
-                        title="Record how this post performed"
+                        title="Record how this post performed — one entry per platform"
                         className="text-xs px-2 py-1.5 min-h-[36px] border border-blue-800 text-blue-300 rounded hover:bg-blue-950/50"
                       >
-                        {asMetrics(draft.metrics) ? "Edit numbers" : "Log performance"}
+                        {metricEntries(draft.metrics).length ? "Edit numbers" : "Log performance"}
                       </button>
                     )}
                     <button
@@ -519,6 +551,10 @@ export default function DraftsPage() {
                               label: improvingId === draft.id ? "Improving…" : "✨ Improve with AI",
                               action: () => handleImprove(draft),
                               disabled: improvingId === draft.id,
+                            },
+                            {
+                              label: "🧵 Compose thread",
+                              action: () => setComposingId(composingId === draft.id ? null : draft.id),
                             },
                             {
                               label: "Copy & open X",
@@ -593,6 +629,17 @@ export default function DraftsPage() {
                   <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
                     {draft.content}
                   </pre>
+                )}
+
+                {composingId === draft.id && (
+                  <div className="mt-4 pt-4 border-t border-zinc-800">
+                    <ThreadComposer
+                      key={`${draft.id}-${draft.content.slice(0, 48)}`}
+                      content={draft.content}
+                      platform="x"
+                      sharePlatform="twitter"
+                    />
+                  </div>
                 )}
 
                 {loggingId === draft.id && (

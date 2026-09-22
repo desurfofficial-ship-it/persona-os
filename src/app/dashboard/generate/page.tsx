@@ -15,8 +15,9 @@ import {
   type SimilarPost,
 } from "@/lib/duplicate";
 import { extractVoiceFingerprint } from "@/lib/voice";
-import { splitThread, PLATFORMS, type PlatformId } from "@/lib/platforms";
+import { PLATFORMS, type PlatformId } from "@/lib/platforms";
 import type { VariantResult } from "@/lib/generation";
+import ThreadComposer from "@/components/ThreadComposer";
 
 const MODELS = [
   { id: "openai/gpt-4o-mini", name: "GPT-4o Mini (Fast)" },
@@ -1048,32 +1049,14 @@ function GenerateContent() {
               </pre>
               <p className="text-[11px] text-zinc-600 mb-4">{variant.why}</p>
 
-              {/* Over-limit: ready-to-paste thread */}
+              {/* Over-limit: platform-aware thread composer (editable per-post) */}
               {!variant.fit.fits && (
-                <div className="mb-4 bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-                  <p className="text-xs font-medium text-zinc-300 mb-3">
-                    Over the {variant.fit.limit}-char limit — here it is as a {PLATFORMS[platform].name} thread, ready to paste:
-                  </p>
-                  <div className="space-y-3">
-                    {splitThread(variant.content, variant.fit.limit).map((post, ti) => (
-                      <div key={ti} className="flex items-start gap-2">
-                        <pre className="flex-1 whitespace-pre-wrap text-xs text-zinc-300 leading-relaxed">
-                          {post}
-                        </pre>
-                        <button
-                          onClick={async () => {
-                            if (await copyToClipboard(post)) {
-                              setCopiedIndex(String(idx));
-                              setTimeout(() => setCopiedIndex((c) => (c === String(idx) ? null : c)), 1200);
-                            }
-                          }}
-                          className="text-[10px] px-2 py-1 border border-zinc-700 rounded text-zinc-400 hover:text-white shrink-0"
-                        >
-                          Copy {ti + 1}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                <div className="mb-4">
+                  <ThreadComposer
+                    key={`${idx}-${variant.content.slice(0, 64)}`}
+                    content={variant.content}
+                    platform={platform}
+                  />
                 </div>
               )}
 

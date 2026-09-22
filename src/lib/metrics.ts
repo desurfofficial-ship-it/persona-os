@@ -1,13 +1,15 @@
 /**
- * Performance metrics v1 — honest manual performance tracking.
+ * Performance metrics v2 — honest manual performance tracking.
  *
  * We do NOT have platform API access yet, so numbers are what the user
- * logs per posted item. This module does the math: totals, averages,
- * best/worst posts, per-platform breakdown. Every function is pure and
- * typed for unit testing.
+ * logs per posted item. A post can now be logged on MULTIPLE platforms
+ * (same caption on X and LinkedIn performs differently), stored as
+ * { entries: [...] }. Legacy single-object rows still parse.
+ * Every function is pure and typed for unit testing.
  *
- * The metrics shape on ContentDraft.metrics:
- *   { platform: string, views: number, likes: number, comments: number, loggedAt: string }
+ * The metrics shapes on ContentDraft.metrics:
+ *   v1: { platform, views, likes, comments, loggedAt }
+ *   v2: { entries: [ { platform, views, likes, comments, loggedAt }, ... ] }
  */
 
 export interface DraftMetrics {
@@ -83,25 +85,57 @@ export function parseMetrics(raw: unknown): DraftMetrics | null {
   };
 }
 
+/** Every logged platform entry for a draft — v2 rows, or v1 wrapped. */
+export function metricEntries(raw: unknown): DraftMetrics[] {
+  if (!raw || typeof raw !== "object") return [];
+  const m = raw as Record<string, unknown>;
+  if (Array.isArray(m.entries)) {
+    return m.entries
+      .map((e) => parseMetrics(e))
+      .filter((e): e is DraftMetrics => e !== null);
+  }
+  const legacy = parseMetrics(m);
+  return legacy ? [legacy] : [];
+}
+
+/** Does this draft have at least one logged entry? */
+export function hasMetrics(raw: unknown): boolean {
+  return metricEntries(raw).length > 0;
+}
+
+/**
+ * Append (or replace same-platform) an entry, returning the v2 storage
+ * shape. Replacing same-platform keeps one truth per platform per post.
+ */
+export function appendEntry(
+  raw: unknown,
+  entry: DraftMetrics
+): { entries: DraftMetrics[] } {
+  const rest = metricEntries(raw).filter((e) => e.platform !== entry.platform);
+  return { entries: [...rest, entry].sort((a, b) => a.loggedAt.localeCompare(b.loggedAt)) };
+}
+
 export function computePerformance(
   drafts: MetricsDraft[],
   postedCount?: number
 ): PerformanceSummary {
-  const logged = drafts
-    .map((d) => ({ draft: d, metrics: parseMetrics(d.metrics) }))
-    .filter((x): x is { draft: MetricsDraft; metrics: DraftMetrics } => x.metrics !== null);
+  // Each (draft, platform-entry) pair is one observation: the same post
+  // logged on X and LinkedIn counts once per platform.
+  const observations = drafts
+    .map((d) => metricEntries(d.metrics).map((metrics) => ({ draft: d, metrics })))
+    .flat();
 
-  const totalViews = logged.reduce((s, x) => s + x.metrics.views, 0);
-  const totalLikes = logged.reduce((s, x) => s + x.metrics.likes, 0);
-  const totalComments = logged.reduce((s, x) => s + x.metrics.comments, 0);
+  const totalViews = observations.reduce((s, x) => s + x.metrics.views, 0);
+  const totalLikes = observations.reduce((s, x) => s + x.metrics.likes, 0);
+  const totalComments = observations.reduce((s, x) => s + x.metrics.comments, 0);
 
-  const bestEntry = logged
+  const bestEntry = observations
     .filter((x) => x.metrics.views > 0)
     .sort((a, b) => b.metrics.views - a.metrics.views)[0];
 
   // Per-platform rollup, strongest first.
   const byPlatform = new Map<string, PlatformRollup>();
-  for (const { metrics } of logged) {
+  for (const { metrics } of observations) {
     const cur = byPlatform.get(metrics.platform) || {
       platform: metrics.platform,
       posts: 0,
@@ -118,15 +152,17 @@ export function computePerformance(
     .map((p) => ({ ...p, avgViews: p.posts ? Math.round(p.views / p.posts) : 0 }))
     .sort((a, b) => b.views - a.views);
 
+  // loggedPosts counts drafts with at least one entry (not raw observations).
+  const loggedDraftCount = drafts.filter((d) => metricEntries(d.metrics).length > 0).length;
   const knownPosted = typeof postedCount === "number" ? postedCount : drafts.length;
 
   return {
-    loggedPosts: logged.length,
-    unloggedPosted: Math.max(0, knownPosted - logged.length),
+    loggedPosts: loggedDraftCount,
+    unloggedPosted: Math.max(0, knownPosted - loggedDraftCount),
     totalViews,
     totalLikes,
     totalComments,
-    avgViews: logged.length ? Math.round(totalViews / logged.length) : 0,
+    avgViews: observations.length ? Math.round(totalViews / observations.length) : 0,
     avgEngagement:
       totalViews > 0 ? Math.round(((totalLikes + totalComments) / totalViews) * 1000) / 10 : 0,
     best: bestEntry
