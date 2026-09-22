@@ -11,6 +11,8 @@ export default function PersonaDetailPage() {
   const id = params.id as string;
 
   const [persona, setPersona] = useState<Persona | null>(null);
+  const [draftCount, setDraftCount] = useState(0);
+  const [assetCount, setAssetCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
 
@@ -51,6 +53,21 @@ export default function PersonaDetailPage() {
       setPillars((data.lifestyle_pillars || []).join(", "));
       setRules((data.content_rules || []).join("\n"));
       setForbidden((data.forbidden_topics || []).join(", "));
+
+      // Counts
+      const [draftsRes, assetsRes] = await Promise.all([
+        supabase
+          .from("content_drafts")
+          .select("id", { count: "exact", head: true })
+          .eq("persona_id", id),
+        supabase
+          .from("assets")
+          .select("id", { count: "exact", head: true })
+          .eq("persona_id", id),
+      ]);
+
+      setDraftCount(draftsRes.count || 0);
+      setAssetCount(assetsRes.count || 0);
       setLoading(false);
     };
 
@@ -105,6 +122,35 @@ export default function PersonaDetailPage() {
     setSaving(false);
   };
 
+  const handleExportPersona = () => {
+    if (!persona) return;
+    const text = `PERSONA: ${persona.name}
+
+BACKSTORY:
+${persona.backstory}
+
+TONE OF VOICE:
+${persona.tone_of_voice || "—"}
+
+LIFESTYLE PILLARS:
+${(persona.lifestyle_pillars || []).join(", ") || "—"}
+
+CONTENT RULES:
+${(persona.content_rules || []).map((r) => `- ${r}`).join("\n") || "—"}
+
+FORBIDDEN TOPICS:
+${(persona.forbidden_topics || []).join(", ") || "—"}
+`;
+
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${persona.name.toLowerCase().replace(/\s+/g, "-")}-persona.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -116,19 +162,25 @@ export default function PersonaDetailPage() {
   if (!persona) return null;
 
   return (
-    <div className="min-h-screen p-8">
+    <div className="min-h-screen p-6 sm:p-8">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
-            ← Back to Dashboard
+            ← Dashboard
           </a>
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             <a
               href={`/dashboard/generate?persona=${persona.id}`}
               className="px-4 py-2 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
             >
-              Generate Content
+              Generate
             </a>
+            <button
+              onClick={handleExportPersona}
+              className="px-4 py-2 border border-zinc-600 rounded-lg text-sm hover:bg-zinc-800"
+            >
+              Export
+            </button>
             {!editing && (
               <button
                 onClick={() => setEditing(true)}
@@ -140,8 +192,20 @@ export default function PersonaDetailPage() {
           </div>
         </div>
 
+        {/* Stats */}
+        <div className="flex gap-4 mb-8 text-sm">
+          <div className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg">
+            <span className="text-zinc-500">Drafts</span>{" "}
+            <span className="font-medium ml-1">{draftCount}</span>
+          </div>
+          <div className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg">
+            <span className="text-zinc-500">Assets</span>{" "}
+            <span className="font-medium ml-1">{assetCount}</span>
+          </div>
+        </div>
+
         {editing ? (
-          <div className="space-y-6">
+          <div className="space-y-5">
             <div>
               <label className="block text-sm text-zinc-400 mb-2">Name</label>
               <input
@@ -155,7 +219,7 @@ export default function PersonaDetailPage() {
               <textarea
                 value={backstory}
                 onChange={(e) => setBackstory(e.target.value)}
-                rows={6}
+                rows={5}
                 className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
               />
             </div>
@@ -168,9 +232,7 @@ export default function PersonaDetailPage() {
               />
             </div>
             <div>
-              <label className="block text-sm text-zinc-400 mb-2">
-                Lifestyle Pillars (comma separated)
-              </label>
+              <label className="block text-sm text-zinc-400 mb-2">Lifestyle Pillars</label>
               <input
                 value={pillars}
                 onChange={(e) => setPillars(e.target.value)}
@@ -178,9 +240,7 @@ export default function PersonaDetailPage() {
               />
             </div>
             <div>
-              <label className="block text-sm text-zinc-400 mb-2">
-                Content Rules (one per line)
-              </label>
+              <label className="block text-sm text-zinc-400 mb-2">Content Rules (one per line)</label>
               <textarea
                 value={rules}
                 onChange={(e) => setRules(e.target.value)}
@@ -189,9 +249,7 @@ export default function PersonaDetailPage() {
               />
             </div>
             <div>
-              <label className="block text-sm text-zinc-400 mb-2">
-                Forbidden Topics (comma separated)
-              </label>
+              <label className="block text-sm text-zinc-400 mb-2">Forbidden Topics</label>
               <input
                 value={forbidden}
                 onChange={(e) => setForbidden(e.target.value)}
@@ -204,7 +262,7 @@ export default function PersonaDetailPage() {
                 disabled={saving}
                 className="px-5 py-2.5 bg-white text-black rounded-lg font-medium disabled:opacity-50"
               >
-                {saving ? "Saving..." : "Save Changes"}
+                {saving ? "Saving..." : "Save"}
               </button>
               <button
                 onClick={() => setEditing(false)}

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import type { Persona } from "@/types/persona";
 
 interface Draft {
   id: string;
@@ -16,7 +17,12 @@ interface Draft {
 export default function DraftsPage() {
   const router = useRouter();
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [personas, setPersonas] = useState<Persona[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filterPersona, setFilterPersona] = useState("all");
+  const [improvingId, setImprovingId] = useState<string | null>(null);
+  const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const load = async () => {
@@ -28,22 +34,101 @@ export default function DraftsPage() {
         return;
       }
 
-      const { data } = await supabase
-        .from("content_drafts")
-        .select("*, personas(name)")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false });
+      const [draftsRes, personasRes] = await Promise.all([
+        supabase
+          .from("content_drafts")
+          .select("*, personas(name)")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("personas")
+          .select("*")
+          .eq("user_id", user.id),
+      ]);
 
-      setDrafts(data || []);
+      setDrafts(draftsRes.data || []);
+      setPersonas(personasRes.data || []);
       setLoading(false);
     };
     load();
   }, [router]);
 
+  const filtered = drafts.filter((d) => {
+    const matchesSearch =
+      !search ||
+      d.content.toLowerCase().includes(search.toLowerCase()) ||
+      d.type.toLowerCase().includes(search.toLowerCase()) ||
+      ((d.personas as any)?.name || "").toLowerCase().includes(search.toLowerCase());
+
+    const matchesPersona = filterPersona === "all" || d.persona_id === filterPersona;
+
+    return matchesSearch && matchesPersona;
+  });
+
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this draft?")) return;
     await supabase.from("content_drafts").delete().eq("id", id);
     setDrafts((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const handleImprove = async (draft: Draft) => {
+    setImprovingId(draft.id);
+    try {
+      const persona = personas.find((p) => p.id === draft.persona_id);
+      if (!persona) throw new Error("Persona not found");
+
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona,
+          type: draft.type,
+          topic: `Improve and tighten this existing ${draft.type}. Keep the same core message but make it stronger, more in character, and higher quality:\n\n${draft.content}`,
+          model: "openai/gpt-4o-mini",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Improve failed");
+
+      setImprovedContent((prev) => ({ ...prev, [draft.id]: data.content }));
+
+      // Also save the improved version as a new draft
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from("content_drafts").insert({
+          persona_id: draft.persona_id,
+          user_id: user.id,
+          type: draft.type,
+          content: data.content,
+        });
+      }
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setImprovingId(null);
+    }
+  };
+
+  const handleExport = () => {
+    const text = filtered
+      .map(
+        (d) =>
+          `=== ${(d.personas as any)?.name || "Unknown"} | ${d.type} | ${new Date(
+            d.created_at
+          ).toLocaleString()} ===\n${d.content}\n`
+      )
+      .join("\n\n");
+
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `persona-os-drafts-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   if (loading) {
@@ -55,43 +140,85 @@ export default function DraftsPage() {
   }
 
   return (
-    <div className="min-h-screen p-8">
+    <div className="min-h-screen p-6 sm:p-8">
       <div className="max-w-4xl mx-auto">
-        <div className="flex items-center gap-4 mb-8">
-          <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
-            ← Dashboard
-          </a>
-          <h1 className="text-2xl font-bold">Content Drafts</h1>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+          <div className="flex items-center gap-4">
+            <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
+              ← Dashboard
+            </a>
+            <h1 className="text-2xl font-bold">Content Drafts</h1>
+          </div>
+          <button
+            onClick={handleExport}
+            disabled={filtered.length === 0}
+            className="px-4 py-2 border border-zinc-700 rounded-lg text-sm hover:bg-zinc-900 disabled:opacity-40"
+          >
+            Export All
+          </button>
         </div>
 
-        {drafts.length === 0 ? (
+        {/* Filters */}
+        <div className="flex flex-col sm:flex-row gap-3 mb-6">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search drafts..."
+            className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+          />
+          <select
+            value={filterPersona}
+            onChange={(e) => setFilterPersona(e.target.value)}
+            className="px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+          >
+            <option value="all">All Personas</option>
+            {personas.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {filtered.length === 0 ? (
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
-            <p className="text-zinc-400 mb-4">No drafts yet.</p>
-            <a
-              href="/dashboard/generate"
-              className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
-            >
-              Generate your first content
-            </a>
+            <p className="text-zinc-400 mb-4">
+              {drafts.length === 0 ? "No drafts yet." : "No drafts match your filters."}
+            </p>
+            {drafts.length === 0 && (
+              <a
+                href="/dashboard/generate"
+                className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+              >
+                Generate your first content
+              </a>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
-            {drafts.map((draft) => (
+            {filtered.map((draft) => (
               <div
                 key={draft.id}
                 className="bg-zinc-900 border border-zinc-800 rounded-xl p-5"
               >
-                <div className="flex items-start justify-between mb-3">
+                <div className="flex items-start justify-between mb-3 gap-4">
                   <div>
                     <span className="text-xs uppercase tracking-wide text-zinc-500">
                       {draft.type.replace("_", " ")}
                     </span>
                     <p className="text-sm text-zinc-400 mt-0.5">
-                      {(draft.personas as any)?.name || "Unknown persona"} ·{" "}
+                      {(draft.personas as any)?.name || "Unknown"} ·{" "}
                       {new Date(draft.created_at).toLocaleString()}
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      onClick={() => handleImprove(draft)}
+                      disabled={improvingId === draft.id}
+                      className="text-xs text-zinc-400 hover:text-white px-2 py-1 border border-zinc-700 rounded disabled:opacity-50"
+                    >
+                      {improvingId === draft.id ? "Improving..." : "Improve"}
+                    </button>
                     <button
                       onClick={() => navigator.clipboard.writeText(draft.content)}
                       className="text-xs text-zinc-400 hover:text-white px-2 py-1"
@@ -106,9 +233,29 @@ export default function DraftsPage() {
                     </button>
                   </div>
                 </div>
+
                 <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
                   {draft.content}
                 </pre>
+
+                {improvedContent[draft.id] && (
+                  <div className="mt-4 pt-4 border-t border-zinc-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-green-400 font-medium">Improved version</p>
+                      <button
+                        onClick={() =>
+                          navigator.clipboard.writeText(improvedContent[draft.id])
+                        }
+                        className="text-xs text-zinc-400 hover:text-white"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+                      {improvedContent[draft.id]}
+                    </pre>
+                  </div>
+                )}
               </div>
             ))}
           </div>
