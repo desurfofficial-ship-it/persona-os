@@ -25,6 +25,7 @@ export default function PersonaDetailPage() {
   const [editing, setEditing] = useState(false);
   const [sample, setSample] = useState("");
   const [sampleLoading, setSampleLoading] = useState(false);
+  const [strengthenLoading, setStrengthenLoading] = useState(false);
 
   const [name, setName] = useState("");
   const [backstory, setBackstory] = useState("");
@@ -161,6 +162,33 @@ export default function PersonaDetailPage() {
     }
   };
 
+  const handleStrengthen = async () => {
+    if (!persona) return;
+    setStrengthenLoading(true);
+    try {
+      const res = await fetch("/api/strengthen-persona", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ persona }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
+
+      // Apply suggestions
+      setName(data.name || persona.name);
+      setBackstory(data.backstory || persona.backstory);
+      setTone(data.tone_of_voice || persona.tone_of_voice || "");
+      setPillars((data.lifestyle_pillars || persona.lifestyle_pillars || []).join(", "));
+      setRules((data.content_rules || persona.content_rules || []).join("\n"));
+      setForbidden((data.forbidden_topics || persona.forbidden_topics || []).join(", "));
+      setEditing(true);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setStrengthenLoading(false);
+    }
+  };
+
   const handleExportPersona = () => {
     if (!persona) return;
     const text = `PERSONA: ${persona.name}
@@ -202,12 +230,18 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
   return (
     <div className="min-h-screen p-6 sm:p-8">
       <div className="max-w-4xl mx-auto">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
             ← Dashboard
           </a>
           <div className="flex flex-wrap gap-2">
+            <button
+              onClick={handleStrengthen}
+              disabled={strengthenLoading}
+              className="px-4 py-2 border border-zinc-600 rounded-lg text-sm hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {strengthenLoading ? "Strengthening..." : "Strengthen"}
+            </button>
             {!editing && (
               <button
                 onClick={() => setEditing(true)}
@@ -225,7 +259,6 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
           </div>
         </div>
 
-        {/* Title + Stats */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-3">{persona.name}</h1>
           <div className="flex flex-wrap gap-3 text-sm">
@@ -240,7 +273,6 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
           </div>
         </div>
 
-        {/* Command Center Actions */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10">
           <a
             href={`/dashboard/generate?persona=${persona.id}`}
@@ -390,7 +422,6 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
               </div>
             )}
 
-            {/* Sample Voice */}
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-medium text-zinc-400">Sample Voice</h2>
@@ -413,7 +444,6 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
           </div>
         )}
 
-        {/* Recent Drafts for this persona */}
         {recentDrafts.length > 0 && (
           <div>
             <div className="flex items-center justify-between mb-4">
