@@ -21,6 +21,7 @@ export default function DraftsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterPersona, setFilterPersona] = useState("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [improvingId, setImprovingId] = useState<string | null>(null);
   const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
 
@@ -40,10 +41,7 @@ export default function DraftsPage() {
           .select("*, personas(name)")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false }),
-        supabase
-          .from("personas")
-          .select("*")
-          .eq("user_id", user.id),
+        supabase.from("personas").select("*").eq("user_id", user.id),
       ]);
 
       setDrafts(draftsRes.data || []);
@@ -61,14 +59,37 @@ export default function DraftsPage() {
       ((d.personas as any)?.name || "").toLowerCase().includes(search.toLowerCase());
 
     const matchesPersona = filterPersona === "all" || d.persona_id === filterPersona;
-
     return matchesSearch && matchesPersona;
   });
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Delete ${selectedIds.size} draft(s)?`)) return;
+
+    const ids = Array.from(selectedIds);
+    await supabase.from("content_drafts").delete().in("id", ids);
+    setDrafts((prev) => prev.filter((d) => !selectedIds.has(d.id)));
+    setSelectedIds(new Set());
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this draft?")) return;
     await supabase.from("content_drafts").delete().eq("id", id);
     setDrafts((prev) => prev.filter((d) => d.id !== id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   };
 
   const handleImprove = async (draft: Draft) => {
@@ -93,7 +114,6 @@ export default function DraftsPage() {
 
       setImprovedContent((prev) => ({ ...prev, [draft.id]: data.content }));
 
-      // Also save the improved version as a new draft
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -149,16 +169,25 @@ export default function DraftsPage() {
             </a>
             <h1 className="text-2xl font-bold">Content Drafts</h1>
           </div>
-          <button
-            onClick={handleExport}
-            disabled={filtered.length === 0}
-            className="px-4 py-2 border border-zinc-700 rounded-lg text-sm hover:bg-zinc-900 disabled:opacity-40"
-          >
-            Export All
-          </button>
+          <div className="flex gap-2">
+            {selectedIds.size > 0 && (
+              <button
+                onClick={handleBulkDelete}
+                className="px-4 py-2 bg-red-900/50 border border-red-800 text-red-200 rounded-lg text-sm hover:bg-red-900/70"
+              >
+                Delete ({selectedIds.size})
+              </button>
+            )}
+            <button
+              onClick={handleExport}
+              disabled={filtered.length === 0}
+              className="px-4 py-2 border border-zinc-700 rounded-lg text-sm hover:bg-zinc-900 disabled:opacity-40"
+            >
+              Export
+            </button>
+          </div>
         </div>
 
-        {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3 mb-6">
           <input
             value={search}
@@ -190,7 +219,7 @@ export default function DraftsPage() {
                 href="/dashboard/generate"
                 className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
               >
-                Generate your first content
+                Generate content
               </a>
             )}
           </div>
@@ -199,17 +228,29 @@ export default function DraftsPage() {
             {filtered.map((draft) => (
               <div
                 key={draft.id}
-                className="bg-zinc-900 border border-zinc-800 rounded-xl p-5"
+                className={`bg-zinc-900 border rounded-xl p-5 transition ${
+                  selectedIds.has(draft.id)
+                    ? "border-zinc-500"
+                    : "border-zinc-800"
+                }`}
               >
                 <div className="flex items-start justify-between mb-3 gap-4">
-                  <div>
-                    <span className="text-xs uppercase tracking-wide text-zinc-500">
-                      {draft.type.replace("_", " ")}
-                    </span>
-                    <p className="text-sm text-zinc-400 mt-0.5">
-                      {(draft.personas as any)?.name || "Unknown"} ·{" "}
-                      {new Date(draft.created_at).toLocaleString()}
-                    </p>
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(draft.id)}
+                      onChange={() => toggleSelect(draft.id)}
+                      className="mt-1"
+                    />
+                    <div>
+                      <span className="text-xs uppercase tracking-wide text-zinc-500">
+                        {draft.type.replace("_", " ")}
+                      </span>
+                      <p className="text-sm text-zinc-400 mt-0.5">
+                        {(draft.personas as any)?.name || "Unknown"} ·{" "}
+                        {new Date(draft.created_at).toLocaleString()}
+                      </p>
+                    </div>
                   </div>
                   <div className="flex gap-2 shrink-0">
                     <button

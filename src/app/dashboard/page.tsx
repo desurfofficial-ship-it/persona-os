@@ -71,6 +71,37 @@ export default function DashboardPage() {
     setPersonas((prev) => prev.filter((p) => p.id !== id));
   };
 
+  const handleDuplicate = async (persona: Persona) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { error } = await supabase.from("personas").insert({
+      user_id: user.id,
+      name: `${persona.name} (Copy)`,
+      backstory: persona.backstory,
+      tone_of_voice: persona.tone_of_voice,
+      lifestyle_pillars: persona.lifestyle_pillars,
+      content_rules: persona.content_rules,
+      forbidden_topics: persona.forbidden_topics,
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    // Reload
+    const { data } = await supabase
+      .from("personas")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    setPersonas(data || []);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -87,12 +118,15 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-bold">Persona OS</h1>
             {userEmail && <p className="text-sm text-zinc-500 mt-1">{userEmail}</p>}
           </div>
-          <nav className="flex flex-wrap items-center gap-4 text-sm">
+          <nav className="flex flex-wrap items-center gap-3 sm:gap-4 text-sm">
             <a href="/dashboard" className="text-white font-medium">
               Dashboard
             </a>
             <a href="/dashboard/generate" className="text-zinc-400 hover:text-white">
               Generate
+            </a>
+            <a href="/dashboard/series" className="text-zinc-400 hover:text-white">
+              Series
             </a>
             <a href="/dashboard/check" className="text-zinc-400 hover:text-white">
               Check
@@ -103,43 +137,40 @@ export default function DashboardPage() {
             <a href="/dashboard/drafts" className="text-zinc-400 hover:text-white">
               Drafts
             </a>
-            <a href="/dashboard/personas/new" className="text-zinc-400 hover:text-white">
-              + New
-            </a>
             <button onClick={handleLogout} className="text-zinc-400 hover:text-white">
               Logout
             </button>
           </nav>
         </header>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-12">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-12">
           <a
             href="/dashboard/generate"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
           >
             <h2 className="font-semibold mb-1">Generate</h2>
-            <p className="text-zinc-400 text-sm">AI content</p>
+            <p className="text-zinc-400 text-xs sm:text-sm">AI content</p>
+          </a>
+          <a
+            href="/dashboard/series"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
+          >
+            <h2 className="font-semibold mb-1">Series</h2>
+            <p className="text-zinc-400 text-xs sm:text-sm">Multi-day plans</p>
           </a>
           <a
             href="/dashboard/check"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
           >
             <h2 className="font-semibold mb-1">Check</h2>
-            <p className="text-zinc-400 text-sm">Consistency</p>
-          </a>
-          <a
-            href="/dashboard/vault"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition"
-          >
-            <h2 className="font-semibold mb-1">Vault</h2>
-            <p className="text-zinc-400 text-sm">Assets</p>
+            <p className="text-zinc-400 text-xs sm:text-sm">Consistency</p>
           </a>
           <a
             href="/dashboard/personas/new"
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 hover:border-zinc-600 transition"
           >
             <h2 className="font-semibold mb-1">New Persona</h2>
-            <p className="text-zinc-400 text-sm">Create</p>
+            <p className="text-zinc-400 text-xs sm:text-sm">Create</p>
           </a>
         </div>
 
@@ -172,7 +203,7 @@ export default function DashboardPage() {
                   className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition group relative"
                 >
                   <a href={`/dashboard/personas/${persona.id}`} className="block">
-                    <h3 className="text-lg font-semibold mb-2">{persona.name}</h3>
+                    <h3 className="text-lg font-semibold mb-2 pr-16">{persona.name}</h3>
                     <p className="text-sm text-zinc-400 line-clamp-3 mb-3">
                       {persona.backstory || "No backstory."}
                     </p>
@@ -192,12 +223,20 @@ export default function DashboardPage() {
                       </div>
                     )}
                   </a>
-                  <button
-                    onClick={() => handleDeletePersona(persona.id, persona.name)}
-                    className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 text-xs text-red-400 hover:text-red-300"
-                  >
-                    Delete
-                  </button>
+                  <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+                    <button
+                      onClick={() => handleDuplicate(persona)}
+                      className="text-xs text-zinc-400 hover:text-white"
+                    >
+                      Duplicate
+                    </button>
+                    <button
+                      onClick={() => handleDeletePersona(persona.id, persona.name)}
+                      className="text-xs text-red-400 hover:text-red-300"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
