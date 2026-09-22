@@ -1,0 +1,688 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState } from "react";
+     4→import { useRouter, useSearchParams } from "next/navigation";
+     5→import { supabase } from "@/lib/supabase";
+     6→import type { Persona } from "@/types/persona";
+     7→import { fetchVoiceSamples } from "@/lib/voiceSamples";
+     8→import { copyAndOpen } from "@/lib/share";
+     9→import { nextSevenDays } from "@/lib/calendar";
+    10→import { compactNumber, parseCount } from "@/lib/metrics";
+    11→
+    12→interface Draft {
+    13→  id: string;
+    14→  persona_id: string;
+    15→  type: string;
+    16→  content: string;
+    17→  created_at: string;
+    18→  posted?: boolean;
+    19→  planned_for?: string | null;
+    20→  metrics?: unknown;
+    21→  personas?: { name: string };
+    22→}
+    23→
+    24→interface DraftMetrics {
+    25→  platform: string;
+    26→  views: number;
+    27→  likes: number;
+    28→  comments: number;
+    29→  loggedAt: string;
+    30→}
+    31→
+    32→const PLATFORMS = ["X", "LinkedIn", "Instagram", "Threads", "TikTok", "YouTube", "Other"];
+    33→
+    34→function asMetrics(raw: unknown): DraftMetrics | null {
+    35→  if (!raw || typeof raw !== "object") return null;
+    36→  const m = raw as Record<string, unknown>;
+    37→  if (!m.platform) return null;
+    38→  return {
+    39→    platform: String(m.platform),
+    40→    views: Number(m.views) || 0,
+    41→    likes: Number(m.likes) || 0,
+    42→    comments: Number(m.comments) || 0,
+    43→    loggedAt: String(m.loggedAt || ""),
+    44→  };
+    45→}
+    46→
+    47→export default function DraftsPage() {
+    48→  const router = useRouter();
+    49→  const [drafts, setDrafts] = useState<Draft[]>([]);
+    50→  const [personas, setPersonas] = useState<Persona[]>([]);
+    51→  const [loading, setLoading] = useState(true);
+    52→  const [search, setSearch] = useState("");
+    53→  const [filterPersona, setFilterPersona] = useState("all");
+    54→  const [filterPosted, setFilterPosted] = useState("all");
+    55→  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    56→  const [improvingId, setImprovingId] = useState<string | null>(null);
+    57→  const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
+    58→  const [loggingId, setLoggingId] = useState<string | null>(null);
+    59→  const [logForm, setLogForm] = useState({ platform: "X", views: "", likes: "", comments: "" });
+    60→  const [editingId, setEditingId] = useState<string | null>(null);
+    61→  const [editText, setEditText] = useState("");
+    62→  const [savingEdit, setSavingEdit] = useState(false);
+    63→  const [menuId, setMenuId] = useState<string | null>(null);
+    64→  const planDays = nextSevenDays();
+    65→  const searchParams = useSearchParams();
+    66→
+    67→  // Deep link from the Consistency Engine: /dashboard/drafts?q=<quote fragment>
+    68→  useEffect(() => {
+    69→    const q = searchParams.get("q");
+    70→    if (q) setSearch(q);
+    71→  }, [searchParams]);
+    72→
+    73→  useEffect(() => {
+    74→    const load = async () => {
+    75→      const {
+    76→        data: { user },
+    77→      } = await supabase.auth.getUser();
+    78→      if (!user) {
+    79→        router.push("/login");
+    80→        return;
+    81→      }
+    82→
+    83→      const [draftsRes, personasRes] = await Promise.all([
+    84→        supabase
+    85→          .from("content_drafts")
+    86→          .select("*, personas(name)")
+    87→          .eq("user_id", user.id)
+    88→          .order("created_at", { ascending: false }),
+    89→        supabase.from("personas").select("*").eq("user_id", user.id),
+    90→      ]);
+    91→
+    92→      setDrafts(draftsRes.data || []);
+    93→      setPersonas(personasRes.data || []);
+    94→      setLoading(false);
+    95→    };
+    96→    load();
+    97→  }, [router]);
+    98→
+    99→  const filtered = drafts.filter((d) => {
+   100→    const matchesSearch =
+   101→      !search ||
+   102→      d.content.toLowerCase().includes(search.toLowerCase()) ||
+   103→      d.type.toLowerCase().includes(search.toLowerCase()) ||
+   104→      ((d.personas as any)?.name || "").toLowerCase().includes(search.toLowerCase());
+   105→
+   106→    const matchesPersona = filterPersona === "all" || d.persona_id === filterPersona;
+   107→    const matchesPosted =
+   108→      filterPosted === "all" ||
+   109→      (filterPosted === "posted" && d.posted) ||
+   110→      (filterPosted === "unposted" && !d.posted);
+   111→
+   112→    return matchesSearch && matchesPersona && matchesPosted;
+   113→  });
+   114→
+   115→  const toggleSelect = (id: string) => {
+   116→    setSelectedIds((prev) => {
+   117→      const next = new Set(prev);
+   118→      if (next.has(id)) next.delete(id);
+   119→      else next.add(id);
+   120→      return next;
+   121→    });
+   122→  };
+   123→
+   124→  const handleBulkDelete = async () => {
+   125→    if (selectedIds.size === 0) return;
+   126→    if (!confirm(`Delete ${selectedIds.size} draft(s)?`)) return;
+   127→
+   128→    const ids = Array.from(selectedIds);
+   129→    await supabase.from("content_drafts").delete().in("id", ids);
+   130→    setDrafts((prev) => prev.filter((d) => !selectedIds.has(d.id)));
+   131→    setSelectedIds(new Set());
+   132→  };
+   133→
+   134→  const handleDelete = async (id: string) => {
+   135→    if (!confirm("Delete this draft?")) return;
+   136→    await supabase.from("content_drafts").delete().eq("id", id);
+   137→    setDrafts((prev) => prev.filter((d) => d.id !== id));
+   138→  };
+   139→
+   140→  const planFor = async (draft: Draft, dayKey: string | null) => {
+   141→    const value = dayKey ? new Date(`${dayKey}T09:00:00`).toISOString() : null;
+   142→    // Optimistic
+   143→    setDrafts((prev) =>
+   144→      prev.map((d) => (d.id === draft.id ? { ...d, planned_for: value } : d))
+   145→    );
+   146→    const { error } = await supabase
+   147→      .from("content_drafts")
+   148→      .update({ planned_for: value })
+   149→      .eq("id", draft.id);
+   150→    if (error) {
+   151→      setDrafts((prev) =>
+   152→        prev.map((d) => (d.id === draft.id ? { ...d, planned_for: draft.planned_for } : d))
+   153→      );
+   154→      alert(error.message);
+   155→    }
+   156→  };
+   157→
+   158→  const togglePosted = async (draft: Draft) => {
+   159→    const newValue = !draft.posted;
+   160→    // Optimistic update
+   161→    setDrafts((prev) =>
+   162→      prev.map((d) => (d.id === draft.id ? { ...d, posted: newValue } : d))
+   163→    );
+   164→
+   165→    const { error } = await supabase
+   166→      .from("content_drafts")
+   167→      .update({ posted: newValue })
+   168→      .eq("id", draft.id);
+   169→
+   170→    if (error) {
+   171→      // Revert on error
+   172→      setDrafts((prev) =>
+   173→        prev.map((d) => (d.id === draft.id ? { ...d, posted: draft.posted } : d))
+   174→      );
+   175→      console.error("Posted flag error:", error);
+   176→      return;
+   177→    }
+   178→
+   179→    // First time marking posted -> invite logging performance right away.
+   180→    if (newValue && !draft.metrics) {
+   181→      setLogForm({ platform: "X", views: "", likes: "", comments: "" });
+   182→      setLoggingId(draft.id);
+   183→    }
+   184→  };
+   185→
+   186→  const openLogForm = (draft: Draft) => {
+   187→    const existing = asMetrics(draft.metrics);
+   188→    setLogForm({
+   189→      platform: existing?.platform || "X",
+   190→      views: existing ? String(existing.views) : "",
+   191→      likes: existing ? String(existing.likes) : "",
+   192→      comments: existing ? String(existing.comments) : "",
+   193→    });
+   194→    setLoggingId(draft.id);
+   195→  };
+   196→
+   197→  const saveMetrics = async (draft: Draft) => {
+   198→    const metrics: DraftMetrics = {
+   199→      platform: logForm.platform,
+   200→      views: parseCount(logForm.views) ?? 0,
+   201→      likes: parseCount(logForm.likes) ?? 0,
+   202→      comments: parseCount(logForm.comments) ?? 0,
+   203→      loggedAt: new Date().toISOString(),
+   204→    };
+   205→    // Never store an all-zero junk row — it would skew every average.
+   206→    if (metrics.views + metrics.likes + metrics.comments === 0) return;
+   207→    // Optimistic
+   208→    setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics } : d)));
+   209→    setLoggingId(null);
+   210→
+   211→    const { error } = await supabase
+   212→      .from("content_drafts")
+   213→      .update({ metrics })
+   214→      .eq("id", draft.id);
+   215→    if (error) {
+   216→      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, metrics: draft.metrics } : d)));
+   217→      alert(error.message);
+   218→    }
+   219→  };
+   220→
+   221→  const startEdit = (draft: Draft) => {
+   222→    setEditingId(draft.id);
+   223→    setEditText(draft.content);
+   224→    setMenuId(null);
+   225→  };
+   226→
+   227→  const saveEdit = async (draft: Draft) => {
+   228→    const next = editText.trim();
+   229→    if (!next || next === draft.content) {
+   230→      setEditingId(null);
+   231→      return;
+   232→    }
+   233→    setSavingEdit(true);
+   234→    // Optimistic
+   235→    setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, content: next } : d)));
+   236→    const { error } = await supabase
+   237→      .from("content_drafts")
+   238→      .update({ content: next })
+   239→      .eq("id", draft.id);
+   240→    setSavingEdit(false);
+   241→    if (error) {
+   242→      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, content: draft.content } : d)));
+   243→      alert(error.message);
+   244→      return;
+   245→    }
+   246→    setEditingId(null);
+   247→  };
+   248→
+   249→  const handleImprove = async (draft: Draft) => {
+   250→    setImprovingId(draft.id);
+   251→    try {
+   252→      const persona = personas.find((p) => p.id === draft.persona_id);
+   253→      if (!persona) throw new Error("Persona not found");
+   254→
+   255→      const res = await fetch("/api/generate", {
+   256→        method: "POST",
+   257→        headers: { "Content-Type": "application/json" },
+   258→        body: JSON.stringify({
+   259→          persona,
+   260→          type: draft.type,
+   261→          voiceSamples: await fetchVoiceSamples(draft.persona_id),
+   262→          topic: `Improve and tighten this existing ${draft.type}. Keep the same core message but make it stronger, more in character, and higher quality:\n\n${draft.content}`,
+   263→          model: "openai/gpt-4o-mini",
+   264→        }),
+   265→      });
+   266→
+   267→      const data = await res.json();
+   268→      if (!res.ok) throw new Error(data.error || "Improve failed");
+   269→
+   270→      setImprovedContent((prev) => ({ ...prev, [draft.id]: data.content }));
+   271→
+   272→      const {
+   273→        data: { user },
+   274→      } = await supabase.auth.getUser();
+   275→      if (user) {
+   276→        await supabase.from("content_drafts").insert({
+   277→          persona_id: draft.persona_id,
+   278→          user_id: user.id,
+   279→          type: draft.type,
+   280→          content: data.content,
+   281→        });
+   282→      }
+   283→    } catch (err: any) {
+   284→      alert(err.message);
+   285→    } finally {
+   286→      setImprovingId(null);
+   287→    }
+   288→  };
+   289→
+   290→  const handleExport = () => {
+   291→    const text = filtered
+   292→      .map(
+   293→        (d) =>
+   294→          `=== ${(d.personas as any)?.name || "Unknown"} | ${d.type} | ${new Date(
+   295→            d.created_at
+   296→          ).toLocaleString()} ${d.posted ? "| POSTED" : ""} ===\n${d.content}\n`
+   297→      )
+   298→      .join("\n\n");
+   299→
+   300→    const blob = new Blob([text], { type: "text/plain" });
+   301→    const url = URL.createObjectURL(blob);
+   302→    const a = document.createElement("a");
+   303→    a.href = url;
+   304→    a.download = `persona-os-drafts-${new Date().toISOString().slice(0, 10)}.txt`;
+   305→    a.click();
+   306→    URL.revokeObjectURL(url);
+   307→  };
+   308→
+   309→  if (loading) {
+   310→    return (
+   311→      <div className="min-h-screen flex items-center justify-center">
+   312→        <p className="text-zinc-400">Loading...</p>
+   313→      </div>
+   314→    );
+   315→  }
+   316→
+   317→  return (
+   318→    <div className="min-h-screen p-6 sm:p-8">
+   319→      <div className="max-w-4xl mx-auto">
+   320→        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+   321→          <div className="flex items-center gap-4">
+   322→            <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
+   323→              ← Dashboard
+   324→            </a>
+   325→            <h1 className="text-2xl font-bold">Content Drafts</h1>
+   326→          </div>
+   327→          <div className="flex gap-2">
+   328→            {selectedIds.size > 0 && (
+   329→              <button
+   330→                onClick={handleBulkDelete}
+   331→                className="px-4 py-2 bg-red-900/50 border border-red-800 text-red-200 rounded-lg text-sm"
+   332→              >
+   333→                Delete ({selectedIds.size})
+   334→              </button>
+   335→            )}
+   336→            <button
+   337→              onClick={handleExport}
+   338→              disabled={filtered.length === 0}
+   339→              className="px-4 py-2 border border-zinc-700 rounded-lg text-sm hover:bg-zinc-900 disabled:opacity-40"
+   340→            >
+   341→              Export
+   342→            </button>
+   343→          </div>
+   344→        </div>
+   345→
+   346→        <div className="flex flex-col sm:flex-row gap-3 mb-6">
+   347→          <input
+   348→            value={search}
+   349→            onChange={(e) => setSearch(e.target.value)}
+   350→            placeholder="Search drafts..."
+   351→            className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+   352→          />
+   353→          <select
+   354→            value={filterPersona}
+   355→            onChange={(e) => setFilterPersona(e.target.value)}
+   356→            className="px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+   357→          >
+   358→            <option value="all">All Personas</option>
+   359→            {personas.map((p) => (
+   360→              <option key={p.id} value={p.id}>
+   361→                {p.name}
+   362→              </option>
+   363→            ))}
+   364→          </select>
+   365→          <select
+   366→            value={filterPosted}
+   367→            onChange={(e) => setFilterPosted(e.target.value)}
+   368→            className="px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+   369→          >
+   370→            <option value="all">All</option>
+   371→            <option value="posted">Posted</option>
+   372→            <option value="unposted">Not Posted</option>
+   373→          </select>
+   374→        </div>
+   375→
+   376→        {filtered.length === 0 ? (
+   377→          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
+   378→            <p className="text-zinc-400 mb-4">
+   379→              {drafts.length === 0
+   380→                ? "No drafts yet."
+   381→                : search
+   382→                  ? searchParams.get("q")
+   383→                    ? "No drafts match this quote — you may have already edited or fixed the wording."
+   384→                    : `No drafts match “${search}”.`
+   385→                  : "No drafts match your filters."}
+   386→            </p>
+   387→            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+   388→              {(search || filterPersona !== "all" || filterPosted !== "all") && (
+   389→                <button
+   390→                  onClick={() => {
+   391→                    setSearch("");
+   392→                    setFilterPersona("all");
+   393→                    setFilterPosted("all");
+   394→                    if (searchParams.get("q")) router.replace("/dashboard/drafts");
+   395→                  }}
+   396→                  className="px-4 py-2.5 border border-zinc-600 rounded-lg text-sm hover:bg-zinc-800"
+   397→                >
+   398→                  Clear search & filters
+   399→                </button>
+   400→              )}
+   401→              {drafts.length === 0 && (
+   402→                <a
+   403→                  href="/dashboard/generate"
+   404→                  className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+   405→                >
+   406→                  Generate content
+   407→                </a>
+   408→              )}
+   409→            </div>
+   410→          </div>
+   411→        ) : (
+   412→          <div className="space-y-4">
+   413→            {filtered.map((draft) => (
+   414→              <div
+   415→                key={draft.id}
+   416→                className={`bg-zinc-900 border rounded-xl p-5 transition ${
+   417→                  selectedIds.has(draft.id) ? "border-zinc-500" : "border-zinc-800"
+   418→                }`}
+   419→              >
+   420→                <div className="flex flex-col sm:flex-row sm:items-start justify-between mb-3 gap-3">
+   421→                  <div className="flex items-start gap-3">
+   422→                    <input
+   423→                      type="checkbox"
+   424→                      checked={selectedIds.has(draft.id)}
+   425→                      onChange={() => toggleSelect(draft.id)}
+   426→                      className="mt-1"
+   427→                    />
+   428→                    <div>
+   429→                      <div className="flex flex-wrap items-center gap-2">
+   430→                        <span className="text-xs uppercase tracking-wide text-zinc-500">
+   431→                          {draft.type.replace("_", " ")}
+   432→                        </span>
+   433→                        {draft.posted && (
+   434→                          <span className="text-xs px-1.5 py-0.5 bg-green-900/40 text-green-300 rounded whitespace-nowrap">
+   435→                            Posted
+   436→                          </span>
+   437→                        )}
+   438→                        {asMetrics(draft.metrics) && (
+   439→                          <span className="text-xs px-1.5 py-0.5 bg-blue-900/40 text-blue-300 rounded whitespace-nowrap">
+   440→                            {asMetrics(draft.metrics)!.platform} · {compactNumber(asMetrics(draft.metrics)!.views)} views
+   441→                          </span>
+   442→                        )}
+   443→                        {draft.planned_for && !draft.posted && (
+   444→                          <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-300 rounded whitespace-nowrap">
+   445→                            Planned {new Date(draft.planned_for).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+   446→                          </span>
+   447→                        )}
+   448→                      </div>
+   449→                      <p className="text-sm text-zinc-400 mt-0.5">
+   450→                        {(draft.personas as any)?.name || "Unknown"} ·{" "}
+   451→                        {new Date(draft.created_at).toLocaleString()}
+   452→                      </p>
+   453→                    </div>
+   454→                  </div>
+   455→                  <div className="flex flex-wrap gap-2">
+   456→                    <select
+   457→                      value={
+   458→                        draft.planned_for
+   459→                          ? nextSevenDays().find(
+   460→                              (d) =>
+   461→                                new Date(draft.planned_for!).toDateString() ===
+   462→                                new Date(`${d.key}T00:00:00`).toDateString()
+   463→                            )?.key || ""
+   464→                          : ""
+   465→                      }
+   466→                      onChange={(e) => planFor(draft, e.target.value || null)}
+   467→                      title="Plan this draft for a day"
+   468→                      className="text-xs px-2 py-1.5 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   469→                    >
+   470→                      <option value="">Plan day…</option>
+   471→                      {planDays.map((d) => (
+   472→                        <option key={d.key} value={d.key}>
+   473→                          {d.label}
+   474→                        </option>
+   475→                      ))}
+   476→                    </select>
+   477→                    <button
+   478→                      onClick={() => togglePosted(draft)}
+   479→                      className={`text-xs px-2 py-1.5 min-h-[36px] rounded font-medium ${
+   480→                        draft.posted
+   481→                          ? "border border-zinc-700 hover:bg-zinc-800"
+   482→                          : "bg-white text-black hover:bg-zinc-200"
+   483→                      }`}
+   484→                    >
+   485→                      {draft.posted ? "Unmark" : "Mark Posted"}
+   486→                    </button>
+   487→                    {draft.posted && (
+   488→                      <button
+   489→                        onClick={() => openLogForm(draft)}
+   490→                        title="Record how this post performed"
+   491→                        className="text-xs px-2 py-1.5 min-h-[36px] border border-blue-800 text-blue-300 rounded hover:bg-blue-950/50"
+   492→                      >
+   493→                        {asMetrics(draft.metrics) ? "Edit numbers" : "Log performance"}
+   494→                      </button>
+   495→                    )}
+   496→                    <button
+   497→                      onClick={() => startEdit(draft)}
+   498→                      title="Edit this draft in place"
+   499→                      className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+   500→                    >
+   501→                      Edit
+   502→                    </button>
+   503→                    {/* Secondary actions live in an overflow menu — the card
+   504→                        stays scannable on mobile instead of a button wall. */}
+   505→                    <div className="relative">
+   506→                      <button
+   507→                        onClick={() => setMenuId(menuId === draft.id ? null : draft.id)}
+   508→                        aria-expanded={menuId === draft.id}
+   509→                        aria-haspopup="true"
+   510→                        title="More actions"
+   511→                        className="text-xs px-2 py-1.5 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+   512→                      >
+   513→                        ⋯
+   514→                      </button>
+   515→                      {menuId === draft.id && (
+   516→                        <div className="absolute right-0 top-full mt-1 w-48 bg-zinc-900 border border-zinc-700 rounded-xl shadow-xl py-1.5 z-40">
+   517→                          {[
+   518→                            {
+   519→                              label: improvingId === draft.id ? "Improving…" : "✨ Improve with AI",
+   520→                              action: () => handleImprove(draft),
+   521→                              disabled: improvingId === draft.id,
+   522→                            },
+   523→                            {
+   524→                              label: "Copy & open X",
+   525→                              action: () => copyAndOpen(draft.content, "twitter"),
+   526→                            },
+   527→                            {
+   528→                              label: "Copy & open LinkedIn",
+   529→                              action: () => copyAndOpen(draft.content, "linkedin"),
+   530→                            },
+   531→                            {
+   532→                              label: "Copy text",
+   533→                              action: () => navigator.clipboard.writeText(draft.content),
+   534→                            },
+   535→                          ].map((item) => (
+   536→                            <button
+   537→                              key={item.label}
+   538→                              onClick={() => {
+   539→                                setMenuId(null);
+   540→                                item.action();
+   541→                              }}
+   542→                              disabled={item.disabled}
+   543→                              className="block w-full text-left px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-50"
+   544→                            >
+   545→                              {item.label}
+   546→                            </button>
+   547→                          ))}
+   548→                          <div className="border-t border-zinc-800 my-1" />
+   549→                          <button
+   550→                            onClick={() => {
+   551→                              setMenuId(null);
+   552→                              handleDelete(draft.id);
+   553→                            }}
+   554→                            className="block w-full text-left px-4 py-2.5 text-sm text-red-400 hover:bg-zinc-800"
+   555→                          >
+   556→                            Delete draft
+   557→                          </button>
+   558→                        </div>
+   559→                      )}
+   560→                    </div>
+   561→                  </div>
+   562→                </div>
+   563→
+   564→                {editingId === draft.id ? (
+   565→                  <div>
+   566→                    <textarea
+   567→                      value={editText}
+   568→                      onChange={(e) => setEditText(e.target.value)}
+   569→                      rows={Math.min(16, Math.max(4, Math.ceil(editText.length / 80)))}
+   570→                      className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-600 rounded-lg text-sm text-zinc-100 leading-relaxed"
+   571→                    />
+   572→                    <div className="flex flex-wrap gap-2 mt-2">
+   573→                      <button
+   574→                        onClick={() => saveEdit(draft)}
+   575→                        disabled={savingEdit}
+   576→                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium hover:bg-zinc-200 disabled:opacity-50"
+   577→                      >
+   578→                        {savingEdit ? "Saving…" : "Save changes"}
+   579→                      </button>
+   580→                      <button
+   581→                        onClick={() => setEditingId(null)}
+   582→                        className="text-xs px-3 py-2 min-h-[36px] border border-zinc-700 rounded hover:bg-zinc-800"
+   583→                      >
+   584→                        Cancel
+   585→                      </button>
+   586→                      <p className="text-xs text-zinc-500 self-center">
+   587→                        Editing updates the draft everywhere — the Consistency Engine re-checks on
+   588→                        the next scan.
+   589→                      </p>
+   590→                    </div>
+   591→                  </div>
+   592→                ) : (
+   593→                  <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+   594→                    {draft.content}
+   595→                  </pre>
+   596→                )}
+   597→
+   598→                {loggingId === draft.id && (
+   599→                  <div className="mt-4 pt-4 border-t border-zinc-800">
+   600→                    <p className="text-xs text-blue-300 font-medium mb-2">
+   601→                      Log performance — numbers only you can see
+   602→                    </p>
+   603→                    <div className="flex flex-wrap gap-2 items-center">
+   604→                      <select
+   605→                        value={logForm.platform}
+   606→                        onChange={(e) => setLogForm((f) => ({ ...f, platform: e.target.value }))}
+   607→                        className="text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   608→                      >
+   609→                        {PLATFORMS.map((p) => (
+   610→                          <option key={p} value={p}>
+   611→                            {p}
+   612→                          </option>
+   613→                        ))}
+   614→                      </select>
+   615→                      <input
+   616→                        type="text"
+   617→                        inputMode="numeric"
+   618→                        placeholder="Views"
+   619→                        value={logForm.views}
+   620→                        onChange={(e) => setLogForm((f) => ({ ...f, views: e.target.value }))}
+   621→                        className="w-24 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   622→                      />
+   623→                      <input
+   624→                        type="text"
+   625→                        inputMode="numeric"
+   626→                        placeholder="Likes"
+   627→                        value={logForm.likes}
+   628→                        onChange={(e) => setLogForm((f) => ({ ...f, likes: e.target.value }))}
+   629→                        className="w-20 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   630→                      />
+   631→                      <input
+   632→                        type="text"
+   633→                        inputMode="numeric"
+   634→                        placeholder="Comments"
+   635→                        value={logForm.comments}
+   636→                        onChange={(e) => setLogForm((f) => ({ ...f, comments: e.target.value }))}
+   637→                        className="w-24 text-xs px-2 py-2 min-h-[36px] bg-zinc-900 border border-zinc-700 rounded"
+   638→                      />
+   639→                      <button
+   640→                        onClick={() => saveMetrics(draft)}
+   641→                        disabled={
+   642→                          (parseCount(logForm.views) ?? 0) +
+   643→                            (parseCount(logForm.likes) ?? 0) +
+   644→                            (parseCount(logForm.comments) ?? 0) ===
+   645→                          0
+   646→                        }
+   647→                        title="Paste numbers exactly as the platform shows them — 12,500 and 1.2K both work"
+   648→                        className="text-xs px-3 py-2 min-h-[36px] bg-white text-black rounded font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+   649→                      >
+   650→                        Save
+   651→                      </button>
+   652→                      <button
+   653→                        onClick={() => setLoggingId(null)}
+   654→                        className="text-xs px-2 py-2 min-h-[36px] border border-zinc-700 rounded"
+   655→                      >
+   656→                        Skip
+   657→                      </button>
+   658→                    </div>
+   659→                  </div>
+   660→                )}
+   661→
+   662→                {improvedContent[draft.id] && (
+   663→                  <div className="mt-4 pt-4 border-t border-zinc-800">
+   664→                    <div className="flex items-center justify-between mb-2">
+   665→                      <p className="text-xs text-green-400 font-medium">Improved version</p>
+   666→                      <button
+   667→                        onClick={() =>
+   668→                          navigator.clipboard.writeText(improvedContent[draft.id])
+   669→                        }
+   670→                        className="text-xs text-zinc-400 hover:text-white"
+   671→                      >
+   672→                        Copy
+   673→                      </button>
+   674→                    </div>
+   675→                    <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
+   676→                      {improvedContent[draft.id]}
+   677→                    </pre>
+   678→                  </div>
+   679→                )}
+   680→              </div>
+   681→            ))}
+   682→          </div>
+   683→        )}
+   684→      </div>
+   685→    </div>
+   686→  );
+   687→}
+   688→

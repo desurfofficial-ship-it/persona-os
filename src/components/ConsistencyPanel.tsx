@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { authedFetch } from "@/lib/supabase";
 
 interface Contradiction {
@@ -63,10 +63,39 @@ function scanAge(iso?: string): string | null {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+/** Progress labels mirroring the scan's real execution order. */
+const STAGES = [
+  "Reading your posts and scripts…",
+  "Layer 1 — exact-claim matching across everything…",
+  "Layer 2 — semantic read-through in context…",
+  "Scoring and writing fixes…",
+];
+
 export default function ConsistencyPanel({ personaId }: { personaId: string }) {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [stage, setStage] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+
+  // Honest staged progress: the two engine layers really do run in this
+  // order, so the labels track the work instead of faking a spinner.
+  useEffect(() => {
+    if (!scanning) {
+      setStage(0);
+      setElapsed(0);
+      return;
+    }
+    const stageTimer = setInterval(
+      () => setStage((s) => (s < STAGES.length - 1 ? s + 1 : s)),
+      6000
+    );
+    const tick = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => {
+      clearInterval(stageTimer);
+      clearInterval(tick);
+    };
+  }, [scanning]);
 
   const runScan = async () => {
     setScanning(true);
@@ -122,9 +151,21 @@ export default function ConsistencyPanel({ personaId }: { personaId: string }) {
       )}
 
       {scanning && (
-        <div className="space-y-2">
-          <div className="h-3 w-2/3 bg-zinc-800 rounded animate-pulse" />
-          <div className="h-3 w-1/2 bg-zinc-800 rounded animate-pulse" />
+        <div className="space-y-2" role="status" aria-live="polite">
+          <div className="flex items-center gap-2">
+            <span className="w-3.5 h-3.5 border-2 border-zinc-600 border-t-white rounded-full animate-spin shrink-0" />
+            <p className="text-sm text-zinc-300">{STAGES[stage]}</p>
+            <span className="text-xs text-zinc-600 tabular-nums ml-auto">{elapsed}s</span>
+          </div>
+          <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-emerald-600 transition-all duration-700"
+              style={{ width: `${((stage + 1) / STAGES.length) * 100}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-zinc-600">
+            Big libraries take up to a minute — you can keep working, the result lands here.
+          </p>
         </div>
       )}
 
