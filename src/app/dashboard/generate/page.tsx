@@ -1,1399 +1,835 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef, Suspense, type RefObject } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { supabase, authedFetch } from "@/lib/supabase";
+/**
+ * Agent workspace — Persona OS x OpenMuse integration.
+ *
+ * Three columns:
+ *   left (320px)   : persona selector, content type, model pills
+ *   center (flex)  : prompt composer + the agent conversation
+ *   right (340px)  : live preview (last 3 chat messages), auto-save note,
+ *                    Goals & Tracking ("Content Calendar Automation") panel
+ *
+ * The active persona id rides the `x-persona-id` header into /api/copilotkit
+ * where it is injected server-side as system instructions; the same persona
+ * is readable context + the saveToDrafts / saveToVault / createGoal /
+ * scheduleContent actions come from hooks/usePersonaAgent.ts.
+ *
+ * Chat surface: headless useCopilotChat (from @copilotkit/react-core) instead
+ * of the prebuilt @copilotkit/react-ui <CopilotChat/>. Same runtime, actions,
+ * readables and streaming — but the render fits this page's cream/charcoal
+ * identity and keeps the dependency graph small enough for memory-constrained
+ * preview environments (the prebuilt UI pulls in Lit + markdown and can OOM
+ * small dev boxes). To use the stock UI instead, install @copilotkit/react-ui,
+ * import its styles and swap <CopilotChatPane/> for <CopilotChat/>.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { CopilotKit, useCopilotChatInternal } from "@copilotkit/react-core";
+import { TextMessage, Role } from "@copilotkit/runtime-client-gql";
+import { supabase, authedFetch, getSessionToken } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
-import { copyAndOpen, copyToClipboard, type Platform } from "@/lib/share";
-import { getActivePersonaId, setActivePersonaId } from "@/lib/activePersona";
-import {
-  findSimilarPosts,
-  formatPostedDate,
-  sensitivityLabel,
-  type PostedPost,
-  type Sensitivity,
-  type SimilarPost,
-} from "@/lib/duplicate";
-import { extractVoiceFingerprint } from "@/lib/voice";
-import { PLATFORMS, type PlatformId } from "@/lib/platforms";
-import type { VariantResult } from "@/lib/generation";
-import ThreadComposer from "@/components/ThreadComposer";
+import { usePersonaAgent, type AgentContentType } from "@/hooks/usePersonaAgent";
 
 const MODELS = [
-  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini (Fast)" },
-  { id: "anthropic/claude-3.5-haiku", name: "Claude 3.5 Haiku" },
-  { id: "google/gemini-flash-1.5", name: "Gemini Flash" },
-  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B" },
+  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini", hint: "fast + cheap" },
+  { id: "anthropic/claude-3-5-haiku", name: "Claude Haiku", hint: "best voice" },
+  { id: "google/gemini-flash-1.5", name: "Gemini Flash", hint: "long context" },
+  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1", hint: "open" },
 ];
 
-const SENSITIVITY_KEY = "persona-os-dup-sensitivity";
-
-type ContentType = "caption" | "script" | "story_arc" | "image_prompt";
-
-const PLATFORM_TABS: { id: PlatformId; label: string; hint: string }[] = [
-  { id: "x", label: "X", hint: "280 chars, thread-aware" },
-  { id: "linkedin", label: "LinkedIn", hint: "first 210 chars decide it" },
-  { id: "instagram", label: "Instagram", hint: "caption + hashtags" },
-  { id: "threads", label: "Threads", hint: "casual, 500 chars" },
+const CONTENT_TYPES: { id: AgentContentType; label: string; example: string }[] = [
+  { id: "caption", label: "Caption", example: "a post about today's session" },
+  { id: "script", label: "Script", example: "a 30s reel script" },
+  { id: "story_arc", label: "Story arc", example: "a 5-part launch arc" },
+  { id: "image_prompt", label: "Image prompt", example: "a cover visual" },
 ];
 
-interface AssetCtx {
+const ACCENT = "#E76F51";
+const CREAM = "#FFFBF5";
+const CHARCOAL = "#2B2724";
+
+interface GoalRow {
   id: string;
   persona_id: string;
-  type: string;
-  url: string | null;
-  content: string | null;
-  tags: string[];
+  title: string;
+  recurrence: string;
+  check_url: string;
+  status: string;
+  next_check_at?: string | null;
+  last_checked_at?: string | null;
+  failure_count?: number;
 }
 
-interface FormatResult {
-  label: string;
-  type: ContentType;
-  content: string;
+interface AlertRow {
+  id: string;
+  goal_id: string;
+  title: string;
+  body: string;
+  draft_id?: string | null;
+  created_at: string;
 }
 
-function GenerateContent() {
+interface Notice {
+  id: number;
+  text: string;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function timeAgo(iso?: string | null): string {
+  if (!iso) return "never";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+export default function AgentPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const preselectedId = searchParams.get("persona");
-  const isFirstRun = searchParams.get("first") === "1";
-  const assetParam = searchParams.get("asset");
-  const isWelcomeBack = searchParams.get("welcome") === "1";
-
-  const WELCOME_PROMPT =
-    "I've been away from posting for a while. Write a come-back post that owns the gap honestly and turns it into the point of the post.";
-
+  const [authReady, setAuthReady] = useState(false);
   const [personas, setPersonas] = useState<Persona[]>([]);
-  const [selectedId, setSelectedId] = useState(preselectedId || "");
-  const [type, setType] = useState<ContentType>("caption");
-  const [topic, setTopic] = useState("");
-  const [model, setModel] = useState("openai/gpt-4o-mini");
-  const [variantCount, setVariantCount] = useState(3);
-  const [platform, setPlatform] = useState<PlatformId>("x");
-  const [results, setResults] = useState<VariantResult[]>([]);
-  const [fingerprintMeta, setFingerprintMeta] = useState<{ used: boolean; samples: number; summary: string; source?: string } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loadStage, setLoadStage] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
-  const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string>("");
 
-  // High polish: editor pass that tightens hooks and cuts flab (default ON)
-  const [highPolish, setHighPolish] = useState(true);
-  // "3 more of this one": grouped follow-up variants per result card
-  const [moreResults, setMoreResults] = useState<Record<number, VariantResult[]>>({});
-  const [loadingMore, setLoadingMore] = useState<number | null>(null);
-  // One idea -> every platform
-  const [platformResults, setPlatformResults] = useState<{ platform: PlatformId; variant: VariantResult }[]>([]);
-  const [loadingPlatforms, setLoadingPlatforms] = useState(false);
-  // Image prompt -> rendered image (preview + save to vault)
-  const [renderedImages, setRenderedImages] = useState<Record<number, string>>({});
-  const [loadingRender, setLoadingRender] = useState<number | null>(null);
-  const [savedToVault, setSavedToVault] = useState<Record<number, boolean>>({});
-
-  // Posted-aware state
-  const [postedPosts, setPostedPosts] = useState<PostedPost[]>([]);
-  const [sensitivity, setSensitivity] = useState<Sensitivity>("medium");
-
-  // Voice DNA samples: this persona's real drafts + posted writing
-  const [voiceSamples, setVoiceSamples] = useState<string[]>([]);
-
-  // Vault asset context (write-for-this-asset loop)
-  const [assetCtx, setAssetCtx] = useState<AssetCtx | null>(null);
-
-  // Make all formats state: per result index → generated formats
-  const [allFormats, setAllFormats] = useState<Record<number, FormatResult[]>>({});
-  const [makingAll, setMakingAll] = useState<number | null>(null);
-
-  // Inline character check: verdict chip on the card, no navigation needed.
-  const [checkingIdx, setCheckingIdx] = useState<number | null>(null);
-  const [checkResults, setCheckResults] = useState<
-    Record<
-      string,
-      { score: number; verdict: string; breaks: { quote: string; why: string; fix: string }[] }
-    >
-  >({});
-
-  // Sticky mobile generate bar
-  const generateBtnRef = useRef<HTMLButtonElement>(null);
-  const [showStickyBar, setShowStickyBar] = useState(false);
-
+  // Auth gate + persona load from /api/personas.
   useEffect(() => {
-    const stored = window.localStorage.getItem(SENSITIVITY_KEY);
-    if (stored === "low" || stored === "medium" || stored === "high") {
-      setSensitivity(stored);
-    }
-  }, []);
-
-  const changeSensitivity = (s: Sensitivity) => {
-    setSensitivity(s);
-    window.localStorage.setItem(SENSITIVITY_KEY, s);
-  };
-
-  useEffect(() => {
-    const load = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
+    let alive = true;
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!alive) return;
+      if (!data.user) {
         router.push("/login");
         return;
       }
-
-      const { data } = await supabase
-        .from("personas")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false });
-
-      setPersonas(data || []);
-      if (preselectedId) {
-        setSelectedId(preselectedId);
-        setActivePersonaId(preselectedId);
-      } else {
-        const active = getActivePersonaId();
-        if (active && data?.some((p) => p.id === active)) setSelectedId(active);
-        else if (data && data.length > 0) setSelectedId(data[0].id);
+      setAuthReady(true);
+      try {
+        const res = await authedFetch("/api/personas");
+        const json = (await res.json()) as { personas?: Persona[] };
+        const list = Array.isArray(json.personas) ? json.personas : [];
+        if (!alive) return;
+        setPersonas(list);
+        if (list.length > 0) setSelectedId((prev) => prev || list[0].id);
+      } catch {
+        if (alive) setPersonas([]);
       }
-    };
-    load();
-  }, [router, preselectedId]);
-
-  // Load posted content (repeat-avoidance) AND all drafts (voice samples)
-  // for the selected persona in one go.
-  useEffect(() => {
-    if (!selectedId) return;
-    let cancelled = false;
-
-    const load = async () => {
-      const [{ data: posted }, { data: drafts }] = await Promise.all([
-        supabase
-          .from("content_drafts")
-          .select("id, content, created_at")
-          .eq("persona_id", selectedId)
-          .eq("posted", true)
-          .order("created_at", { ascending: false })
-          .limit(20),
-        supabase
-          .from("content_drafts")
-          .select("content")
-          .eq("persona_id", selectedId)
-          .order("created_at", { ascending: false })
-          .limit(30),
-      ]);
-      if (cancelled) return;
-      setPostedPosts((posted || []) as PostedPost[]);
-      setVoiceSamples((drafts || []).map((d: { content: string }) => d.content).filter(Boolean));
-    };
-    load();
-
+    })();
     return () => {
-      cancelled = true;
+      alive = false;
+    };
+  }, [router]);
+
+  const activePersona = useMemo(
+    () => personas.find((p) => p.id === selectedId) || null,
+    [personas, selectedId]
+  );
+
+  // Headers callback — evaluated per runtime request by CopilotKit; a plain
+  // closure over state (no ref, no render-time writes).
+  const buildHeaders = useCallback((): Record<string, string> => {
+    const token = getSessionToken();
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(selectedId ? { "x-persona-id": selectedId } : {}),
     };
   }, [selectedId]);
 
-  const selectedPersona = personas.find((p) => p.id === selectedId);
-
-  // Curated gold set takes priority; drafts are the fallback voice source.
-  const goldSamples = useMemo(
-    () =>
-      (selectedPersona?.voice_samples || ([] as unknown[])).filter(
-        (s): s is { id: string; text: string; enabled: boolean } =>
-          !!s && typeof s === "object" && typeof (s as { text?: unknown }).text === "string"
-      ).filter((s) => s.enabled && s.text.trim().length > 20).map((s) => s.text),
-    [selectedPersona]
-  );
-  const voiceSource = useMemo(
-    () => (goldSamples.length ? goldSamples : voiceSamples),
-    [goldSamples, voiceSamples]
-  );
-
-  // Client-side Voice DNA preview — instant, before any generation.
-  const localFingerprint = useMemo(
-    () => extractVoiceFingerprint(voiceSource),
-    [voiceSource]
-  );
-
-  // Welcome-back prefill
-  useEffect(() => {
-    if (isWelcomeBack) setTopic(WELCOME_PROMPT);
-  }, [isWelcomeBack]);
-
-  // Load vault asset context when arriving from "Write for this".
-  useEffect(() => {
-    if (!assetParam) return;
-    let cancelled = false;
-
-    const loadAsset = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data } = await supabase
-        .from("assets")
-        .select("id, persona_id, type, url, content, tags")
-        .eq("id", assetParam)
-        .eq("user_id", user.id)
-        .limit(1);
-
-      const asset = (data || [])[0] as AssetCtx | undefined;
-      if (!cancelled && asset) {
-        setAssetCtx(asset);
-        if (asset.persona_id) setSelectedId(asset.persona_id);
-      }
-    };
-    loadAsset();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [assetParam]);
-
-  // Sticky bar: show when the main Generate button scrolls out of view
-  useEffect(() => {
-    const el = generateBtnRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setShowStickyBar(!entry.isIntersecting),
-      { threshold: 0 }
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm" style={{ background: CREAM, color: CHARCOAL }}>
+        Loading agent…
+      </div>
     );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Loading stage rotation
-  useEffect(() => {
-    if (!loading) {
-      setLoadStage(0);
-      return;
-    }
-    const stages = [
-      "Reading their voice…",
-      `Writing ${variantCount > 1 ? `${variantCount} variants` : "your draft"}…`,
-      "Quality pass — scrubbing clichés, checking platform fit…",
-      "Ranking by voice match…",
-    ];
-    const t = setInterval(() => setLoadStage((s) => (s + 1) % stages.length), 1800);
-    return () => clearInterval(t);
-  }, [loading, variantCount]);
-
-  // Live duplicate warning (debounced)
-  const [similarPosts, setSimilarPosts] = useState<SimilarPost[]>([]);
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setSimilarPosts(findSimilarPosts(topic, postedPosts, sensitivity));
-    }, 350);
-    return () => clearTimeout(t);
-  }, [topic, postedPosts, sensitivity]);
-
-  const saveDraft = async (content: string, contentType: string) => {
-    if (!selectedPersona) return;
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user) {
-      await supabase.from("content_drafts").insert({
-        persona_id: selectedPersona.id,
-        user_id: user.id,
-        type: contentType,
-        content,
-      });
-    }
-  };
-
-  const buildBody = (extra: Record<string, unknown> = {}) => ({
-    persona: selectedPersona,
-    type,
-    topic,
-    model,
-    platform,
-    voiceSamples,
-    goldSamples: goldSamples.length ? goldSamples : undefined,
-    postedContext: postedPosts,
-    polish: highPolish,
-    assetContext: assetCtx
-      ? { type: assetCtx.type, tags: assetCtx.tags || [], content: assetCtx.content || "" }
-      : undefined,
-    ...extra,
-  });
-
-  const postGenerate = async (body: Record<string, unknown>) => {
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Generation failed");
-    return data;
-  };
-
-  const handleGenerate = async () => {
-    if (!selectedPersona) return;
-    setLoading(true);
-    setError(null);
-    setResults([]);
-    setAllFormats({});
-    setMoreResults({});
-    setPlatformResults([]);
-
-    try {
-      const data = await postGenerate(buildBody({ variants: variantCount }));
-      setFingerprintMeta(data.fingerprint || null);
-      setResults(data.variants as VariantResult[]);
-      for (const v of data.variants as VariantResult[]) {
-        await saveDraft(v.content, type);
-      }
-      if (data.degraded) {
-        setError(`${data.failed} of ${variantCount} variants failed to generate — showing the ones that made it.`);
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Generation failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // "3 more of this one": the user flagged a winner — generate 3 fresh
-  // variations of THAT post, avoiding the original and each other.
-  const handleMoreLike = async (index: number) => {
-    if (!selectedPersona || !results[index] || loadingMore !== null) return;
-    setLoadingMore(index);
-    setError(null);
-    const winner = results[index].content;
-    const avoid = [
-      ...results.map((r) => r.content),
-      ...(moreResults[index] || []).map((r) => r.content),
-    ].filter((c) => c !== winner);
-    try {
-      const data = await postGenerate(
-        buildBody({ variants: 3, moreLike: { original: winner, avoid } })
-      );
-      const fresh = (data.variants as VariantResult[]).filter(
-        (v) => v.content !== winner
-      );
-      setMoreResults((prev) => ({ ...prev, [index]: [...(prev[index] || []), ...fresh] }));
-      for (const v of fresh) {
-        await saveDraft(v.content, type);
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Couldn't generate more like this");
-    } finally {
-      setLoadingMore(null);
-    }
-  };
-
-  // One idea -> every platform, formatted natively for each.
-  const handleAllPlatforms = async () => {
-    if (!selectedPersona || loadingPlatforms) return;
-    setLoadingPlatforms(true);
-    setError(null);
-    try {
-      const jobs: PlatformId[] = ["x", "linkedin", "instagram", "threads"];
-      const settled = await Promise.allSettled(
-        jobs.map((p) => postGenerate(buildBody({ platform: p, variants: 1 })))
-      );
-      const out: { platform: PlatformId; variant: VariantResult }[] = [];
-      for (let i = 0; i < jobs.length; i++) {
-        const s = settled[i];
-        if (s.status === "fulfilled") {
-          const v = (s.value.variants as VariantResult[])[0];
-          if (v) {
-            out.push({ platform: jobs[i], variant: v });
-            await saveDraft(v.content, type);
-          }
-        }
-      }
-      if (!out.length) throw new Error("Couldn't generate for any platform");
-      setPlatformResults(out);
-      const failedCount = jobs.length - out.length;
-      if (failedCount) setError(`${failedCount} platform${failedCount > 1 ? "s" : ""} failed — showing the ones that made it.`);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "All-platforms generation failed");
-    } finally {
-      setLoadingPlatforms(false);
-    }
-  };
-
-  // Undo a quality-gate scrub: restore the author's original wording.
-  const handleUndoScrub = (index: number) => {
-    const v = results[index];
-    if (!v?.original) return;
-    const next = [...results];
-    next[index] = { ...v, content: v.original, original: undefined };
-    setResults(next);
-  };
-
-  // "Does this break character?" — inline on the card, same engine as
-  // the /check page (deterministic quality pre-passes + LLM judgment).
-  const handleInlineCheck = async (index: number, text: string, key: string) => {
-    if (!selectedPersona || checkingIdx !== null) return;
-    setCheckingIdx(index);
-    try {
-      const res = await fetch("/api/check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          persona: selectedPersona,
-          text: text.slice(0, 2000),
-          voiceSamples: voiceSource,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Check failed");
-      setCheckResults((prev) => ({
-        ...prev,
-        [key]: {
-          score: data.score,
-          verdict: data.verdict,
-          breaks: (data.breaks || []).slice(0, 3),
-        },
-      }));
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Check failed");
-    } finally {
-      setCheckingIdx(null);
-    }
-  };
-
-  // Render an image prompt into an actual image.
-  const handleRenderImage = async (index: number) => {
-    if (!results[index] || loadingRender !== null) return;
-    setLoadingRender(index);
-    setError(null);
-    try {
-      const res = await authedFetch("/api/render-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: results[index].content,
-          visualStyle: selectedPersona?.visual_style || "",
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Image render failed");
-      setRenderedImages((prev) => ({ ...prev, [index]: data.image }));
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Image render failed");
-    } finally {
-      setLoadingRender(null);
-    }
-  };
-
-  // Save a rendered image into the Asset Vault.
-  const handleSaveToVault = async (index: number) => {
-    const dataUrl = renderedImages[index];
-    if (!dataUrl || !selectedPersona) return;
-    try {
-      const blob = await (await fetch(dataUrl)).blob();
-      const file = new File([blob], `rendered-${Date.now()}.png`, { type: "image/png" });
-      const fileName = `${selectedPersona.id}/rendered-${Date.now()}.png`;
-      const { error: uploadError } = await supabase.storage
-        .from("assets")
-        .upload(fileName, file);
-      if (uploadError) throw new Error(uploadError.message);
-      const { data: urlData } = supabase.storage.from("assets").getPublicUrl(fileName);
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      await supabase.from("assets").insert({
-        persona_id: selectedPersona.id,
-        user_id: user?.id,
-        type: "image",
-        url: urlData.publicUrl,
-        content: topic || "",
-        tags: ["rendered", "generated"],
-      });
-      setSavedToVault((prev) => ({ ...prev, [index]: true }));
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Couldn't save to Vault");
-    }
-  };
-
-  // Regenerate ONE card in place (keeps the others). Rotates the structural
-  // strategy so "regenerate" never repeats the same architecture twice.
-  const handleRegenerate = async (index: number) => {
-    if (!selectedPersona) return;
-    setRewritingIndex(index);
-    try {
-      const data = await postGenerate(
-        buildBody({ variants: 1, strategyOffset: Math.floor(Math.random() * 4) })
-      );
-      const fresh = (data.variants as VariantResult[])[0];
-      if (fresh) {
-        const next = [...results];
-        next[index] = fresh;
-        setResults(next);
-        await saveDraft(fresh.content, type);
-      }
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Regeneration failed");
-    } finally {
-      setRewritingIndex(null);
-    }
-  };
-
-  const handleQuickRewrite = async (index: number, instruction: string) => {
-    if (!selectedPersona || !results[index]) return;
-    setRewritingIndex(index);
-    try {
-      const data = await postGenerate(
-        buildBody({ variants: 1, rewrite: { original: results[index].content, instruction } })
-      );
-      const fresh = (data.variants as VariantResult[])[0];
-      if (fresh) {
-        const next = [...results];
-        next[index] = fresh;
-        setResults(next);
-        await saveDraft(fresh.content, type);
-      }
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Rewrite failed");
-    } finally {
-      setRewritingIndex(null);
-    }
-  };
-
-  const handleTransform = async (index: number, newType: ContentType, instruction: string) => {
-    if (!selectedPersona || !results[index]) return;
-    setRewritingIndex(index);
-    try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          persona: selectedPersona,
-          type: newType,
-          model,
-          platform,
-          voiceSamples,
-          variants: 1,
-          rewrite: { original: results[index].content, instruction },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Transform failed");
-      const fresh = (data.variants as VariantResult[])[0];
-      if (fresh) {
-        const next = [...results];
-        next[index] = { ...fresh, hookType: `→ ${newType.replace("_", " ")}` };
-        setResults(next);
-        await saveDraft(fresh.content, newType);
-      }
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Transform failed");
-    } finally {
-      setRewritingIndex(null);
-    }
-  };
-
-  const handleMakeAllFormats = async (index: number) => {
-    if (!selectedPersona || makingAll !== null || !results[index]) return;
-    setMakingAll(index);
-    setError(null);
-
-    const jobs: { label: string; type: ContentType; instruction: string }[] = [
-      { label: "Script", type: "script", instruction: "Turn this into a short video script (30-45 seconds) keeping the exact same voice and message" },
-      { label: "Caption", type: "caption", instruction: "Turn this into a strong social media caption keeping the exact same voice and message" },
-      { label: "Image prompt", type: "image_prompt", instruction: "Turn this into a detailed image generation prompt that matches the persona's world and this content" },
-    ];
-
-    try {
-      const formats: FormatResult[] = [];
-      for (const j of jobs) {
-        try {
-          const data = await postGenerate(
-            buildBody({ type: j.type, variants: 1, rewrite: { original: results[index].content, instruction: j.instruction } })
-          );
-          const fresh = (data.variants as VariantResult[])[0];
-          if (fresh) {
-            formats.push({ label: j.label, type: j.type, content: fresh.content });
-            await saveDraft(fresh.content, j.type);
-          }
-        } catch {
-          // one format failing shouldn't kill the others
-        }
-      }
-      if (formats.length === 0) throw new Error("All transforms failed");
-      setAllFormats((prev) => ({ ...prev, [index]: formats }));
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Transform failed");
-    } finally {
-      setMakingAll(null);
-    }
-  };
-
-  const handleCopyOnly = async (content: string, key: string) => {
-    const ok = await copyToClipboard(content);
-    if (ok) {
-      setCopiedIndex(key);
-      setTimeout(() => setCopiedIndex((c) => (c === key ? null : c)), 1500);
-    }
-  };
-
-  const sharePlatform: Record<PlatformId, Platform> = {
-    x: "twitter",
-    linkedin: "linkedin",
-    instagram: "instagram",
-    threads: "threads",
-  };
-
-  const generateButton = (
-    extraClass: string = "",
-    ref?: RefObject<HTMLButtonElement | null>
-  ) => (
-    <button
-      ref={ref}
-      onClick={handleGenerate}
-      disabled={loading || !selectedPersona}
-      className={`w-full min-h-[52px] bg-white text-black font-medium rounded-xl hover:bg-zinc-200 disabled:opacity-50 text-base ${extraClass}`}
-    >
-      {loading ? (
-        <span className="inline-flex items-center gap-2">
-          <span className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
-          {["Reading their voice…", "Writing…", "Quality pass…", "Ranking…"][loadStage % 4]}
-        </span>
-      ) : (
-        `Generate ${variantCount > 1 ? `${variantCount} variants` : ""}`
-      )}
-    </button>
-  );
+  }
 
   return (
-    <div className="min-h-screen p-4 sm:p-8 pb-28 sm:pb-8">
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-6 sm:mb-8">
-          <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
+    <CopilotKit runtimeUrl="/api/copilotkit" headers={buildHeaders}>
+      <AgentWorkspace
+        personas={personas}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        activePersona={activePersona}
+      />
+    </CopilotKit>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+function AgentWorkspace({
+  personas,
+  selectedId,
+  onSelect,
+  activePersona,
+}: {
+  personas: Persona[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  activePersona: Persona | null;
+}) {
+  const [type, setType] = useState<AgentContentType>("caption");
+  const [model, setModel] = useState(MODELS[1].id);
+  const [prompt, setPrompt] = useState("");
+  const [notices, setNotices] = useState<Notice[]>([]);
+
+  const pushNotice = useCallback((text: string) => {
+    const id = Date.now() + Math.random();
+    setNotices((prev) => [...prev.slice(-2), { id, text }]);
+    setTimeout(() => setNotices((prev) => prev.filter((n) => n.id !== id)), 5000);
+  }, []);
+
+  // Bump to make the GoalsPanel re-fetch (agent created a goal).
+  const [goalsRefresh, setGoalsRefresh] = useState(0);
+
+  // The same internal hook the stock CopilotChat UI uses — its `messages`
+  // array carries the AG-UI conversation (user, assistant, tool events).
+  const { messages: rawMessages, appendMessage, isLoading } = useCopilotChatInternal();
+  const visibleMessages: unknown[] = Array.isArray(rawMessages) ? rawMessages : [];
+
+  // Agent auto-save callbacks — surfaced as honest notices.
+  const callbacks = useMemo(
+    () => ({
+      onDraftSaved: (draftId: string, preview: string) =>
+        pushNotice(`Draft saved ${draftId ? "" : ""}→ /dashboard/drafts · “${preview}…”`),
+      onAssetSaved: (_assetId: string, fileName: string) => pushNotice(`Asset saved to vault → ${fileName}`),
+      onGoalCreated: (_goalId: string, title: string) => {
+        pushNotice(`Goal created → ${title}`);
+        setGoalsRefresh((n) => n + 1);
+      },
+      onScheduled: (draftId: string, publishAt: string) => pushNotice(`Draft ${draftId.slice(0, 8)} scheduled for ${publishAt}`),
+    }),
+    [pushNotice]
+  );
+  usePersonaAgent(activePersona, callbacks, { type, model });
+
+  const sendPrompt = async () => {
+    const text = prompt.trim();
+    if (!text || isLoading) return;
+    if (!selectedId) {
+      pushNotice("Select a persona first — the agent refuses to guess who it is.");
+      return;
+    }
+    setPrompt("");
+    // The wire format: model + type + persona ride inside the message so the
+    // transcript always shows exactly what the agent was asked to do.
+    // A typed TextMessage instance — the runtime client calls its type-guard
+    // methods downstream, so plain objects break the pipeline.
+    const message = new TextMessage({ role: Role.User, content: `[Model:${model}] [Type:${type}] [Persona:${selectedId}] ${text}` });
+    await appendMessage(message as unknown as Parameters<typeof appendMessage>[0]);
+  };
+
+  const lastMessages = visibleMessages.slice(-3);
+
+  return (
+    <div
+      className="min-h-screen flex flex-col xl:flex-row"
+      style={{ background: CREAM, color: CHARCOAL }}
+    >
+      {/* Scoped CopilotKit theme: cream / charcoal / coral */}
+      <style>{`
+        .agent-chat {
+          --copilot-kit-background-color: ${CREAM};
+          --copilot-kit-primary-color: ${ACCENT};
+          --copilot-kit-secondary-color: #F4E8DC;
+          --copilot-kit-contrast-color: ${CHARCOAL};
+          --copilot-kit-muted-color: #8A8177;
+          --copilot-kit-separator-color: #EDE3D6;
+          --copilot-kit-input-background-color: #FFFFFF;
+        }
+      `}</style>
+
+      {/* ---------------- LEFT: 320px control sidebar ---------------- */}
+      <aside className="w-full xl:w-[320px] xl:min-w-[320px] border-b xl:border-b-0 xl:border-r p-5 space-y-6" style={{ borderColor: "#EDE3D6" }}>
+        <div>
+          <Link href="/dashboard" className="text-xs underline-offset-2 hover:underline" style={{ color: "#8A8177" }}>
             ← Dashboard
-          </a>
-          <h1 className="text-2xl font-bold">Generate Content</h1>
+          </Link>
+          <h1 className="mt-2 text-2xl leading-tight font-serif" style={{ color: CHARCOAL }}>
+            Agent
+          </h1>
+          <p className="text-xs mt-1" style={{ color: "#8A8177" }}>
+            Research → generate → schedule → vault. In character, always.
+          </p>
         </div>
 
-        {/* First-run progress banner */}
-        {isFirstRun && (
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 sm:p-5 mb-6">
-            <p className="text-sm font-medium text-white mb-3">Your first post, in 3 steps</p>
-            <ol className="space-y-2 text-sm">
-              <li className="flex items-center gap-2 text-green-300">
-                <span className="w-5 h-5 rounded-full bg-green-500/20 border border-green-600 flex items-center justify-center text-[10px]">✓</span>
-                Persona created
-              </li>
-              <li className="flex items-center gap-2 text-white font-medium">
-                <span className="w-5 h-5 rounded-full bg-white text-black flex items-center justify-center text-[10px]">2</span>
-                Generate your first post ← you are here
-              </li>
-              <li className="flex items-center gap-2 text-zinc-400">
-                <span className="w-5 h-5 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[10px]">3</span>
-                Copy &amp; open X or LinkedIn
-              </li>
-            </ol>
-          </div>
-        )}
-
-        <div className="space-y-6">
-          <div>
-            <label className="block text-sm text-zinc-400 mb-2">Persona</label>
+        {/* Persona selector */}
+        <div>
+          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+            Persona
+          </label>
+          {personas.length === 0 ? (
+            <p className="text-xs leading-relaxed" style={{ color: "#8A8177" }}>
+              No personas yet.{" "}
+              <Link href="/dashboard/personas/new" className="underline" style={{ color: ACCENT }}>
+                Build one first
+              </Link>{" "}
+              — the agent refuses to guess who it is.
+            </p>
+          ) : (
             <select
               value={selectedId}
-              onChange={(e) => {
-                setSelectedId(e.target.value);
-                setActivePersonaId(e.target.value);
-              }}
-              className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+              onChange={(e) => onSelect(e.target.value)}
+              className="w-full rounded-lg border px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2"
+              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+              aria-label="Active persona"
             >
               {personas.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
+                  {p.forbidden_topics?.length ? ` · ${p.forbidden_topics.length} forbidden` : ""}
                 </option>
               ))}
             </select>
-            {selectedPersona && getActivePersonaId() === selectedPersona.id && (
-              <p className="mt-2 text-xs text-green-400">● Active voice</p>
-            )}
-          </div>
-
-          {/* Voice DNA preview — measured from their real drafts */}
-          {selectedPersona && (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-medium text-zinc-200">{selectedPersona.name}</p>
-                  <p className="text-xs text-zinc-500 line-clamp-1">{selectedPersona.backstory}</p>
-                </div>
-                <span
-                  className={`shrink-0 text-[10px] px-2 py-1 rounded-full border ${
-                    goldSamples.length >= 3
-                      ? "border-emerald-500 text-emerald-300 bg-emerald-950/40"
-                      : localFingerprint.samples >= 3
-                        ? "border-emerald-700 text-emerald-400 bg-emerald-950/40"
-                        : "border-zinc-700 text-zinc-500"
-                  }`}
-                  title={
-                    goldSamples.length >= 3
-                      ? "Learning from the curated Gold Set"
-                      : localFingerprint.samples >= 3
-                        ? "Learned from this persona's drafts — curate a Gold Set to lock it"
-                        : "Add 3+ samples to lock the voice"
-                  }
-                >
-                  {goldSamples.length >= 3
-                    ? `GOLD SET ✓ ${goldSamples.length}`
-                    : localFingerprint.samples >= 3
-                      ? "VOICE DNA ✓"
-                      : "VOICE DNA: LEARNING"}
-                </span>
-              </div>
-              {localFingerprint.samples > 0 && (
-                <p className="mt-2 text-[11px] text-zinc-500">
-                  {localFingerprint.sentenceSpread} rhythm · ~{localFingerprint.avgSentenceWords} words/sentence ·{" "}
-                  {localFingerprint.emojiPer100 >= 0.5 ? "uses emoji" : "no emoji"} · {localFingerprint.casing} casing
-                  {localFingerprint.topEmojis.length ? ` · ${localFingerprint.topEmojis.join("")}` : ""}
-                </p>
-              )}
-            </div>
           )}
+        </div>
 
-          {/* Vault asset chip */}
-          {assetCtx && (
-            <div className="bg-zinc-900 border border-zinc-600 rounded-xl p-4 flex items-center gap-4">
-              {assetCtx.type === "image" && assetCtx.url ? (
-                <img src={assetCtx.url} alt="Vault asset" className="w-14 h-14 rounded-lg object-cover shrink-0" />
-              ) : (
-                <div className="w-14 h-14 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-xl">
-                  {assetCtx.type === "video" ? "🎬" : "📄"}
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white">Writing for your vault asset</p>
-                <p className="text-xs text-zinc-500 truncate">
-                  {(assetCtx.tags || []).length > 0
-                    ? `Tags: ${assetCtx.tags.map((t) => `#${t}`).join(" ")}`
-                    : "Generation will pair the words with this asset"}
-                </p>
-              </div>
-              <button
-                onClick={() => setAssetCtx(null)}
-                className="text-xs text-zinc-500 hover:text-white shrink-0"
-              >
-                Remove
-              </button>
-            </div>
-          )}
-
-          {/* Welcome-back chip */}
-          {isWelcomeBack && !assetCtx && (
-            <div className="bg-amber-950/30 border border-amber-800/50 rounded-xl p-4">
-              <p className="text-sm font-medium text-amber-200">Come-back angle loaded</p>
-              <p className="text-xs text-zinc-400 mt-1">
-                The gap is the content. Topic is prefilled — edit it to match your actual week, then
-                generate.
-              </p>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-sm text-zinc-400 mb-2">Where is this going?</label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {PLATFORM_TABS.map((p) => (
+        {/* Content type */}
+        <div>
+          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+            Content type
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {CONTENT_TYPES.map((t) => {
+              const active = type === t.id;
+              return (
                 <button
-                  key={p.id}
-                  onClick={() => setPlatform(p.id)}
-                  title={p.hint}
-                  className={`px-3 py-2 min-h-[44px] rounded-lg text-sm font-medium ${
-                    platform === p.id
-                      ? "bg-white text-black"
-                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-                  }`}
+                  key={t.id}
+                  type="button"
+                  onClick={() => setType(t.id)}
+                  className="rounded-lg border px-3 py-2 text-left text-xs transition-colors"
+                  style={{
+                    borderColor: active ? ACCENT : "#EDE3D6",
+                    borderWidth: active ? 2 : 1,
+                    background: active ? "#FFF3EC" : "#FFFFFF",
+                    color: CHARCOAL,
+                  }}
+                  title={t.example}
                 >
-                  {p.label}
+                  <span className="block font-medium">{t.label}</span>
+                  <span className="block text-[10px] mt-0.5" style={{ color: "#8A8177" }}>
+                    {t.example}
+                  </span>
                 </button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-zinc-500">
-              {PLATFORMS[platform].name}: {PLATFORMS[platform].limit} char limit · formatted natively ·
-              over-limit posts become ready-to-paste threads
-            </p>
+              );
+            })}
           </div>
+        </div>
 
-          <div>
-            <label className="block text-sm text-zinc-400 mb-2">Content Type</label>
-            <div className="flex flex-wrap gap-2">
-              {(["caption", "script", "story_arc", "image_prompt"] as const).map((t) => (
+        {/* Model pills */}
+        <div>
+          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+            Model
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {MODELS.map((m) => {
+              const active = model === m.id;
+              return (
                 <button
-                  key={t}
-                  onClick={() => setType(t)}
-                  className={`px-4 py-2 min-h-[40px] rounded-lg text-sm capitalize ${
-                    type === t
-                      ? "bg-white text-black"
-                      : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-                  }`}
+                  key={m.id}
+                  type="button"
+                  onClick={() => setModel(m.id)}
+                  className="rounded-full border px-3 py-1.5 text-xs transition-colors"
+                  style={{
+                    borderColor: active ? ACCENT : "#EDE3D6",
+                    borderWidth: active ? 2 : 1,
+                    background: active ? "#FFF3EC" : "#FFFFFF",
+                    color: CHARCOAL,
+                  }}
+                  title={m.hint}
                 >
-                  {t.replace("_", " ")}
+                  {m.name}
                 </button>
-              ))}
-            </div>
+              );
+            })}
           </div>
+          <p className="text-[10px] mt-2" style={{ color: "#8A8177" }}>
+            All AI runs through OpenRouter. Selected state shows the coral ring.
+          </p>
+        </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm text-zinc-400 mb-2">Model</label>
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
-              >
-                {MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm text-zinc-400 mb-2">Variants</label>
-              <select
-                value={variantCount}
-                onChange={(e) => setVariantCount(Number(e.target.value))}
-                className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
-              >
-                <option value={1}>1 variant (fastest)</option>
-                <option value={2}>2 variants</option>
-                <option value={3}>3 variants — different structures</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm text-zinc-400 mb-2">Quality</label>
-              <button
-                onClick={() => setHighPolish(!highPolish)}
-                title="An editor pass re-checks every draft: tighter hooks, less flab, zero generic lines"
-                className={`w-full px-4 py-3 min-h-[48px] rounded-lg text-sm font-medium border flex items-center justify-between ${
-                  highPolish
-                    ? "bg-emerald-950/40 border-emerald-700 text-emerald-300"
-                    : "bg-zinc-900 border-zinc-700 text-zinc-400"
-                }`}
-              >
-                <span>High polish</span>
-                <span
-                  className={`w-10 h-6 rounded-full relative transition shrink-0 ${highPolish ? "bg-emerald-600" : "bg-zinc-700"}`}
-                >
-                  <span
-                    className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-all ${highPolish ? "left-[18px]" : "left-0.5"}`}
-                  />
-                </span>
-              </button>
-            </div>
-          </div>
+        <p className="text-[10px] leading-relaxed" style={{ color: "#8A8177" }}>
+          Prefer the classic engine?{" "}
+          <Link href="/dashboard/studio" className="underline" style={{ color: ACCENT }}>
+            Studio
+          </Link>{" "}
+          has ranked variants, thread composer and voice DNA.
+        </p>
+      </aside>
 
-          <div>
-            <label className="block text-sm text-zinc-400 mb-2">Topic / Context (optional)</label>
-            <input
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g. launching a new product, morning routine, mindset"
-              className="w-full px-4 py-3 min-h-[48px] bg-zinc-900 border border-zinc-700 rounded-lg"
+      {/* ---------------- CENTER: composer + CopilotChat ---------------- */}
+      <main className="flex-1 flex flex-col min-w-0 xl:h-screen">
+        <div className="p-4 border-b" style={{ borderColor: "#EDE3D6" }}>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void sendPrompt();
+              }}
+              rows={2}
+              placeholder={
+                activePersona
+                  ? `e.g. Research 5 viral wellness hooks this week, write ${type}s for ${activePersona.name}, schedule them, save assets to vault`
+                  : "Research 5 viral hooks, generate a week of captions, schedule them…"
+              }
+              className="flex-1 rounded-xl border bg-white px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2"
+              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+              aria-label="Prompt for the agent"
             />
-          </div>
-
-          {/* Live duplicate warning */}
-          {similarPosts.length > 0 && (
-            <div className="bg-amber-950/40 border border-amber-700/60 rounded-xl p-4">
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <p className="text-sm font-medium text-amber-300">
-                  ⚠ Heads up — this is close to something you already posted
-                </p>
-                <div className="flex gap-1 shrink-0">
-                  {(["low", "medium", "high"] as Sensitivity[]).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => changeSensitivity(s)}
-                      title={`${sensitivityLabel(s)} sensitivity`}
-                      className={`text-[10px] px-2 py-1 rounded border ${
-                        sensitivity === s
-                          ? "bg-amber-300 text-black border-amber-300"
-                          : "border-amber-800 text-amber-400 hover:bg-amber-900/40"
-                      }`}
-                    >
-                      {sensitivityLabel(s)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <ul className="space-y-1.5">
-                {similarPosts.map(({ post, score }) => (
-                  <li key={post.id} className="text-xs text-amber-200/90 leading-relaxed">
-                    <span className="text-amber-400">
-                      {formatPostedDate(post.created_at)} ({Math.round(score * 100)}% match):
-                    </span>{" "}
-                    “{post.content.replace(/\s+/g, " ").slice(0, 110)}
-                    {post.content.length > 110 ? "…" : ""}”
-                  </li>
-                ))}
-              </ul>
-              <p className="text-[11px] text-amber-500/80 mt-2">
-                Generation will automatically steer toward a fresh angle.
-              </p>
-            </div>
-          )}
-
-          {postedPosts.length > 0 && similarPosts.length === 0 && (
-            <p className="text-xs text-zinc-500">
-              Posted-aware mode: generation avoids repeating your {postedPosts.length} posted{" "}
-              {postedPosts.length === 1 ? "item" : "items"}.
-            </p>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            {generateButton("", generateBtnRef)}
             <button
-              onClick={handleAllPlatforms}
-              disabled={loadingPlatforms || loading || !selectedPersona || !topic.trim()}
-              title="Generate this idea for X, LinkedIn, Instagram and Threads — each formatted natively"
-              className="min-h-[52px] px-4 border border-zinc-600 text-zinc-200 font-medium rounded-xl hover:bg-zinc-800 disabled:opacity-50 text-sm"
+              type="button"
+              onClick={() => void sendPrompt()}
+              disabled={isLoading || !prompt.trim()}
+              className="rounded-xl px-5 py-3 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+              style={{ background: ACCENT }}
             >
-              {loadingPlatforms ? (
-                <span className="inline-flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-zinc-500 border-t-white rounded-full animate-spin" />
-                  Writing for all 4 platforms…
-                </span>
-              ) : (
-                "⇄ All platforms"
-              )}
+              {isLoading ? "Working…" : "Generate"}
             </button>
-            <a
-              href={`/dashboard/personas/${selectedId}`}
-              className="min-h-[52px] px-4 border border-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-900 text-sm flex items-center justify-center"
-            >
-              Tune their voice →
-            </a>
           </div>
+          <p className="text-[10px] mt-1.5" style={{ color: "#8A8177" }}>
+            Sends as [Model:{model}] [Type:{type}]
+            {selectedId ? ` [Persona:${selectedId.slice(0, 8)}…]` : ""} · ⌘/Ctrl+Enter
+          </p>
+        </div>
 
-          {error && (
-            <div className="p-4 bg-amber-950/40 border border-amber-700 rounded-lg text-amber-200 text-sm">
-              {error}
-            </div>
-          )}
+        <CopilotChatPane
+          visibleMessages={visibleMessages}
+          isLoading={isLoading}
+          type={type}
+          model={model}
+          personaName={activePersona?.name || null}
+        />
+      </main>
 
-          {/* Ranked variant cards */}
-          {results.map((variant, idx) => (
-            <div
-              key={idx}
-              className={`bg-zinc-900 border rounded-xl p-5 sm:p-6 ${
-                variant.rank === 1 && results.length > 1 ? "border-emerald-700/60" : "border-zinc-800"
-              }`}
-            >
-              <div className="flex flex-wrap justify-between items-start gap-2 mb-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-medium">
-                    {results.length > 1 ? `#${variant.rank} · ${variant.hookType}` : variant.hookType}
-                  </h3>
-                  {variant.rank === 1 && results.length > 1 && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-400">
-                      BEST MATCH
-                    </span>
-                  )}
-                  {variant.polished && (
-                    <span
-                      className="text-[10px] px-2 py-0.5 rounded-full bg-sky-950 border border-sky-800 text-sky-400"
-                      title="The editor pass tightened this draft"
-                    >
-                      POLISHED
-                    </span>
-                  )}
-                  {isFirstRun && idx === 0 && (
-                    <span className="text-xs text-green-400 font-normal">
-                      Draft saved — last step: post it
-                    </span>
-                  )}
-                </div>
-                {copiedIndex === String(idx) && <span className="text-xs text-green-400">Copied ✓</span>}
-              </div>
-
-              {/* Quality strip: voice match · length · fit */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500 mb-3">
-                {fingerprintMeta?.used && (
-                  <span
-                    className={
-                      variant.voiceMatch >= 70
-                        ? "text-emerald-400"
-                        : variant.voiceMatch >= 55
-                          ? "text-zinc-400"
-                          : "text-amber-400"
-                    }
-                    title={variant.voiceNote}
-                  >
-                    Voice match {variant.voiceMatch}%
-                  </span>
-                )}
-                <span>{variant.wordCount} words</span>
-                <span className={variant.fit.fits ? "" : "text-amber-400"}>
-                  {variant.fit.length}/{variant.fit.limit} chars{variant.fit.fits ? "" : ` (${variant.fit.overBy} over)`}
-                </span>
-                {variant.repetition.score >= 35 && (
-                  <span className="text-amber-400" title={variant.repetition.against || ""}>
-                    {variant.repetition.score}% similar to a posted post
-                  </span>
-                )}
-              </div>
-
-              {variant.flags.length > 0 && (
-                <div className="mb-3 space-y-1">
-                  {variant.flags.map((f, i) => (
-                    <p key={i} className="text-[11px] text-amber-500/90">⚑ {f}</p>
-                  ))}
-                </div>
-              )}
-
-              <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-1">
-                {rewritingIndex === idx ? "Working…" : variant.content}
-              </pre>
-              <p className="text-[11px] text-zinc-600 mb-4">{variant.why}</p>
-
-              {/* Over-limit: platform-aware thread composer (editable per-post) */}
-              {!variant.fit.fits && (
-                <div className="mb-4">
-                  <ThreadComposer
-                    key={`${idx}-${variant.content.slice(0, 64)}`}
-                    content={variant.content}
-                    platform={platform}
-                  />
-                </div>
-              )}
-
-              {/* Copy & open — matched to the selected platform */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
-                <button
-                  onClick={() => copyAndOpen(variant.content, sharePlatform[platform])}
-                  className="min-h-[46px] px-4 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
-                >
-                  Copy &amp; open {PLATFORMS[platform].name}
-                </button>
-                <button
-                  onClick={() => copyAndOpen(variant.content, platform === "linkedin" ? "twitter" : "linkedin")}
-                  className="min-h-[46px] px-4 border border-zinc-600 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800"
-                >
-                  Open {platform === "linkedin" ? "X" : "LinkedIn"} instead
-                </button>
-                <button
-                  onClick={() => handleCopyOnly(variant.content, String(idx))}
-                  className="min-h-[46px] px-4 border border-zinc-600 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800"
-                >
-                  {copiedIndex === String(idx) ? "Copied ✓" : "Copy only"}
-                </button>
-              </div>
-
-              {/* Quick actions */}
-              <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
-                <button
-                  onClick={() => handleMoreLike(idx)}
-                  disabled={loadingMore !== null || rewritingIndex === idx || makingAll === idx}
-                  title="3 fresh variations of THIS post — same idea, new angles"
-                  className="text-xs px-3 py-2 min-h-[38px] bg-white text-black rounded-lg font-medium hover:bg-zinc-200 disabled:opacity-50"
-                >
-                  {loadingMore === idx ? "Writing 3 more…" : "⊕ 3 more of this one"}
-                </button>
-                <button
-                  onClick={() => handleRegenerate(idx)}
-                  disabled={rewritingIndex === idx || makingAll === idx || loadingMore === idx}
-                  className="text-xs px-3 py-2 min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg font-medium hover:bg-zinc-700 disabled:opacity-50"
-                >
-                  ↻ Regenerate
-                </button>
-                {variant.original && (
-                  <button
-                    onClick={() => handleUndoScrub(idx)}
-                    title="Restore the wording before the automatic scrub"
-                    className="text-xs px-3 py-2 min-h-[38px] border border-amber-700 text-amber-400 rounded hover:bg-amber-950/40"
-                  >
-                    ↩ Undo scrub
-                  </button>
-                )}
-                <button
-                  onClick={() => handleMakeAllFormats(idx)}
-                  disabled={makingAll === idx || rewritingIndex === idx}
-                  className="text-xs px-3 py-2 min-h-[38px] bg-zinc-800 border border-zinc-600 rounded-lg font-medium hover:bg-zinc-700 disabled:opacity-50"
-                >
-                  {makingAll === idx ? "Making all formats..." : "⚡ Make all formats"}
-                </button>
-                <button
-                  onClick={() =>
-                    checkResults[String(idx)]
-                      ? setCheckResults((prev) => {
-                          const next = { ...prev };
-                          delete next[String(idx)];
-                          return next;
-                        })
-                      : handleInlineCheck(idx, variant.content, String(idx))
-                  }
-                  disabled={checkingIdx === idx || rewritingIndex === idx || makingAll === idx}
-                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  {checkingIdx === idx
-                    ? "Checking…"
-                    : checkResults[String(idx)]
-                      ? "✓ Hide check"
-                      : "✓ Check it"}
-                </button>
-                <button
-                  onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
-                  disabled={rewritingIndex === idx || makingAll === idx}
-                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  Shorter
-                </button>
-                <button
-                  onClick={() => handleQuickRewrite(idx, "Make this longer and more detailed")}
-                  disabled={rewritingIndex === idx || makingAll === idx}
-                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  Longer
-                </button>
-                <button
-                  onClick={() => handleQuickRewrite(idx, "Make this more aggressive and high-energy")}
-                  disabled={rewritingIndex === idx || makingAll === idx}
-                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  More Punch
-                </button>
-                <button
-                  onClick={() => handleTransform(idx, "script", "Turn this into a short video script (30-45 seconds) keeping the exact same voice and message")}
-                  disabled={rewritingIndex === idx || makingAll === idx}
-                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  → Script
-                </button>
-                <button
-                  onClick={() => handleTransform(idx, "caption", "Turn this into a strong social media caption keeping the exact same voice and message")}
-                  disabled={rewritingIndex === idx || makingAll === idx}
-                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  → Caption
-                </button>
-                <button
-                  onClick={() => handleTransform(idx, "image_prompt", "Turn this into a detailed image generation prompt that matches the persona's world and this content")}
-                  disabled={rewritingIndex === idx || makingAll === idx}
-                  className="text-xs px-2.5 py-2 min-h-[38px] border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  → Image Prompt
-                </button>
-              </div>
-
-              {/* Inline check verdict — same engine as the full Check page */}
-              {checkResults[String(idx)] && (
-                <div
-                  className={`rounded-lg border p-3 text-xs space-y-1.5 ${
-                    checkResults[String(idx)].verdict === "Safe to post"
-                      ? "border-green-800 bg-green-950/30 text-green-200"
-                      : checkResults[String(idx)].verdict === "Needs changes"
-                        ? "border-amber-800 bg-amber-950/30 text-amber-200"
-                        : "border-red-800 bg-red-950/30 text-red-200"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold">
-                      {checkResults[String(idx)].verdict} ·{" "}
-                      {checkResults[String(idx)].score}/100 in character
-                    </span>
-                    <a
-                      href={`/dashboard/check?persona=${selectedPersona?.id || ""}&text=${encodeURIComponent(variant.content.slice(0, 2000))}`}
-                      className="underline opacity-80 hover:opacity-100"
-                    >
-                      Full report
-                    </a>
-                  </div>
-                  {checkResults[String(idx)].breaks.map((b, bi) => (
-                    <p key={bi} className="opacity-90">
-                      <span className="font-medium">“{b.quote}”</span>
-                      {b.why ? ` — ${b.why}` : ""}
-                      {b.fix ? ` Fix: ${b.fix}` : ""}
-                    </p>
-                  ))}
-                </div>
-              )}
-
-              {/* Render image: image prompts become actual images */}
-              {(type === "image_prompt" || /image prompt/i.test(variant.hookType || "")) && (
-                <div className="mb-4">
-                  {!renderedImages[idx] ? (
-                    <button
-                      onClick={() => handleRenderImage(idx)}
-                      disabled={loadingRender !== null}
-                      className="min-h-[46px] px-4 w-full sm:w-auto border border-zinc-600 rounded-lg text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
-                    >
-                      {loadingRender === idx ? "Rendering image… (up to 2 min)" : "🖼 Render this image"}
-                    </button>
-                  ) : (
-                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-                      <img
-                        src={renderedImages[idx]}
-                        alt="Rendered from the image prompt"
-                        className="w-full max-w-sm rounded-lg mb-3"
-                      />
-                      <div className="flex flex-wrap items-center gap-3">
-                        {savedToVault[idx] ? (
-                          <span className="text-xs text-green-400">Saved to your Asset Vault ✓</span>
-                        ) : (
-                          <button
-                            onClick={() => handleSaveToVault(idx)}
-                            className="min-h-[40px] px-4 bg-white text-black rounded-lg text-xs font-medium hover:bg-zinc-200"
-                          >
-                            Save to Vault
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleRenderImage(idx)}
-                          disabled={loadingRender !== null}
-                          className="text-xs text-zinc-400 hover:text-white disabled:opacity-50"
-                        >
-                          {loadingRender === idx ? "Rendering…" : "Render again"}
-                        </button>
-                        <a href="/dashboard/vault" className="text-xs text-zinc-400 hover:text-white">
-                          Open Vault →
-                        </a>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Make-all-formats results */}
-              {allFormats[idx] && (
-                <div className="mt-4 pt-4 border-t border-zinc-800 space-y-4">
-                  <p className="text-xs text-green-400 font-medium">
-                    All formats ready — each one is saved to Drafts
-                  </p>
-                  {allFormats[idx].map((f) => (
-                    <div key={f.label} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs uppercase tracking-wide text-zinc-400 font-medium">
-                          {f.label}
-                        </span>
-                        <div className="flex gap-3">
-                          <button
-                            onClick={() => copyAndOpen(f.content, "twitter")}
-                            className="text-xs text-white font-medium hover:text-zinc-300"
-                          >
-                            Copy &amp; open X
-                          </button>
-                          <button
-                            onClick={() => copyAndOpen(f.content, "linkedin")}
-                            className="text-xs text-[#4a9ede] hover:text-[#7db8e8]"
-                          >
-                            LinkedIn
-                          </button>
-                        </div>
-                      </div>
-                      <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
-                        {f.content}
-                      </pre>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* "3 more of this one" follow-up variants */}
-              {moreResults[idx]?.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-zinc-800 space-y-3">
-                  <p className="text-xs text-green-400 font-medium">
-                    {moreResults[idx].length} more like this — saved to Drafts
-                  </p>
-                  {moreResults[idx].map((v, mi) => (
-                    <div key={mi} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[11px] text-zinc-500">
-                          {v.hookType} · voice match {v.voiceMatch}%
-                          {v.polished ? " · polished" : ""}
-                        </span>
-                        <div className="flex gap-3">
-                          <button
-                            onClick={() => copyAndOpen(v.content, sharePlatform[platform])}
-                            className="text-xs text-white font-medium hover:text-zinc-300"
-                          >
-                            Copy &amp; open {PLATFORMS[platform].name}
-                          </button>
-                          <button
-                            onClick={() => handleCopyOnly(v.content, `${idx}-${mi}`)}
-                            className="text-xs text-zinc-400 hover:text-white"
-                          >
-                            {copiedIndex === `${idx}-${mi}` ? "Copied ✓" : "Copy"}
-                          </button>
-                        </div>
-                      </div>
-                      <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
-                        {v.content}
-                      </pre>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {/* One idea, every platform */}
-          {platformResults.length > 0 && (
-            <div className="border border-zinc-700 rounded-2xl p-5 sm:p-6">
-              <h2 className="font-bold text-lg mb-1">Same idea, every platform</h2>
-              <p className="text-xs text-zinc-500 mb-4">
-                Each version is formatted natively — X hook line, LinkedIn fold, Instagram hashtags,
-                Threads casual. All saved to Drafts.
+      {/* ---------------- RIGHT: 340px preview + goals ---------------- */}
+      <aside className="w-full xl:w-[340px] xl:min-w-[340px] border-t xl:border-t-0 xl:border-l flex flex-col" style={{ borderColor: "#EDE3D6" }}>
+        <div className="p-5 border-b" style={{ borderColor: "#EDE3D6" }}>
+          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+            Live preview
+          </h2>
+          <p className="text-[10px] mb-3" style={{ color: "#8A8177" }}>
+            Last 3 messages · everything the agent saves lands in /dashboard/drafts and /dashboard/vault automatically.
+          </p>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {lastMessages.length === 0 && (
+              <p className="text-xs" style={{ color: "#8A8177" }}>
+                Nothing yet — send the first prompt.
               </p>
-              <div className="space-y-3">
-                {platformResults.map(({ platform: p, variant }, pi) => (
-                  <div key={p} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2 gap-2">
-                      <span className="text-xs font-medium text-white">
-                        {PLATFORMS[p].name}
-                        <span className="text-zinc-500 font-normal ml-2">
-                          {variant.fit.length}/{variant.fit.limit} · voice match {variant.voiceMatch}%
-                        </span>
-                      </span>
-                      <div className="flex gap-3 shrink-0">
-                        <button
-                          onClick={() => copyAndOpen(variant.content, sharePlatform[p])}
-                          className="text-xs bg-white text-black font-medium px-3 py-1.5 rounded-md hover:bg-zinc-200"
-                        >
-                          Copy &amp; open
-                        </button>
-                        <button
-                          onClick={() => handleCopyOnly(variant.content, `p-${pi}`)}
-                          className="text-xs text-zinc-400 hover:text-white"
-                        >
-                          {copiedIndex === `p-${pi}` ? "Copied ✓" : "Copy"}
-                        </button>
-                      </div>
-                    </div>
-                    <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
-                      {variant.content}
-                    </pre>
-                  </div>
-                ))}
-              </div>
+            )}
+            {lastMessages.map((m, i) => {
+              const raw = m as unknown as { role?: string; content?: unknown; id?: string };
+              const role = raw.role;
+              const content = typeof raw.content === "string" ? raw.content : "";
+              const isUser = role === "user";
+              return (
+                <div
+                  key={raw.id || i}
+                  className="rounded-lg border px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
+                  style={{
+                    borderColor: isUser ? "#EDE3D6" : ACCENT,
+                    background: isUser ? "#FFFFFF" : "#FFF3EC",
+                    color: CHARCOAL,
+                  }}
+                >
+                  <span className="block text-[9px] uppercase tracking-wider mb-1" style={{ color: isUser ? "#8A8177" : ACCENT }}>
+                    {isUser ? "You" : "Agent"}
+                  </span>
+                  {content.slice(0, 600) || (isUser ? "" : "(working — tool call in progress)")}
+                </div>
+              );
+            })}
+          </div>
+          {notices.length > 0 && (
+            <div className="mt-3 space-y-1.5" aria-live="polite">
+              {notices.map((n) => (
+                <div key={n.id} className="text-[11px] rounded-md px-2.5 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
+                  ✓ {n.text}
+                </div>
+              ))}
             </div>
           )}
         </div>
-      </div>
 
-      {/* Sticky mobile generate bar */}
-      {showStickyBar && (
-        <div
-          className="fixed bottom-0 inset-x-0 sm:hidden bg-zinc-950/95 backdrop-blur border-t border-zinc-800 p-3"
-          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
-        >
-          {generateButton("shadow-lg")}
-        </div>
-      )}
+        <GoalsPanel activePersona={activePersona} pushNotice={pushNotice} refreshSignal={goalsRefresh} />
+      </aside>
     </div>
   );
 }
 
-export default function GeneratePage() {
+// ---------------------------------------------------------------------------
+// CopilotChatPane — headless rendering of the agent conversation.
+// Same stream as the stock <CopilotChat/> (useCopilotChat), styled to this
+// page: cream background, charcoal text, coral agent accents. Text messages,
+// tool-call chips (saveToDrafts, saveToVault, createGoal, scheduleContent…)
+// and tool results are all visible so auto-saves are never a black box.
+// ---------------------------------------------------------------------------
+
+function CopilotChatPane({
+  visibleMessages,
+  isLoading,
+  type,
+  model,
+  personaName,
+}: {
+  visibleMessages: unknown[];
+  isLoading: boolean;
+  type: AgentContentType;
+  model: string;
+  personaName: string | null;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const items = useMemo(() => {
+    const source = Array.isArray(visibleMessages) ? visibleMessages : [];
+    return source
+      .map((m) => m as { id?: string; type?: string; role?: string; content?: unknown; name?: string; toolCalls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>; result?: unknown })
+      .filter((m) => {
+        // AG-UI shapes (role user/assistant/tool) and legacy class shapes.
+        if (m.type === "ActionExecutionMessage") return true;
+        if (m.type === "ResultMessage") return true;
+        if (m.role === "user" || m.role === "assistant" || m.role === "tool") {
+          const hasText = typeof m.content === "string" && m.content.trim().length > 0;
+          return hasText || (Array.isArray(m.toolCalls) && m.toolCalls.length > 0);
+        }
+        return false;
+      })
+      .slice(-60);
+  }, [visibleMessages]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [items.length, isLoading]);
+
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>
+    <div className="flex-1 flex flex-col min-h-[50vh] xl:min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-3">
+        <div className="rounded-xl border p-4 text-xs leading-relaxed" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+          <p className="font-serif text-sm mb-1" style={{ color: CHARCOAL }}>
+            Persona Agent
+          </p>
+          <p style={{ color: "#8A8177" }}>
+            {personaName
+              ? `Generating ${type} using ${model} for ${personaName}. Ask for research, a week of posts, scheduling or vault saves — the agent acts, not just suggests.`
+              : "Pick a persona on the left, then ask for research, posts, scheduling or vault saves."}
+          </p>
+        </div>
+
+        {items.map((m, i) => {
+          const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+          if (toolCalls.length > 0) {
+            return (
+              <div key={m.id || i} className="flex flex-col gap-1 items-start">
+                {toolCalls.map((tc, j) => (
+                  <div key={tc.id || j} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+                    🔧 {tc.function?.name || "tool"}…
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          if (m.type === "ActionExecutionMessage") {
+            return (
+              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+                🔧 {m.name}…
+              </div>
+            );
+          }
+          if (m.type === "ResultMessage" || m.role === "tool") {
+            const result = String(m.result ?? (typeof m.content === "string" ? m.content : "")).slice(0, 200);
+            return (
+              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
+                ✓ {result}
+              </div>
+            );
+          }
+          const isUser = m.role === "user";
+          const content = typeof m.content === "string" ? m.content : "";
+          return (
+            <div key={m.id || i} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${isUser ? "text-white" : ""}`}
+                style={{
+                  background: isUser ? ACCENT : "#FFFFFF",
+                  color: isUser ? "#FFFFFF" : CHARCOAL,
+                  border: isUser ? "none" : "1px solid #EDE3D6",
+                }}
+              >
+                {content}
+              </div>
+            </div>
+          );
+        })}
+
+        {isLoading && (
+          <div className="text-xs px-2" style={{ color: "#8A8177" }} aria-live="polite">
+            Working…
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Goals & Tracking — "Content Calendar Automation" (OpenMuse adaptation)
+// ---------------------------------------------------------------------------
+
+function GoalsPanel({
+  activePersona,
+  pushNotice,
+  refreshSignal,
+}: {
+  activePersona: Persona | null;
+  pushNotice: (text: string) => void;
+  refreshSignal: number;
+}) {
+  const [goals, setGoals] = useState<GoalRow[]>([]);
+  const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [open, setOpen] = useState(false);
+  const [goalTitle, setGoalTitle] = useState("");
+  const [recurrence, setRecurrence] = useState<"daily" | "weekly">("weekly");
+  const [checkUrl, setCheckUrl] = useState("https://www.tiktok.com/tag/wellness");
+  const [goalPersonaId, setGoalPersonaId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
+
+  useEffect(() => {
+    setGoalPersonaId((prev) => prev || activePersona?.id || "");
+  }, [activePersona?.id]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await authedFetch("/api/goals");
+        if (!res.ok) return;
+        const json = (await res.json()) as { goals?: GoalRow[]; alerts?: AlertRow[] };
+        if (!alive) return;
+        setGoals(Array.isArray(json.goals) ? json.goals : []);
+        setAlerts(Array.isArray(json.alerts) ? json.alerts : []);
+      } catch {
+        // Panel stays empty on failure — never blocks the page.
       }
-    >
-      <GenerateContent />
-    </Suspense>
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [refresh, refreshSignal]);
+
+  const createGoal = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const res = await authedFetch("/api/goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          goalTitle: goalTitle.trim(),
+          recurrence,
+          checkUrl: checkUrl.trim(),
+          persona_id: goalPersonaId || activePersona?.id,
+        }),
+      });
+      const json = (await res.json()) as Record<string, unknown>;
+      if (!res.ok) throw new Error((json.error as string) || "Failed");
+      setGoalTitle("");
+      pushNotice(`Goal created → ${goalTitle.trim()}`);
+      setRefresh((n) => n + 1);
+    } catch (err) {
+      pushNotice(`Goal failed: ${err instanceof Error ? err.message : "error"}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const runCheck = async (goalId: string) => {
+    setCheckingId(goalId);
+    try {
+      const res = await authedFetch("/api/goals/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goalId }),
+      });
+      const json = (await res.json()) as {
+        results?: Array<{ outcome?: string; detail?: string }>;
+      };
+      const first = json.results?.[0];
+      if (!first) pushNotice("Check ran → goal not due yet (its schedule is respected).");
+      else if (first.outcome === "generated") pushNotice("Check ran → page changed → auto-draft created ✓");
+      else if (first.outcome === "changed") pushNotice("Check ran → page changed ✓ (alert raised)");
+      else if (first.outcome === "baseline") pushNotice("Baseline recorded — next change will trigger.");
+      else if (first.outcome === "unchanged") pushNotice("Check ran → nothing new.");
+      else pushNotice(`Check ran → ${first.outcome || "error"}${first.detail ? ` (${first.detail})` : ""}`);
+      setRefresh((n) => n + 1);
+    } catch {
+      pushNotice("Check failed to run.");
+    } finally {
+      setCheckingId(null);
+    }
+  };
+
+  const removeGoal = async (goalId: string) => {
+    try {
+      await authedFetch(`/api/goals?id=${encodeURIComponent(goalId)}`, { method: "DELETE" });
+      setRefresh((n) => n + 1);
+    } catch {
+      pushNotice("Could not remove the goal.");
+    }
+  };
+
+  return (
+    <div className="p-5 overflow-y-auto">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between text-left"
+        aria-expanded={open}
+      >
+        <div>
+          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+            Content Calendar Automation
+          </h2>
+          <p className="text-[10px]" style={{ color: "#8A8177" }}>
+            Goals &amp; Tracking — recurring page checks that auto-generate drafts
+          </p>
+        </div>
+        <span className="text-xs" style={{ color: ACCENT }}>
+          {open ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-4 space-y-3">
+          <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+            <input
+              value={goalTitle}
+              onChange={(e) => setGoalTitle(e.target.value)}
+              placeholder="Goal title — e.g. Weekly viral check for MIRA"
+              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
+              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+            />
+            <div className="flex gap-2">
+              <select
+                value={recurrence}
+                onChange={(e) => setRecurrence(e.target.value as "daily" | "weekly")}
+                className="rounded-lg border px-2 py-2 text-xs bg-white"
+                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                aria-label="Recurrence"
+              >
+                <option value="weekly">Weekly</option>
+                <option value="daily">Daily</option>
+              </select>
+              <select
+                value={goalPersonaId}
+                onChange={(e) => setGoalPersonaId(e.target.value)}
+                className="flex-1 rounded-lg border px-2 py-2 text-xs bg-white"
+                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                aria-label="Goal persona"
+              >
+                <option value="">Persona…</option>
+                {activePersona && (
+                  <option value={activePersona.id}>{activePersona.name}</option>
+                )}
+              </select>
+            </div>
+            <input
+              value={checkUrl}
+              onChange={(e) => setCheckUrl(e.target.value)}
+              placeholder="checkUrl — e.g. https://www.tiktok.com/tag/wellness"
+              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
+              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+            />
+            <button
+              type="button"
+              onClick={() => void createGoal()}
+              disabled={saving || !goalTitle.trim() || !checkUrl.trim() || !goalPersonaId}
+              className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+              style={{ background: ACCENT }}
+            >
+              {saving ? "Creating…" : "Create goal"}
+            </button>
+            <p className="text-[10px]" style={{ color: "#8A8177" }}>
+              The worker reads the page (browser worker when configured), dedupes alerts per change, and auto-writes one
+              in-character caption per detected change.
+            </p>
+          </div>
+
+          {goals.length > 0 && (
+            <div className="space-y-2">
+              {goals.map((g) => (
+                <div key={g.id} className="rounded-xl border p-3" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium truncate" style={{ color: CHARCOAL }}>
+                        {g.title}
+                      </p>
+                      <p className="text-[10px] mt-0.5" style={{ color: "#8A8177" }}>
+                        {g.recurrence} · {hostOf(g.check_url)} · checked {timeAgo(g.last_checked_at)}
+                        {g.failure_count ? ` · ${g.failure_count} failures` : ""}
+                      </p>
+                      <p className="text-[10px] mt-0.5" style={{ color: g.status === "active" ? "#2F6B37" : "#B3261E" }}>
+                        {g.status}
+                        {g.next_check_at ? ` · next ${timeAgo(g.next_check_at) === "just now" ? "due now" : "due soon"}` : ""}
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => void runCheck(g.id)}
+                        disabled={checkingId === g.id}
+                        className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
+                        style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                      >
+                        {checkingId === g.id ? "…" : "Run check"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removeGoal(g.id)}
+                        className="text-[10px] rounded-md px-2 py-1"
+                        style={{ color: "#B3261E" }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {alerts.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "#8A8177" }}>
+                Recent alerts
+              </p>
+              {alerts.slice(0, 5).map((a) => (
+                <div key={a.id} className="rounded-lg px-2.5 py-1.5 text-[11px]" style={{ background: "#FFF3EC" }}>
+                  <span className="font-medium">{a.title}</span>
+                  <span className="block" style={{ color: "#8A8177" }}>
+                    {a.body}
+                  </span>
+                  {a.draft_id && (
+                    <Link href="/dashboard/drafts" className="underline block mt-0.5" style={{ color: ACCENT }}>
+                      Open the auto-draft →
+                    </Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

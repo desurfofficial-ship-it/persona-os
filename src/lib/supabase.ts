@@ -55,6 +55,14 @@ export async function authedFetch(url: string, init: RequestInit = {}): Promise<
   return fetch(url, { ...init, headers });
 }
 
+/**
+ * The raw session token, for surfaces that must attach it themselves
+ * (e.g. the CopilotKit provider's headers callback in the agent page).
+ */
+export function getSessionToken(): string | null {
+  return getStoredToken();
+}
+
 async function requestDb(payload: Record<string, unknown>): Promise<DbResponse> {
   const res = await fetch("/api/local-db", {
     method: "POST",
