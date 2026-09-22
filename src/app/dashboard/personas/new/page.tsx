@@ -1,24 +1,77 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 export default function NewPersonaPage() {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [backstory, setBackstory] = useState("");
   const [tone, setTone] = useState("");
   const [pillars, setPillars] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // TODO: Save to Supabase
-    console.log({ name, backstory, tone, pillars });
-    alert("Persona creation will be connected to Supabase next.");
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Get current user
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        setError("You must be logged in to create a persona. Go to /login first.");
+        setLoading(false);
+        return;
+      }
+
+      const lifestyle_pillars = pillars
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
+
+      const { data, error: insertError } = await supabase
+        .from("personas")
+        .insert({
+          user_id: user.id,
+          name,
+          backstory,
+          tone_of_voice: tone,
+          lifestyle_pillars,
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        throw insertError;
+      }
+
+      // Success → go to dashboard or persona detail
+      router.push("/dashboard");
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to create persona");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="min-h-screen p-8">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-3xl font-bold mb-8">Create New Persona</h1>
+
+        {error && (
+          <div className="mb-6 p-4 bg-red-900/40 border border-red-700 rounded-lg text-red-200 text-sm">
+            {error}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
@@ -77,9 +130,10 @@ export default function NewPersonaPage() {
 
           <button
             type="submit"
-            className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 transition"
+            disabled={loading}
+            className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 transition disabled:opacity-50"
           >
-            Create Persona
+            {loading ? "Creating..." : "Create Persona"}
           </button>
         </form>
       </div>
