@@ -10,11 +10,18 @@ import {
   type VariantResult,
 } from "@/lib/generation";
 import type { PlatformId } from "@/lib/platforms";
+import { userFromRequest } from "@/lib/local-session";
 
 const VALID_TYPES: GenType[] = ["caption", "script", "story_arc", "image_prompt"];
 const VALID_PLATFORMS: PlatformId[] = ["x", "linkedin", "instagram", "threads"];
 
 export async function POST(req: NextRequest) {
+  // Agent-family routes are never public: AI quota belongs to signed-in users.
+  const authUserId = userFromRequest(req);
+  if (!authUserId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
   try {
     const body = await req.json();
     const persona = body.persona as PersonaInput | undefined;

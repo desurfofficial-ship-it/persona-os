@@ -319,7 +319,7 @@ function GenerateContent() {
   });
 
   const postGenerate = async (body: Record<string, unknown>) => {
-    const res = await fetch("/api/generate", {
+    const res = await authedFetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -431,7 +431,7 @@ function GenerateContent() {
     if (!selectedPersona || checkingIdx !== null) return;
     setCheckingIdx(index);
     try {
-      const res = await fetch("/api/check", {
+      const res = await authedFetch("/api/check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -528,7 +528,7 @@ function GenerateContent() {
         await saveDraft(fresh.content, type);
       }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Regeneration failed");
+      setError(err instanceof Error ? err.message : "Regeneration failed");
     } finally {
       setRewritingIndex(null);
     }
@@ -549,7 +549,7 @@ function GenerateContent() {
         await saveDraft(fresh.content, type);
       }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Rewrite failed");
+      setError(err instanceof Error ? err.message : "Rewrite failed");
     } finally {
       setRewritingIndex(null);
     }
@@ -559,7 +559,7 @@ function GenerateContent() {
     if (!selectedPersona || !results[index]) return;
     setRewritingIndex(index);
     try {
-      const res = await fetch("/api/generate", {
+      const res = await authedFetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -582,7 +582,7 @@ function GenerateContent() {
         await saveDraft(fresh.content, newType);
       }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Transform failed");
+      setError(err instanceof Error ? err.message : "Transform failed");
     } finally {
       setRewritingIndex(null);
     }

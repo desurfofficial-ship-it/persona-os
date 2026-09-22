@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
+import { userFromRequest } from "@/lib/local-session";
 
 /** Extract a JSON object from a model response that may be fenced or wrapped. */
 function parseJsonLoose(content: string): Record<string, unknown> | null {
@@ -28,6 +29,12 @@ function parseJsonLoose(content: string): Record<string, unknown> | null {
 }
 
 export async function POST(req: NextRequest) {
+  // Agent-family routes are never public: AI quota belongs to signed-in users.
+  const authUserId = userFromRequest(req);
+  if (!authUserId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
   try {
     const { persona } = await req.json();
 

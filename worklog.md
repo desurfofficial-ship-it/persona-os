@@ -277,3 +277,25 @@ Stage Summary:
 - The agent workspace now passes its own red team: no anonymous runtime access, model pills genuinely route to different OpenRouter models in production, goals render true state with a full history timeline, and the consistency scan streams honest progress.
 - Remaining backlog: scan progress could stream per-item counts mid-Layer-2; goal pause/resume UI; alert "mark read".
 - PAT rotation reminder re-issued (PAT used for one push this session).
+
+---
+Task ID: 14
+Agent: Super Z (main agent)
+Task: "Yes" — red-team the Studio (Engine v2.5) surface + ship remaining backlog (goal pause/resume, alert read-state).
+
+Work Log:
+- Auth audit swept EVERY API route for gates. Found 5 wide open: /api/generate, /api/check, /api/analyze-posts, /api/strengthen-persona, /api/import-posts (userFromRequest reads ONLY Bearer headers; these routes never checked; 12 client call sites used bare fetch with no token — which is why the hole existed). /api/personas verified safe (listPersonasScoped returns [] anonymous). /api/local-auth open by design.
+- Fixed server-side: userFromRequest 401 gate injected into all 5 routes. Fixed client-side: all 12 bare fetch calls switched to authedFetch across 9 files (studio x3, personas/[id] x2, from-posts, drafts, ideas, start, check page, series, PostImport). Verified live: all 5 anonymous probes -> 401; authed generate -> 200.
+- Goal pause/resume: PATCH /api/goals {id, status: active|paused} (user-scoped; resume clears failureCount + schedules next check now so a resumed goal never sits on a stale next_check_at). GoalsPanel gained Pause/Resume button; Run check disabled while paused with tooltip.
+- Alert read-state: GoalAlert.readAt (Prisma push + supabase/schema.sql read_at column); POST /api/goals/read {ids?} updateMany (all or specific, scoped); GoalsPanel shows coral unread-count badge on the collapsed panel header, unread alerts render with coral left border + dot, opening the panel auto-marks read after 2.5s (user gets a beat to see them) then refreshes.
+- Studio UX: 3 native alert() error paths (regenerate/rewrite/transform) replaced with the existing inline error banner.
+- BREAKS from live verification: (1) stale Prisma client 500'd /api/goals/read on the new readAt field (known reset/restart class) — dev server restart fixed, {"updated":1}; (2) Studio authed generation honest-degraded "1 of 3 variants failed" (Engine partial-results path, expected, not a bug).
+- Browser-verified end-to-end: seeded unread alert -> coral badge "1" on collapsed panel -> open -> auto-marked read (DB: unread 1->0); Pause -> "paused · due in 6d" + disabled Run check + Resume button -> Resume -> "Goal resumed — next check runs now" + active; Studio generation through authedFetch shipped 2 ranked variants; per-goal alert lines + Goal History timeline render both alerts with timestamps.
+- Tests 155/155 (45+33+24+38+15), tsc clean, eslint clean.
+- Committed b0fcc24, pushed four-pillars (one-time PAT push URL, remote config scrubbed).
+
+Stage Summary:
+- Every AI-consuming route in Persona OS is now auth-gated; the app works identically for signed-in users (authedFetch everywhere) and anonymous callers get 401s instead of free AI.
+- Goals & Tracking is now operationally complete: create, check-now, pause/resume, remove, unread alert surface with history.
+- Remaining backlog ideas: per-alert mark-read (currently all-at-once on open), scan mid-Layer-2 streaming counts, agent page goals history could paginate past 15.
+- PAT rotation reminder re-issued (PAT used for one push this session).

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
 interface CheckResult {
@@ -84,7 +84,7 @@ function CheckContent() {
         .order("created_at", { ascending: false })
         .limit(30);
 
-      const res = await fetch("/api/check", {
+      const res = await authedFetch("/api/check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

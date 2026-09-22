@@ -69,6 +69,7 @@ interface AlertRow {
   title: string;
   body: string;
   draftId?: string | null;
+  readAt?: string | null;
   createdAt: string;
 }
 
@@ -637,6 +638,7 @@ function GoalsPanel({
   const [goalPersonaId, setGoalPersonaId] = useState("");
   const [saving, setSaving] = useState(false);
   const [checkingId, setCheckingId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
@@ -723,6 +725,50 @@ function GoalsPanel({
     }
   };
 
+  // Pause = stop the recurring checks without losing history. Resume = run
+  // again (the API resets the failure slate and schedules the next check now).
+  const toggleGoal = async (goalId: string, next: "active" | "paused") => {
+    setTogglingId(goalId);
+    try {
+      const res = await authedFetch("/api/goals", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: goalId, status: next }),
+      });
+      if (!res.ok) {
+        const json = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(json.error || "Failed");
+      }
+      pushNotice(next === "paused" ? "Goal paused — checks stop until you resume it." : "Goal resumed — next check runs now.");
+      setRefresh((n) => n + 1);
+    } catch (err) {
+      pushNotice(err instanceof Error ? `Could not update goal: ${err.message}` : "Could not update goal.");
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  const unreadCount = alerts.filter((a) => !a.readAt).length;
+
+  // Opened the panel with unread alerts? Give the user a beat to see them,
+  // then mark them read so the badge stays meaningful.
+  useEffect(() => {
+    if (!open || unreadCount === 0) return;
+    const t = setTimeout(async () => {
+      try {
+        await authedFetch("/api/goals/read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        setRefresh((n) => n + 1);
+      } catch {
+        // badge stays — honest failure beats silent loss
+      }
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [open, unreadCount]);
+
   return (
     <div className="p-5 overflow-y-auto">
       <button
@@ -734,6 +780,15 @@ function GoalsPanel({
         <div>
           <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
             Content Calendar Automation
+            {unreadCount > 0 && !open && (
+              <span
+                className="ml-2 inline-flex items-center justify-center rounded-full text-[10px] font-sans px-1.5 py-0.5 align-middle"
+                style={{ background: ACCENT, color: "#FFFFFF" }}
+                title={`${unreadCount} unread alert${unreadCount === 1 ? "" : "s"}`}
+              >
+                {unreadCount}
+              </span>
+            )}
           </h2>
           <p className="text-[10px]" style={{ color: "#8A8177" }}>
             Goals &amp; Tracking — recurring page checks that auto-generate drafts
@@ -831,11 +886,21 @@ function GoalsPanel({
                       <button
                         type="button"
                         onClick={() => void runCheck(g.id)}
-                        disabled={checkingId === g.id}
+                        disabled={checkingId === g.id || g.status !== "active"}
+                        className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
+                        style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                        title={g.status !== "active" ? "Resume the goal to run checks" : "Check now"}
+                      >
+                        {checkingId === g.id ? "…" : "Run check"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void toggleGoal(g.id, g.status === "active" ? "paused" : "active")}
+                        disabled={togglingId === g.id}
                         className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
                         style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
                       >
-                        {checkingId === g.id ? "…" : "Run check"}
+                        {togglingId === g.id ? "…" : g.status === "active" ? "Pause" : "Resume"}
                       </button>
                       <button
                         type="button"
@@ -880,11 +945,20 @@ function GoalsPanel({
               <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
                 {alerts.slice(0, 15).map((a) => {
                   const goal = goals.find((g) => g.id === a.goalId);
+                  const unread = !a.readAt;
                   return (
-                    <div key={a.id} className="rounded-lg px-2.5 py-1.5 text-[11px]" style={{ background: "#FFF3EC" }}>
+                    <div
+                      key={a.id}
+                      className="rounded-lg px-2.5 py-1.5 text-[11px]"
+                      style={{
+                        background: "#FFF3EC",
+                        borderLeft: unread ? `3px solid ${ACCENT}` : "3px solid transparent",
+                        opacity: unread ? 1 : 0.72,
+                      }}
+                    >
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="font-medium truncate" style={{ color: CHARCOAL }}>
-                          {a.title}
+                          {unread && <span style={{ color: ACCENT }}>● </span>}{a.title}
                         </span>
                         <span className="shrink-0 text-[9px]" style={{ color: "#8A8177" }}>
                           {timeAgo(a.createdAt)}

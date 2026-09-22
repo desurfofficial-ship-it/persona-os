@@ -266,7 +266,7 @@ export default function DraftsPage() {
       const persona = personas.find((p) => p.id === draft.persona_id);
       if (!persona) throw new Error("Persona not found");
 
-      const res = await fetch("/api/generate", {
+      const res = await authedFetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

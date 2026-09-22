@@ -76,6 +76,7 @@ create table if not exists public.goal_alerts (
   body text not null default '',
   dedupe_key text not null unique,
   draft_id uuid references public.content_drafts(id) on delete set null,
+  read_at timestamptz,
   created_at timestamptz default now()
 );
 

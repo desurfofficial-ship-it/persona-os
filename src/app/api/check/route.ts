@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
+import { userFromRequest } from "@/lib/local-session";
 import { scrubCliches, detectAiTells, detectForbidden } from "@/lib/quality";
 import { voiceMatchScore, extractVoiceFingerprint } from "@/lib/voice";
 
@@ -70,6 +71,12 @@ function normalize(parsed: Record<string, unknown> | null): CheckAnalysis | null
 }
 
 export async function POST(req: NextRequest) {
+  // Agent-family routes are never public: AI quota belongs to signed-in users.
+  const authUserId = userFromRequest(req);
+  if (!authUserId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
   try {
     const { persona, text, voiceSamples } = await req.json();
 

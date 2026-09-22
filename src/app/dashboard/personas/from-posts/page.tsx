@@ -20,7 +20,7 @@ export default function FromPostsPage() {
     setPreview(null);
 
     try {
-      const res = await fetch("/api/analyze-posts", {
+      const res = await authedFetch("/api/analyze-posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ posts }),

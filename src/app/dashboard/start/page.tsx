@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import PostImport from "@/components/PostImport";
 
 /**
@@ -50,7 +50,7 @@ export default function StartPage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/analyze-posts", {
+      const res = await authedFetch("/api/analyze-posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ posts }),
