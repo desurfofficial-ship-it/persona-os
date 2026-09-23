@@ -12,10 +12,16 @@ import { userFromRequest } from "@/lib/local-session";
  *   DELETE { paths: ["<bucket>/<...>", ...] }          -> { data: { removed } }
  *
  * Files live under db/uploads/<bucket>/<...>. Every path is resolved and
- * required to stay inside that root (no traversal). DELETE is the only
- * authenticated verb, mirroring the shim: uploads come from the user's
- * already-authenticated browser session in the sandbox, and a real
- * deployment replaces this whole surface with Supabase Storage + RLS.
+ * required to stay inside that root (no traversal).
+ *
+ * Tenancy (write paths): POST and DELETE only operate inside the caller's
+ * own `assets/<userId>/` prefix — "logged in" alone would let any user
+ * overwrite or wipe another user's files (paths are guessable and appear
+ * in draft/vault URLs).
+ *
+ * GET stays public by design: stored assets are CDN-like (posted images),
+ * and <img> tags cannot attach Authorization headers. Anything sensitive
+ * does not belong in this bucket.
  */
 
 const UPLOAD_ROOT = path.join(process.cwd(), "db", "uploads");
@@ -47,6 +53,20 @@ function safeResolve(key: string): string | null {
   const abs = path.resolve(UPLOAD_ROOT, normalized);
   if (abs !== UPLOAD_ROOT && !abs.startsWith(UPLOAD_ROOT + path.sep)) return null;
   return abs;
+}
+
+/**
+ * Tenant check: after normalization the key must live under the caller's own
+ * `assets/<userId>/` prefix. Normalizing first means `assets//<uid>/x` still
+ * passes (same file, same owner), while `assets/<other-uid>/x`, unprefixed
+ * keys and `..` escapes are all rejected.
+ */
+function belongsToUser(userId: string, key: string): boolean {
+  const normalized = path.normalize(key).replace(/^([/\\])+/, "");
+  return (
+    normalized.startsWith(`assets/${userId}/`) ||
+    normalized.startsWith(`assets${path.sep}${userId}${path.sep}`)
+  );
 }
 
 function contentTypeFor(fileName: string): string {
@@ -96,6 +116,12 @@ export async function POST(req: NextRequest) {
   if (!abs || !key.trim()) {
     return NextResponse.json({ error: "Bad path" }, { status: 400 });
   }
+  if (!belongsToUser(userId, key)) {
+    return NextResponse.json(
+      { error: "Forbidden — uploads must live under assets/<your-user-id>/" },
+      { status: 403 }
+    );
+  }
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "file field required" }, { status: 400 });
   }
@@ -128,6 +154,16 @@ export async function DELETE(req: NextRequest) {
   }
 
   const paths = Array.isArray(body.paths) ? body.paths.map(String) : [];
+
+  // All-or-nothing tenancy: one foreign path rejects the whole batch, so a
+  // caller can never learn whether another user's file exists via DELETE.
+  if (paths.some((p) => !belongsToUser(userId, p))) {
+    return NextResponse.json(
+      { error: "Forbidden — deletes must target assets/<your-user-id>/" },
+      { status: 403 }
+    );
+  }
+
   const removed: string[] = [];
 
   for (const key of paths) {

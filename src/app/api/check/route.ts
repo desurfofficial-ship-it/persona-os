@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { llmComplete } from "@/lib/generation";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 import { scrubCliches, detectAiTells, detectForbidden } from "@/lib/quality";
 import { voiceMatchScore, extractVoiceFingerprint } from "@/lib/voice";
 
@@ -75,6 +76,17 @@ export async function POST(req: NextRequest) {
   const authUserId = userFromRequest(req);
   if (!authUserId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  const rl = rateLimit(`check:${clientKey(req, authUserId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSec) },
+      }
+    );
   }
 
   try {

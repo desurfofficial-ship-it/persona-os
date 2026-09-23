@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { hashPassword, verifyPassword, signToken, verifyToken } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 /**
  * Local preview auth — email/password with salted SHA-256 hashes and
@@ -31,6 +32,22 @@ export async function POST(req: NextRequest) {
   }
 
   const action = body.action || "";
+
+  // Brute-force / signup-flood protection: 10 credential attempts per minute
+  // per IP (password spray on known emails, signup flood filling SQLite).
+  // Session lookup ("get") is exempt — it verifies a token, no password path.
+  if (action === "signup" || action === "signin") {
+    const rl = rateLimit(`auth:${clientKey(req)}`, 10, 60_000);
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: `Too many attempts. Retry in ${rl.retryAfterSec}s.` },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rl.retryAfterSec) },
+        }
+      );
+    }
+  }
 
   // ---- session lookup -------------------------------------------------------
   if (action === "get") {

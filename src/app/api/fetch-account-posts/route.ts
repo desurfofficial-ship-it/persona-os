@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveUserId } from "@/lib/server/agentAuth";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 function cleanHandle(raw: string) {
   return raw
@@ -80,6 +81,19 @@ export async function POST(req: NextRequest) {
   if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
+
+  // Each call burns a real outbound jina fetch — cap it per user.
+  const rl = rateLimit(`fetch-account-posts:${clientKey(req, userId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSec) },
+      }
+    );
+  }
+
   try {
     let body: any;
     try {

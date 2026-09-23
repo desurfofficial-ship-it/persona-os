@@ -495,18 +495,21 @@ function GenerateContent() {
     try {
       const blob = await (await fetch(dataUrl)).blob();
       const file = new File([blob], `rendered-${Date.now()}.png`, { type: "image/png" });
-      const fileName = `${selectedPersona.id}/rendered-${Date.now()}.png`;
+      // Storage is tenant-scoped server-side: keys MUST live under
+      // assets/<user-id>/ — persona ids are not user ids.
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+      const fileName = `${user.id}/rendered-${Date.now()}.png`;
       const { error: uploadError } = await supabase.storage
         .from("assets")
         .upload(fileName, file);
       if (uploadError) throw new Error(uploadError.message);
       const { data: urlData } = supabase.storage.from("assets").getPublicUrl(fileName);
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
       await supabase.from("assets").insert({
         persona_id: selectedPersona.id,
-        user_id: user?.id,
+        user_id: user.id,
         type: "image",
         url: urlData.publicUrl,
         content: topic || "",

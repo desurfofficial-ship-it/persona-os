@@ -1,8 +1,15 @@
 /**
  * Stateless signed session tokens for the local preview backend.
  *
- * Format: `<userId>.<hex hmac>` — HMAC-SHA256 of the userId with a stable
- * secret. Survives server restarts without a session table.
+ * Format (v2): `<userId>.<exp-seconds>.<hex hmac>` — HMAC-SHA256 over the
+ * `<userId>.<exp>` payload. Tokens expire after SESSION_TTL_SEC (7 days), so
+ * a leaked token is a bounded problem instead of a permanent one.
+ *
+ * Legacy `<userId>.<hmac(userId)>` tokens (no expiry) are REJECTED — failing
+ * closed beats silently keeping non-expiring sessions alive. Users simply
+ * sign in again.
+ *
+ * Survives server restarts without a session table.
  *
  * Production deployments should use Supabase Auth (or similar) instead of
  * these helpers. If LOCAL_SESSION_SECRET is missing or still the default
@@ -53,13 +60,18 @@ export function verifyPassword(password: string, stored: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/** Session lifetime: 7 days from issue. */
+export const SESSION_TTL_SEC = 7 * 24 * 60 * 60;
+
 export function signToken(userId: string): string {
   const secret = getSecret();
   if (!secret) {
     throw new Error("LOCAL_SESSION_SECRET is not configured");
   }
-  const mac = crypto.createHmac("sha256", secret).update(userId).digest("hex");
-  return `${userId}.${mac}`;
+  const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_SEC;
+  const payload = `${userId}.${exp}`;
+  const mac = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  return `${payload}.${mac}`;
 }
 
 export function verifyToken(token: string | null | undefined): string | null {
@@ -67,11 +79,20 @@ export function verifyToken(token: string | null | undefined): string | null {
   const secret = getSecret();
   if (!secret) return null;
 
-  const dot = token.lastIndexOf(".");
-  if (dot <= 0) return null;
-  const userId = token.slice(0, dot);
-  const mac = token.slice(dot + 1);
-  const expected = crypto.createHmac("sha256", secret).update(userId).digest("hex");
+  // v2: `<userId>.<exp>.<mac>` — parse from the right so dotted userIds survive.
+  const macDot = token.lastIndexOf(".");
+  if (macDot <= 0) return null;
+  const payload = token.slice(0, macDot);
+  const mac = token.slice(macDot + 1);
+
+  const expDot = payload.lastIndexOf(".");
+  if (expDot <= 0) return null; // legacy token without expiry -> reject
+  const userId = payload.slice(0, expDot);
+  const exp = Number(payload.slice(expDot + 1));
+  if (!userId || !Number.isFinite(exp)) return null;
+  if (exp * 1000 <= Date.now()) return null; // expired
+
+  const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
   const a = Buffer.from(mac);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
