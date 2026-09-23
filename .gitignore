@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 node_modules
 /.pnp
@@ -30,30 +28,43 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files — never commit secrets
+.env
+.env.local
+.env.*.local
+# keep examples tracked
+!.env.example
+!.env.local.example
 
 # vercel
 .vercel
 
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local preview data (SQLite + uploads) — do not commit user data
+/db/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 local-*
 # Essential preview backend files — tracked so sandbox resets self-heal
 !src/lib/local-session.ts
 !src/app/api/local-auth/
 !src/app/api/local-db/
 !src/app/api/local-storage/
+
 .claude
 .z-ai-config
 *.log
 dev.log
 dev.out.log
+server.log
 test
 prompt
 
-server.log
 # Skills directory
 /skills/
