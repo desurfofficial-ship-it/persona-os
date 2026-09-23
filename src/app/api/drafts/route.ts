@@ -13,6 +13,11 @@ import { db } from "@/lib/db";
 import { resolveUserId } from "@/lib/server/agentAuth";
 
 const DRAFT_TYPES = new Set(["caption", "script", "story_arc", "image_prompt"]);
+/** Platforms the calendar UI understands — anything else is not stored as a tag. */
+const PLATFORMS = new Set(["x", "linkedin", "instagram", "threads"]);
+/** Burst cap: drafts created per rolling 60s window per user (agent loops misfire sometimes). */
+const DRAFT_BURST_WINDOW_MS = 60_000;
+const DRAFT_BURST_MAX = 40;
 
 export async function POST(req: NextRequest) {
   const userId = await resolveUserId(req);
@@ -35,6 +40,17 @@ export async function POST(req: NextRequest) {
   }
   if (!content) return NextResponse.json({ error: "content required" }, { status: 400 });
   if (content.length > 50_000) return NextResponse.json({ error: "content too long" }, { status: 413 });
+
+  // Burst cap: a runaway agent loop should hit a wall, not the database.
+  const recent = await db.contentDraft.count({
+    where: { userId, createdAt: { gte: new Date(Date.now() - DRAFT_BURST_WINDOW_MS) } },
+  });
+  if (recent >= DRAFT_BURST_MAX) {
+    return NextResponse.json(
+      { error: `Slow down — draft limit (${DRAFT_BURST_MAX}/minute) reached.` },
+      { status: 429 }
+    );
+  }
 
   const persona = await db.persona.findFirst({ where: { id: personaId, userId } });
   if (!persona) return NextResponse.json({ error: "Persona not found" }, { status: 404 });
@@ -84,8 +100,9 @@ export async function PATCH(req: NextRequest) {
   }
 
   const tags = Array.isArray(draft.tags) ? [...(draft.tags as string[])] : [];
-  if (body.platform && !tags.some((t) => t.startsWith("for "))) {
-    tags.push(`for ${body.platform}`.slice(0, 30));
+  const platform = body.platform?.toLowerCase().trim();
+  if (platform && PLATFORMS.has(platform) && !tags.some((t) => t.startsWith("for "))) {
+    tags.push(`for ${platform}`.slice(0, 30));
   }
 
   const updated = await db.contentDraft.update({

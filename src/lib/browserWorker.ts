@@ -192,8 +192,18 @@ export interface UrlReadResult {
  * Read a public URL through the browser worker when available, falling back
  * to a direct fetch. Goal checks use this so a missing worker never breaks
  * tracking — it only lowers fidelity.
+ *
+ * SSRF-hardened: the guard runs on the entry URL AND on every redirect hop
+ * (manual redirect loop, max 5) so a public page that 302s to loopback /
+ * metadata / a private range is cut off mid-flight.
  */
+const MAX_REDIRECTS = 5;
+
 export async function readUrl(url: string, profile = "persona-os"): Promise<UrlReadResult> {
+  const { assertPublicHttpUrl } = await import("@/lib/safeUrl");
+  const safe = await assertPublicHttpUrl(url);
+  if (!safe.ok) throw new Error(`blocked by SSRF guard: ${safe.reason}`);
+
   const info = browserWorkerInfo();
   if (info.configured) {
     let session: BrowserSession | null = null;
@@ -211,30 +221,44 @@ export async function readUrl(url: string, profile = "persona-os"): Promise<UrlR
     }
   }
 
-  // Direct fallback: plain fetch + strip. Works for most public pages; JS-only
-  // sites (some TikTok views) may yield little text — the check layer treats
-  // empty reads as failures and backs off.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml",
-      },
-      signal: controller.signal,
-      redirect: "follow",
-    });
-    if (!res.ok) throw new Error(`direct fetch failed: ${res.status}`);
-    const html = await res.text();
-    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    return {
-      title: titleMatch ? titleMatch[1].trim() : url,
-      text: htmlToText(html),
-      via: "direct",
-    };
-  } finally {
-    clearTimeout(timer);
+  // Direct fallback: plain fetch + strip, walking redirects manually so each
+  // hop re-passes the SSRF guard. Works for most public pages; JS-only sites
+  // (some TikTok views) may yield little text — the check layer treats empty
+  // reads as failures and backs off.
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const res = await fetch(current, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml",
+        },
+        signal: controller.signal,
+        redirect: "manual",
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) throw new Error(`redirect ${res.status} with no location`);
+        const next = new URL(location, current).toString();
+        const hopSafe = await assertPublicHttpUrl(next);
+        if (!hopSafe.ok) throw new Error(`redirect target blocked: ${hopSafe.reason}`);
+        current = next;
+        continue;
+      }
+      if (!res.ok) throw new Error(`direct fetch failed: ${res.status}`);
+      const html = await res.text();
+      const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      return {
+        title: titleMatch ? titleMatch[1].trim() : current,
+        text: htmlToText(html),
+        via: "direct",
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
 }

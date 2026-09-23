@@ -16,8 +16,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { resolveUserId } from "@/lib/server/agentAuth";
+import { assertPublicHttpUrl } from "@/lib/safeUrl";
 
 const RECURRENCES = new Set(["daily", "weekly"]);
+/** Per-user cap on concurrent active goals — each goal spawns recurring server-side fetches. */
+const MAX_ACTIVE_GOALS = 20;
 
 export async function GET(req: NextRequest) {
   const userId = await resolveUserId(req);
@@ -61,19 +64,24 @@ export async function POST(req: NextRequest) {
   if (!RECURRENCES.has(recurrence)) {
     return NextResponse.json({ error: "recurrence must be daily or weekly" }, { status: 400 });
   }
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(checkUrl);
-  } catch {
-    return NextResponse.json({ error: "checkUrl must be a valid http(s) URL" }, { status: 400 });
-  }
-  if (!/^https?:$/.test(parsedUrl.protocol)) {
-    return NextResponse.json({ error: "checkUrl must be http(s)" }, { status: 400 });
+  // SSRF guard: the check worker fetches this URL server-side on a schedule,
+  // so loopback/private/metadata targets are rejected before anything is stored.
+  const safe = await assertPublicHttpUrl(checkUrl);
+  if (!safe.ok) {
+    return NextResponse.json({ error: safe.reason }, { status: 400 });
   }
 
   // The persona must belong to the caller.
   const persona = await db.persona.findFirst({ where: { id: personaId, userId } });
   if (!persona) return NextResponse.json({ error: "Persona not found" }, { status: 404 });
+
+  const activeCount = await db.contentGoal.count({ where: { userId, status: "active" } });
+  if (activeCount >= MAX_ACTIVE_GOALS) {
+    return NextResponse.json(
+      { error: `Goal limit reached (${MAX_ACTIVE_GOALS} active). Pause or remove one first.` },
+      { status: 429 }
+    );
+  }
 
   const goal = await db.contentGoal.create({
     data: {

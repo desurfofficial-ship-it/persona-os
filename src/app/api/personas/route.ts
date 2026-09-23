@@ -5,11 +5,15 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { listPersonasScoped } from "@/lib/server/agentAuth";
+import { listPersonasScoped, resolveUserId } from "@/lib/server/agentAuth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  // Same contract as every other agent route: anonymous callers get 401,
+  // never an (empty) data shape.
+  const userId = await resolveUserId(req);
+  if (!userId) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   const personas = await listPersonasScoped(req);
   return NextResponse.json({ personas });
 }
