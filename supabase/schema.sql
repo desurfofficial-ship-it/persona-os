@@ -18,7 +18,6 @@ create table if not exists public.personas (
   updated_at timestamptz default now()
 );
 
--- Ensure new columns on existing installs
 alter table public.personas add column if not exists example_posts text[] default '{}';
 
 create table if not exists public.assets (
@@ -46,22 +45,33 @@ create table if not exists public.content_drafts (
 
 alter table public.content_drafts add column if not exists posted boolean default false;
 
+-- Optional connected social accounts (handle-based; OAuth tokens optional later)
+create table if not exists public.connected_accounts (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  platform text not null check (platform in ('x', 'linkedin', 'other')),
+  handle text not null,
+  profile_url text,
+  status text default 'linked' check (status in ('linked', 'pending', 'error')),
+  last_synced_at timestamptz,
+  created_at timestamptz default now(),
+  unique (user_id, platform, handle)
+);
+
 alter table public.personas enable row level security;
 alter table public.assets enable row level security;
 alter table public.content_drafts enable row level security;
+alter table public.connected_accounts enable row level security;
 
 do $$ begin
   create policy "Users can view own personas" on public.personas for select using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can insert own personas" on public.personas for insert with check (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can update own personas" on public.personas for update using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can delete own personas" on public.personas for delete using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
@@ -69,11 +79,9 @@ exception when duplicate_object then null; end $$;
 do $$ begin
   create policy "Users can view own assets" on public.assets for select using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can insert own assets" on public.assets for insert with check (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can delete own assets" on public.assets for delete using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
@@ -81,17 +89,27 @@ exception when duplicate_object then null; end $$;
 do $$ begin
   create policy "Users can view own drafts" on public.content_drafts for select using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can insert own drafts" on public.content_drafts for insert with check (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can update own drafts" on public.content_drafts for update using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
 do $$ begin
   create policy "Users can delete own drafts" on public.content_drafts for delete using (auth.uid() = user_id);
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  create policy "Users can view own connected_accounts" on public.connected_accounts for select using (auth.uid() = user_id);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  create policy "Users can insert own connected_accounts" on public.connected_accounts for insert with check (auth.uid() = user_id);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  create policy "Users can update own connected_accounts" on public.connected_accounts for update using (auth.uid() = user_id);
+exception when duplicate_object then null; end $$;
+do $$ begin
+  create policy "Users can delete own connected_accounts" on public.connected_accounts for delete using (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
 
 create or replace function public.handle_updated_at()
