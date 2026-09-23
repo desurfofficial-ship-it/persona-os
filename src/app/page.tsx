@@ -3,14 +3,10 @@ import Link from "next/link";
 export default function Home() {
   return (
     <main className="min-h-screen flex flex-col">
-      {/* Nav */}
-      <header className="flex items-center justify-between px-8 py-6 border-b border-zinc-900">
+      <header className="flex items-center justify-between px-6 sm:px-8 py-6 border-b border-zinc-900">
         <div className="text-xl font-bold tracking-tight">Persona OS</div>
         <div className="flex items-center gap-4">
-          <Link
-            href="/login"
-            className="text-sm text-zinc-400 hover:text-white transition"
-          >
+          <Link href="/login" className="text-sm text-zinc-400 hover:text-white transition">
             Sign in
           </Link>
           <Link
@@ -22,16 +18,15 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Hero */}
-      <section className="flex-1 flex flex-col items-center justify-center px-6 py-24 text-center">
-        <h1 className="text-5xl sm:text-6xl font-bold tracking-tight max-w-3xl leading-tight">
+      <section className="flex-1 flex flex-col items-center justify-center px-6 py-20 sm:py-24 text-center">
+        <h1 className="text-4xl sm:text-6xl font-bold tracking-tight max-w-3xl leading-tight">
           Stay in character.
           <br />
           <span className="text-zinc-400">Every single post.</span>
         </h1>
-        <p className="mt-6 text-lg text-zinc-400 max-w-xl">
-          Persona OS helps creators and founders build coherent digital identities
-          and generate high-quality content that never breaks character.
+        <p className="mt-6 text-base sm:text-lg text-zinc-400 max-w-xl">
+          Paste your best posts. We build your persona. Generate captions, scripts, and series
+          that never break character — then copy straight to X or LinkedIn.
         </p>
         <div className="mt-10 flex flex-col sm:flex-row gap-4">
           <Link
@@ -49,32 +44,37 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Features */}
-      <section className="px-6 py-20 border-t border-zinc-900">
-        <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-            <h3 className="text-lg font-semibold mb-2">Persona Profiles</h3>
+      <section className="px-6 py-16 sm:py-20 border-t border-zinc-900">
+        <div className="max-w-5xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5">
+            <h3 className="font-semibold mb-2">Build from posts</h3>
             <p className="text-zinc-400 text-sm leading-relaxed">
-              Define backstory, tone, lifestyle pillars, content rules and forbidden topics.
+              Paste 3–10 real posts. We extract your voice, tone, rules, and pillars.
             </p>
           </div>
-          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-            <h3 className="text-lg font-semibold mb-2">AI Content Engine</h3>
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5">
+            <h3 className="font-semibold mb-2">Generate & transform</h3>
             <p className="text-zinc-400 text-sm leading-relaxed">
-              Generate captions, scripts, story arcs and image prompts that stay 100% in character.
+              Captions, scripts, series, ideas — then turn any result into another format.
             </p>
           </div>
-          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6">
-            <h3 className="text-lg font-semibold mb-2">Asset Vault</h3>
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5">
+            <h3 className="font-semibold mb-2">Stay consistent</h3>
             <p className="text-zinc-400 text-sm leading-relaxed">
-              Store photos and videos tied to each persona so everything stays organized.
+              Consistency checker + posted-aware generation so you don’t repeat yourself.
+            </p>
+          </div>
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5">
+            <h3 className="font-semibold mb-2">Ship fast</h3>
+            <p className="text-zinc-400 text-sm leading-relaxed">
+              One-tap copy to X or LinkedIn. Mark posted. Keep the loop tight.
             </p>
           </div>
         </div>
       </section>
 
       <footer className="py-8 text-center text-sm text-zinc-600 border-t border-zinc-900">
-        Persona OS — Creative infrastructure for coherent identities
+        Persona OS — Consistency operating system for creators & founders
       </footer>
     </main>
   );

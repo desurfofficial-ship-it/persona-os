@@ -95,19 +95,27 @@ export default function NewPersonaPage() {
         .map((t) => t.trim())
         .filter(Boolean);
 
-      const { error: insertError } = await supabase.from("personas").insert({
-        user_id: user.id,
-        name,
-        backstory,
-        tone_of_voice: tone,
-        lifestyle_pillars,
-        content_rules,
-        forbidden_topics,
-      });
+      const { data: inserted, error: insertError } = await supabase
+        .from("personas")
+        .insert({
+          user_id: user.id,
+          name,
+          backstory,
+          tone_of_voice: tone,
+          lifestyle_pillars,
+          content_rules,
+          forbidden_topics,
+        })
+        .select("id")
+        .single();
 
       if (insertError) throw insertError;
 
-      router.push("/dashboard");
+      if (inserted?.id) {
+        router.push(`/dashboard/generate?persona=${inserted.id}`);
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err: any) {
       setError(err.message || "Failed to create persona");
     } finally {
@@ -125,14 +133,13 @@ export default function NewPersonaPage() {
           <h1 className="text-3xl font-bold">Create Persona</h1>
         </div>
 
-        {/* Two paths */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
           <a
             href="/dashboard/personas/from-posts"
-            className="p-5 bg-zinc-900 border border-zinc-700 rounded-xl hover:border-zinc-500 transition"
+            className="p-5 bg-white text-black rounded-xl hover:bg-zinc-200 transition"
           >
             <h3 className="font-semibold mb-1">Build from your posts</h3>
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm text-zinc-600">
               Paste real posts → auto-extract voice, tone & rules
             </p>
           </a>
@@ -239,7 +246,7 @@ export default function NewPersonaPage() {
             disabled={loading}
             className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
           >
-            {loading ? "Creating..." : "Create Persona"}
+            {loading ? "Creating..." : "Create & Generate First Content"}
           </button>
         </form>
       </div>
