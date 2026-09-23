@@ -523,3 +523,20 @@ Stage Summary:
 - Round-2 Known-left all closed: password hashing C->A-, limiter architecture (in-memory) -> persistent, GET probing closed, ignoreBuildErrors gone. Plus round-3 catches: import-posts SSRF (critical, was missed by rounds 1-2), SVG stored-XSS, delete-account orphaned rows.
 - Every AI/outbound/destructive route now sits behind a limiter; passwords are KDF-backed; limits survive restarts.
 - PUSH PENDING: awaiting fresh PAT from user (previous one to be revoked).
+
+---
+Task ID: 22-round3-push
+Agent: Super Z (main agent)
+Task: Deliver round-3 hardening commit (d9c5b97) to GitHub via user-supplied fresh one-time PAT.
+
+Work Log:
+- Session-continuity audit: round-3 work already implemented + committed (d9c5b97, task 21) in prior segment; push was the only pending step (1 commit ahead of origin/main).
+- Pre-push re-verification on live server (not trusting commit message): redteam-round3 27/27 PASS (scrypt signup/rehash, persistent limiter incl. DB row proof, 7 route limits, SSRF 8-target block, SVG attachment, full wipe, destructive cap); sleep 70 -> redteam-round2 25/25 PASS; sleep 70 -> redteam-agent 20/20 PASS. tsc exit 0.
+- Secret scan of origin/main..HEAD diff: 0 hits. Pushed via one-time PAT URL: d03045b..d9c5b97 main -> main, output sed-masked.
+- Tracking ref corrected to d9c5b97; origin/main..HEAD = 0.
+- Zero-residue verification: tree grep + pickaxe --all — only hits are the literal scan-pattern NAMES quoted in this worklog's audit text (no real token anywhere; the fresh PAT used for push appears nowhere in tree or history).
+
+Stage Summary:
+- Round-3 hardening is LIVE on origin/main (d9c5b97). Round-2 Known-left all closed: scrypt passwords (C->A-), persistent SQLite limiter, strict GET shape, ignoreBuildErrors=false. Round-3 new catches: import-posts SSRF (critical), SVG stored-XSS, delete-account orphaned rows, full route-limit coverage.
+- Grade trajectory: passwords C->A-, limiter architecture -> A, AI-abuse B+->A, plus a critical SSRF closed that predated all three rounds.
+- PAT rotation reminder re-issued (this PAT shared once in chat; previous ones 4+ times).
