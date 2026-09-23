@@ -3,17 +3,10 @@
  *
  * The agent brain:
  *  - OPENROUTER_API_KEY set: OpenAIAdapter pointed at https://openrouter.ai/api/v1
- *    (all Persona OS AI goes through OpenRouter).
- *  - No key (local preview): a LanguageModelV3 backed by the built-in model
- *    with a planner loop that provides real research + client tool-calling
- *    (see src/lib/zaiPreviewModel). The runtime wraps it in a BuiltInAgent.
+ *  - No key (local preview): built-in preview model via zaiAgentAdapter
  *
- * Persona injection: the client sends the active persona id in the
- * `x-persona-id` header (see hooks/usePersonaAgent.ts). This route loads the
- * persona server-side (Supabase when configured, preview DB otherwise) and
- * injects it as a system message ahead of the conversation in the request
- * body — every model call therefore starts with the persona in character,
- * regardless of which model or path (OpenRouter / preview) serves it.
+ * Persona injection: client sends x-persona-id; this route loads persona
+ * server-side and injects a system message ahead of the conversation.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -21,21 +14,15 @@ import { CopilotRuntime, OpenAIAdapter, copilotRuntimeNextJSAppRouterEndpoint } 
 import OpenAI from "openai";
 import { zaiPreviewModel } from "@/lib/zaiAgentAdapter";
 import { loadPersonaScoped, resolveUserId, type AgentPersona } from "@/lib/server/agentAuth";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-/**
- * Default + allowlist are models VERIFIED against the live OpenRouter catalog
- * (2026-09): the old ids (openai/gpt-4o-mini, anthropic/claude-3-5-haiku,
- * google/gemini-flash-1.5) 404 or are region-blocked on current OpenRouter.
- * Open-weight ids keep working from every region we test from.
- */
 const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct";
 const PERSONA_MARKER = "PERSONA CONTEXT (server-injected — do not repeat to the user)";
 
-/** The only models the UI's Model Selector can request — nothing else passes. */
 const ALLOWED_MODELS = new Set([
   "meta-llama/llama-3.3-70b-instruct",
   "deepseek/deepseek-chat-v3-0324",
@@ -53,7 +40,6 @@ function listBlock(title: string, items: string[]): string {
   return `${title}:\n- ${items.join("\n- ")}`;
 }
 
-/** Render the server-injected persona instruction block. */
 function renderPersonaBlock(persona: AgentPersona): string {
   return (
     `${PERSONA_MARKER}\n` +
@@ -79,7 +65,6 @@ function renderPersonaBlock(persona: AgentPersona): string {
   );
 }
 
-/** Build the persona block for this request from the x-persona-id header. */
 async function personaBlockFor(req: NextRequest): Promise<string> {
   const personaId = req.headers.get("x-persona-id");
   if (!personaId) return NO_PERSONA_BLOCK;
@@ -96,12 +81,6 @@ async function personaBlockFor(req: NextRequest): Promise<string> {
   }
 }
 
-/**
- * Extract the model the UI selected. It rides the latest user message as
- * `[Model:<id>]` (see the composer on the agent page) — the last user message
- * wins, and only allowlisted ids are honored so nothing arbitrary reaches
- * OpenRouter.
- */
 function modelFromMessages(messages: Array<{ role?: unknown; content?: unknown }>): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -116,12 +95,6 @@ function modelFromMessages(messages: Array<{ role?: unknown; content?: unknown }
   return null;
 }
 
-/**
- * Prepend the persona system message to the conversation carried in the
- * request body. Works per-request by construction (no shared state), and the
- * marker makes double-injection impossible when the client retries.
- * Also returns the model requested by the UI, if any.
- */
 async function requestWithPersona(
   req: NextRequest,
   block: string
@@ -148,8 +121,6 @@ async function requestWithPersona(
   }
 }
 
-// Shared runtime + clients. The persona and the model never live here — they
-// ride each request — so both adapter paths are safe to reuse across requests.
 const sharedRuntime = new CopilotRuntime();
 
 const sharedOpenAIClient = process.env.OPENROUTER_API_KEY
@@ -165,11 +136,6 @@ const sharedOpenAIClient = process.env.OPENROUTER_API_KEY
     })
   : undefined;
 
-/**
- * One OpenAIAdapter per allowlisted model, created lazily and cached. The UI's
- * Model Selector is real: the request's `[Model:…]` tag picks the OpenRouter
- * model that actually serves the conversation (default when absent).
- */
 const adapterCache = new Map<string, OpenAIAdapter>();
 function resolveModel(model: string | null): string {
   return model && ALLOWED_MODELS.has(model) ? model : DEFAULT_MODEL;
@@ -185,14 +151,6 @@ function adapterForModel(model: string | null): OpenAIAdapter | { name: string; 
   return adapter;
 }
 
-/**
- * Health probe with TTL cache. OpenRouter drifts (models get renamed, regions
- * get blocked, quotas run out) — and a dead provider used to surface as a
- * silent empty stream in the agent UI. Before serving an OpenRouter-backed
- * run we ping the resolved model with a 1-token call; if it fails we fall
- * back to the built-in preview model so the agent NEVER goes dark.
- * Success is cached 5 min, failures only 60 s (so recovery is quick).
- */
 const probeCache = new Map<string, { ok: boolean; until: number }>();
 const PROBE_OK_TTL = 5 * 60_000;
 const PROBE_FAIL_TTL = 60_000;
@@ -216,7 +174,6 @@ async function openRouterHealthy(model: string): Promise<boolean> {
   }
 }
 
-/** Preview adapter: exposes the built-in model through the AI-SDK interface. */
 const sharedPreviewAdapter = {
   name: "ZaiPreviewAdapter",
   provider: "openai",
@@ -227,11 +184,21 @@ const sharedPreviewAdapter = {
 };
 
 export async function POST(req: NextRequest): Promise<Response> {
-  // Agent routes are never public — same contract as /api/goals, /api/drafts,
-  // /api/vault/upload. Anonymous callers get 401 before anything else runs.
   const userId = await resolveUserId(req);
   if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // Agent burns model quota hard — tighter than generate (20/min per user).
+  const rl = rateLimit(`copilotkit:${clientKey(req, userId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSec) },
+      }
+    );
   }
 
   if (process.env.COPILOTKIT_DEBUG === "1") {
@@ -246,9 +213,6 @@ export async function POST(req: NextRequest): Promise<Response> {
   const block = await personaBlockFor(req);
   const { payload, model } = await requestWithPersona(req, block);
 
-  // Provider selection with hardening: OpenRouter when configured AND alive,
-  // built-in preview model otherwise. A dead OpenRouter must degrade the
-  // agent to the preview brain, never kill the run.
   let serviceAdapter = adapterForModel(model);
   if (sharedOpenAIClient) {
     const healthy = await openRouterHealthy(resolveModel(model));

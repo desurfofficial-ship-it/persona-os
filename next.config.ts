@@ -2,21 +2,19 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  /* config options here */
+  // Keep ignoreBuildErrors true until the agent/studio graph typechecks clean
+  // under memory-constrained preview builds. Flip to false for production CI.
   typescript: {
     ignoreBuildErrors: true,
   },
-  reactStrictMode: false,
+  // Re-enabled: catches accidental double-mount bugs in agent/draft flows.
+  reactStrictMode: true,
   // Load these natively from node_modules at request time instead of compiling
   // them into the dev bundle — the CopilotKit runtime graph alone was OOM-
-  // killing 4GB preview boxes during dev compiles. (The client-side
-  // @copilotkit/react-core still bundles; its page compiles ~3.1GB peak.)
+  // killing 4GB preview boxes during dev compiles.
   serverExternalPackages: ["@copilotkit/runtime", "z-ai-web-dev-sdk", "openai"],
-  // The agent page uses the headless CopilotKit client, so the heavy renderer
-  // trees react-core statically pulls in (react-markdown/streamdown/lit/KaTeX,
-  // A2UI + MCP-apps renderers, web-components, virtualizers) are unreachable.
-  // Aliasing them to src/stubs/copilotkit-light.ts keeps the dev compile inside
-  // 4GB preview boxes; delete this block to restore the full prebuilt UI.
+  // Headless agent page: alias heavy CopilotKit UI deps to light stubs so
+  // compile stays under ~4GB. Delete this block to restore the full prebuilt UI.
   turbopack: {
     resolveAlias: {
       "@copilotkit/react-ui": "./src/stubs/copilotkit-light.ts",
