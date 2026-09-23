@@ -26,8 +26,14 @@ async function main() {
   const personaId = pJson.personas?.[0]?.id;
   console.log("personas:", pJson.personas?.length ?? 0, "using:", personaId?.slice(0, 8));
 
-  // 3. AG-UI style request
+  // 3. JSON-RPC request — CopilotKit >=1.46 runtime envelope, captured live
+  //    with COPILOTKIT_DEBUG=1: { method, params: { agentId }, body:
+  //    <RunAgentInput> }. A bare RunAgentInput body dies with 400
+  //    "Missing method field".
   const body = {
+    method: "agent/run",
+    params: { agentId: "default" },
+    body: {
     threadId: `probe-${Date.now()}`,
     runId: `run-${Date.now()}`,
     messages: [
@@ -47,6 +53,7 @@ async function main() {
     state: {},
     context: [],
     forwardedProps: {},
+    },
   };
 
   const res = await fetch(`${BASE}/api/copilotkit`, {

@@ -446,3 +446,19 @@ Work Log:
 
 Stage Summary:
 - Generate chain fully healed end-to-end; open upload endpoint closed; 8 dead client flows resurrected. Secrets: OpenRouter key + this PAT both pasted in chat - rotation reminder stands.
+
+---
+Task ID: 18-execute-followup
+Agent: Super Z (main agent)
+Task: User "Execute" - visual proof, E2E of all touched flows, tooling hardening.
+
+Work Log:
+- Screenshots: download/studio-fixed-desktop.png, studio-fixed-mobile.png, agent-mode-fixed.png (dark UI + live model pills + Voice DNA badge).
+- Vault upload E2E: found my storage auth gate BROKE the real UI flow - supabase shim upload() (src/lib/supabase.ts:215) sent no auth header (remove() had it). Fixed with authHeaders(); UI upload now 200, file lands user-scoped, vault list updates.
+- Drafts Improve E2E: POST /api/generate 200 (was silent 401).
+- probe-copilotkit.ts rewritten to the real CopilotKit 1.73 envelope captured via COPILOTKIT_DEBUG=1: { method:"agent/run", params:{agentId:"default"}, body:<RunAgentInput> }. Verified: 200 SSE, RUN_STARTED->RUN_FINISHED, llama-3.3-70b 628/37 tokens, 3.9s.
+- Agent mode browser test: real reply + saveToDrafts call with model badge.
+- tsc clean; server restarted WITHOUT debug flag (was logging request bodies).
+
+Stage Summary:
+- All auth-gated surfaces re-verified through their real UI paths; vault upload regression caught and fixed the same session it shipped. Probe tooling now diagnoses "generate didn't generate" against the live protocol.

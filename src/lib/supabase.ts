@@ -212,7 +212,13 @@ function bucketStorage(bucket: string) {
       form.append("path", `${bucket}/${path}`);
       form.append("file", file);
       try {
-        const res = await fetch("/api/local-storage", { method: "POST", body: form });
+        // Auth header required — the storage POST endpoint is auth-gated
+        // (same as remove() below). Without it every vault upload 401s.
+        const res = await fetch("/api/local-storage", {
+          method: "POST",
+          headers: { ...authHeaders() },
+          body: form,
+        });
         const json = await res.json();
         if (json.error) return { data: { path }, error: json.error };
         return { data: { path }, error: null };
