@@ -12,6 +12,12 @@ const MODELS = [
   { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B" },
 ];
 
+interface ScoreInfo {
+  score: number | null;
+  verdict: string | null;
+  note: string | null;
+}
+
 function GenerateContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -24,6 +30,7 @@ function GenerateContent() {
   const [model, setModel] = useState("openai/gpt-4o-mini");
   const [variations, setVariations] = useState(1);
   const [results, setResults] = useState<string[]>([]);
+  const [scores, setScores] = useState<ScoreInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
@@ -89,15 +96,34 @@ function GenerateContent() {
     }
   };
 
+  const scoreResults = async (texts: string[], persona: Persona) => {
+    const scorePromises = texts.map((text) =>
+      fetch("/api/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ persona, text, mode: "score" }),
+      })
+        .then((r) => r.json())
+        .then((d) => ({
+          score: d.score ?? null,
+          verdict: d.verdict ?? null,
+          note: d.note ?? null,
+        }))
+        .catch(() => ({ score: null, verdict: null, note: null }))
+    );
+    const scored = await Promise.all(scorePromises);
+    setScores(scored);
+  };
+
   const handleGenerate = async () => {
     if (!selectedPersona) return;
     setLoading(true);
     setError(null);
     setResults([]);
+    setScores([]);
     setNudgeIndex(null);
 
     try {
-      // Parallel variations
       const promises = Array.from({ length: variations }, () =>
         fetch("/api/generate", {
           method: "POST",
@@ -126,9 +152,8 @@ function GenerateContent() {
 
       const allResults = await Promise.all(promises);
       setResults(allResults);
-
-      // Save all drafts
       await Promise.all(allResults.map((content) => saveDraft(content, type)));
+      scoreResults(allResults, selectedPersona);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -160,6 +185,7 @@ function GenerateContent() {
       newResults[index] = data.content;
       setResults(newResults);
       await saveDraft(data.content, type);
+      scoreResults(newResults, selectedPersona);
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -191,6 +217,7 @@ function GenerateContent() {
       newResults[index] = data.content;
       setResults(newResults);
       await saveDraft(data.content, newType);
+      scoreResults(newResults, selectedPersona);
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -344,9 +371,25 @@ function GenerateContent() {
           {results.map((result, idx) => (
             <div key={idx} className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
               <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
-                <h3 className="font-medium">
-                  {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
-                </h3>
+                <div className="flex items-center gap-3">
+                  <h3 className="font-medium">
+                    {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
+                  </h3>
+                  {scores[idx]?.score != null && (
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                        (scores[idx].score ?? 0) >= 80
+                          ? "bg-green-900/50 text-green-300"
+                          : (scores[idx].score ?? 0) >= 60
+                            ? "bg-yellow-900/50 text-yellow-300"
+                            : "bg-red-900/50 text-red-300"
+                      }`}
+                    >
+                      {scores[idx].score}/100
+                      {scores[idx].verdict ? ` · ${scores[idx].verdict}` : ""}
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => navigator.clipboard.writeText(result)}
@@ -373,9 +416,15 @@ function GenerateContent() {
                 {rewritingIndex === idx ? "Working..." : result}
               </pre>
 
+              {scores[idx]?.note && (
+                <p className="text-xs text-zinc-500 mb-3">{scores[idx].note}</p>
+              )}
+
               {nudgeIndex === idx && (
                 <div className="mb-4 p-3 bg-zinc-800 border border-zinc-700 rounded-lg text-sm flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-zinc-300">Shipped it? Mark as Posted so we don’t repeat it.</span>
+                  <span className="text-zinc-300">
+                    Shipped it? Mark as Posted so we don’t repeat it.
+                  </span>
                   <a
                     href="/dashboard/drafts"
                     className="text-xs px-3 py-1.5 bg-white text-black rounded-lg font-medium"
