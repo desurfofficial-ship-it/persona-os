@@ -109,6 +109,49 @@ export default function DashboardPage() {
     );
   }
 
+  // First-run: no personas yet
+  if (personas.length === 0) {
+    return (
+      <div className="min-h-screen p-6 sm:p-8">
+        <div className="max-w-xl mx-auto pt-16 text-center">
+          <h1 className="text-3xl font-bold mb-3">Welcome to Persona OS</h1>
+          <p className="text-zinc-400 mb-10">
+            Build a coherent digital identity and generate content that never breaks character.
+          </p>
+
+          <div className="space-y-4 text-left">
+            <a
+              href="/dashboard/personas/from-posts"
+              className="block p-6 bg-white text-black rounded-2xl hover:bg-zinc-200 transition"
+            >
+              <h2 className="font-semibold text-lg mb-1">Paste your best posts</h2>
+              <p className="text-sm text-zinc-600">
+                Recommended — we extract your voice, tone, and rules automatically
+              </p>
+            </a>
+
+            <a
+              href="/dashboard/personas/new"
+              className="block p-6 bg-zinc-900 border border-zinc-700 rounded-2xl hover:border-zinc-500 transition"
+            >
+              <h2 className="font-semibold text-lg mb-1">Start from a template</h2>
+              <p className="text-sm text-zinc-400">
+                Founder, Fitness, Luxury, or Tech Operator — then customize
+              </p>
+            </a>
+          </div>
+
+          <button
+            onClick={handleLogout}
+            className="mt-12 text-sm text-zinc-500 hover:text-white"
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-6 sm:p-8">
       <div className="max-w-6xl mx-auto">
@@ -175,11 +218,11 @@ export default function DashboardPage() {
             <p className="text-zinc-400 text-xs">Consistency</p>
           </a>
           <a
-            href="/dashboard/personas/new"
+            href="/dashboard/personas/from-posts"
             className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
-            <h2 className="font-semibold mb-1 text-sm sm:text-base">New Persona</h2>
-            <p className="text-zinc-400 text-xs">Create</p>
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">From Posts</h2>
+            <p className="text-zinc-400 text-xs">Auto-build</p>
           </a>
         </div>
 
@@ -194,62 +237,58 @@ export default function DashboardPage() {
             </a>
           </div>
 
-          {personas.length === 0 ? (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
-              <p className="text-zinc-400 mb-4">No personas yet.</p>
-              <a
-                href="/dashboard/personas/new"
-                className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {personas.map((persona) => (
+              <div
+                key={persona.id}
+                className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition group relative"
               >
-                Create your first persona
-              </a>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {personas.map((persona) => (
-                <div
-                  key={persona.id}
-                  className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-600 transition group relative"
-                >
-                  <a href={`/dashboard/personas/${persona.id}`} className="block">
-                    <h3 className="text-lg font-semibold mb-2 pr-20">{persona.name}</h3>
-                    <p className="text-sm text-zinc-400 line-clamp-3 mb-3">
-                      {persona.backstory || "No backstory."}
-                    </p>
-                    {persona.tone_of_voice && (
-                      <p className="text-xs text-zinc-500 mb-2">Tone: {persona.tone_of_voice}</p>
-                    )}
-                    {persona.lifestyle_pillars?.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {persona.lifestyle_pillars.slice(0, 3).map((pillar) => (
-                          <span
-                            key={pillar}
-                            className="text-xs px-2 py-0.5 bg-zinc-800 rounded-full text-zinc-300"
-                          >
-                            {pillar}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                <a href={`/dashboard/personas/${persona.id}`} className="block">
+                  <h3 className="text-lg font-semibold mb-2 pr-20">{persona.name}</h3>
+                  <p className="text-sm text-zinc-400 line-clamp-3 mb-3">
+                    {persona.backstory || "No backstory."}
+                  </p>
+                  {persona.tone_of_voice && (
+                    <p className="text-xs text-zinc-500 mb-2">Tone: {persona.tone_of_voice}</p>
+                  )}
+                  {persona.lifestyle_pillars?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {persona.lifestyle_pillars.slice(0, 3).map((pillar) => (
+                        <span
+                          key={pillar}
+                          className="text-xs px-2 py-0.5 bg-zinc-800 rounded-full text-zinc-300"
+                        >
+                          {pillar}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </a>
+                <div className="mt-4 flex gap-2">
+                  <a
+                    href={`/dashboard/generate?persona=${persona.id}`}
+                    className="text-xs px-3 py-1.5 bg-white text-black rounded-lg font-medium hover:bg-zinc-200"
+                  >
+                    Generate
                   </a>
-                  <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition">
-                    <button
-                      onClick={() => handleDuplicate(persona)}
-                      className="text-xs text-zinc-400 hover:text-white"
-                    >
-                      Duplicate
-                    </button>
-                    <button
-                      onClick={() => handleDeletePersona(persona.id, persona.name)}
-                      className="text-xs text-red-400 hover:text-red-300"
-                    >
-                      Delete
-                    </button>
-                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+                  <button
+                    onClick={() => handleDuplicate(persona)}
+                    className="text-xs text-zinc-400 hover:text-white"
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    onClick={() => handleDeletePersona(persona.id, persona.name)}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {recentDrafts.length > 0 && (

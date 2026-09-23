@@ -2,10 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
-    const { persona, type, topic, model } = await req.json();
+    const { persona, type, topic, model, avoidContent } = await req.json();
 
     if (!persona || !type) {
       return NextResponse.json({ error: "Missing persona or type" }, { status: 400 });
+    }
+
+    let avoidSection = "";
+    if (avoidContent && Array.isArray(avoidContent) && avoidContent.length > 0) {
+      avoidSection = `\n\nALREADY POSTED / RECENT CONTENT (do NOT repeat these topics, angles, or phrasing):\n${avoidContent
+        .slice(0, 15)
+        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 200)}`)
+        .join("\n")}\n\nGenerate something fresh that covers new ground.`;
     }
 
     const systemPrompt = `You are a content writer that MUST stay 100% in character for the following persona.
@@ -16,6 +24,7 @@ TONE OF VOICE: ${persona.tone_of_voice || "natural and authentic"}
 LIFESTYLE PILLARS: ${(persona.lifestyle_pillars || []).join(", ") || "none specified"}
 CONTENT RULES: ${(persona.content_rules || []).join("; ") || "none"}
 FORBIDDEN TOPICS: ${(persona.forbidden_topics || []).join(", ") || "none"}
+${avoidSection}
 
 STRICT RULES:
 - Never break character.
@@ -24,7 +33,8 @@ STRICT RULES:
 - Stay consistent with the backstory and lifestyle pillars.
 - Follow every content rule.
 - Completely avoid any forbidden topics.
-- If the requested topic conflicts with the persona, reframe it or refuse politely in character.`;
+- If the requested topic conflicts with the persona, reframe it or refuse politely in character.
+- Do not repeat ideas, angles, or near-identical phrasing from the already-posted content above.`;
 
     let userPrompt = "";
     switch (type) {
