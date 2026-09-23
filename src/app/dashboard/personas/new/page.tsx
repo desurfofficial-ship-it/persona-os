@@ -3,45 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { PERSONA_TEMPLATES, type PersonaTemplate } from "@/lib/personaTemplates";
 
-const TEMPLATES = [
-  {
-    name: "Ambitious Founder",
-    backstory:
-      "Early-stage founder building in public. Obsessed with speed, clarity, and results. Shares the real journey — wins, losses, and lessons — without the corporate fluff.",
-    tone: "Direct, confident, slightly irreverent, no-nonsense",
-    pillars: "Building in public, high agency, shipping fast, mental toughness",
-    rules: "Always speak in first person\nKeep it short and punchy\nNever sound corporate\nShare real numbers when possible",
-    forbidden: "politics, personal drama, empty motivation",
-  },
-  {
-    name: "Fitness Creator",
-    backstory:
-      "Dedicated to progressive training, recovery, and sustainable performance. Focuses on evidence-based methods and long-term consistency over quick fixes.",
-    tone: "Motivational but realistic, knowledgeable, encouraging",
-    pillars: "Strength training, recovery, nutrition, consistency",
-    rules: "Never promote extreme diets\nFocus on sustainable habits\nBe encouraging without toxic positivity",
-    forbidden: "steroids, extreme cuts, body shaming",
-  },
-  {
-    name: "Luxury Lifestyle",
-    backstory:
-      "Curates a high-end but intentional lifestyle. Values quality, experiences, and refined taste. Content feels aspirational yet grounded.",
-    tone: "Calm, sophisticated, understated confidence",
-    pillars: "Quality over quantity, travel, design, personal standards",
-    rules: "Never flex excessively\nFocus on taste and intention\nKeep language elegant and minimal",
-    forbidden: "cheap promotions, desperation, oversharing finances",
-  },
-  {
-    name: "Tech Operator",
-    backstory:
-      "Operator who has scaled products and teams. Shares practical systems, decision frameworks, and hard-earned lessons from the trenches.",
-    tone: "Precise, analytical, experienced, low-ego",
-    pillars: "Systems thinking, execution, product, leadership",
-    rules: "Prefer frameworks over opinions\nBe specific\nAvoid buzzwords",
-    forbidden: "hype, vague advice, guru energy",
-  },
-];
+const TEMPLATES = PERSONA_TEMPLATES;
 
 export default function NewPersonaPage() {
   const router = useRouter();
@@ -54,7 +18,7 @@ export default function NewPersonaPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const applyTemplate = (template: (typeof TEMPLATES)[0]) => {
+  const applyTemplate = (template: PersonaTemplate) => {
     setName(template.name);
     setBackstory(template.backstory);
     setTone(template.tone);
@@ -143,19 +107,27 @@ export default function NewPersonaPage() {
         </div>
 
         <div className="mb-8">
-          <p className="text-sm text-zinc-400 mb-3">Quick start templates</p>
-          <div className="grid grid-cols-2 gap-3">
-            {TEMPLATES.map((t) => (
-              <button
-                key={t.name}
-                type="button"
-                onClick={() => applyTemplate(t)}
-                className="text-left p-3 bg-zinc-900 border border-zinc-800 rounded-lg hover:border-zinc-600 transition"
-              >
-                <p className="font-medium text-sm">{t.name}</p>
-                <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{t.tone}</p>
-              </button>
-            ))}
+          <p className="text-sm text-zinc-400 mb-3">
+            Quick start templates
+            <span className="text-zinc-600"> · {TEMPLATES.length} niches · click to fill the form</span>
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {TEMPLATES.map((t) => {
+              const active = name === t.name;
+              return (
+                <button
+                  key={t.name}
+                  type="button"
+                  onClick={() => applyTemplate(t)}
+                  className={`text-left p-3 bg-zinc-900 rounded-lg transition ${
+                    active ? "border border-white" : "border border-zinc-800 hover:border-zinc-600"
+                  }`}
+                >
+                  <p className="font-medium text-sm">{t.name}</p>
+                  <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{t.tagline}</p>
+                </button>
+              );
+            })}
           </div>
         </div>
 

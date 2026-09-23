@@ -46,6 +46,36 @@ const CONTENT_TYPES: { id: AgentContentType; label: string; example: string }[] 
   { id: "image_prompt", label: "Image prompt", example: "a cover visual" },
 ];
 
+/**
+ * Prompt starter templates — one-click prompts under the composer, keyed by
+ * the selected content type so the chips always match what's being generated.
+ * Each starter is a complete, sendable brief: it exercises the persona rules
+ * and (where noted) the agent tools (saveToDrafts / scheduleContent).
+ */
+const STARTERS: Record<AgentContentType, string[]> = {
+  caption: [
+    "Write 3 captions about slow mornings — never mention hustle culture, end each with a soft question. Save them to drafts.",
+    "Turn today's behind-the-scenes moment into one caption with a single specific sensory detail.",
+    "Write a caption that debunks one common myth in my niche — in my voice, under 120 words.",
+    "Generate 5 hook-first captions for this week, each under 150 words, and save every one to drafts.",
+  ],
+  script: [
+    "Write a 30s reel script — hook, 3 beats, CTA — about one lesson I learned this week.",
+    "Turn my most recent saved draft into a 45s talking-head script with b-roll notes.",
+    "Write a '3 mistakes everyone makes' reel script in my voice — punchy, no cringe intro.",
+  ],
+  story_arc: [
+    "Plan a 5-part launch story arc: tease, tension, reveal, proof, invite. One line per part.",
+    "Build a 3-part carousel arc that turns one follower objection into a buying belief.",
+    "Draft a week-long story arc introducing my philosophy — day 1 should be pure hook.",
+  ],
+  image_prompt: [
+    "Write a cover visual prompt for a slow-morning post: cream tones, natural light, minimal props.",
+    "Give me 3 image prompts for this week's theme — consistent palette, editorial style, no text in frame.",
+    "Describe a signature profile visual for me in a prompt: mood, lighting, color, composition.",
+  ],
+};
+
 const ACCENT = "#E76F51";
 const CREAM = "#FFFBF5";
 const CHARCOAL = "#2B2724";
@@ -424,6 +454,23 @@ function AgentWorkspace({
             >
               {isLoading ? "Working…" : "Generate"}
             </button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] mr-0.5" style={{ color: "#8A8177" }}>
+              Templates
+            </span>
+            {STARTERS[type].map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setPrompt(s)}
+                title={s}
+                className="rounded-full border bg-white px-2.5 py-1 text-[11px] transition-colors hover:bg-[#FFF3EC] max-w-[240px] truncate"
+                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+              >
+                {s.split(" ").slice(0, 4).join(" ").replace(/,$/, "")}…
+              </button>
+            ))}
           </div>
           <p className="text-[10px] mt-1.5" style={{ color: "#8A8177" }}>
             Sends as [Model:{model}] [Type:{type}]

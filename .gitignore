@@ -41,6 +41,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 local-*
+# Essential preview backend files — tracked so sandbox resets self-heal
+!src/lib/local-session.ts
+!src/app/api/local-auth/
+!src/app/api/local-db/
+!src/app/api/local-storage/
 .claude
 .z-ai-config
 *.log
