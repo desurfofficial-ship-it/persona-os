@@ -26,6 +26,7 @@ const PERSONA_COLS: Record<string, string> = {
   content_rules: "contentRules",
   forbidden_topics: "forbiddenTopics",
   voice_samples: "voiceSamples",
+  example_posts: "examplePosts",
   created_at: "createdAt",
   updated_at: "updatedAt",
 };
@@ -42,6 +43,7 @@ const DRAFT_COLS: Record<string, string> = {
   topic: "topic",
   auto_fill: "autoFill",
   tags: "tags",
+  performance: "performance",
   created_at: "createdAt",
 };
 
@@ -56,6 +58,17 @@ const ASSET_COLS: Record<string, string> = {
   created_at: "createdAt",
 };
 
+const ACCOUNT_COLS: Record<string, string> = {
+  id: "id",
+  user_id: "userId",
+  platform: "platform",
+  handle: "handle",
+  profile_url: "profileUrl",
+  status: "status",
+  last_synced_at: "lastSyncedAt",
+  created_at: "createdAt",
+};
+
 interface TableDef {
   cols: Record<string, string>;
   hasPersonaEmbed: boolean;
@@ -65,6 +78,7 @@ const TABLES: Record<string, TableDef> = {
   personas: { cols: PERSONA_COLS, hasPersonaEmbed: false },
   content_drafts: { cols: DRAFT_COLS, hasPersonaEmbed: true },
   assets: { cols: ASSET_COLS, hasPersonaEmbed: true },
+  connected_accounts: { cols: ACCOUNT_COLS, hasPersonaEmbed: false },
 };
 
 // ---------- helpers ----------
@@ -90,7 +104,7 @@ function mapRow(row: Record<string, unknown>, cols: Record<string, string>) {
 }
 
 interface Filter {
-  type: "eq" | "in";
+  type: "eq" | "in" | "gte" | "lte" | "gt" | "lt" | "ne";
   column: string;
   value: unknown;
 }
@@ -112,6 +126,18 @@ function buildWhere(
       AND.push({ [camel]: f.value });
     } else if (f.type === "in") {
       AND.push({ [camel]: { in: f.value } });
+    } else if (f.type === "ne") {
+      AND.push({ [camel]: { not: f.value } });
+    } else {
+      // Range comparators (gte/lte/gt/lt). DateTime columns arrive as ISO
+      // strings from the browser — convert so Prisma compares properly.
+      const op = f.type as "gte" | "lte" | "gt" | "lt";
+      let v: unknown = f.value;
+      if (typeof v === "string" && (camel === "plannedFor" || /At$/.test(camel))) {
+        const d = new Date(v);
+        if (!Number.isNaN(d.getTime())) v = d;
+      }
+      AND.push({ [camel]: { [op]: v } });
     }
   }
 
@@ -154,6 +180,7 @@ export async function POST(req: NextRequest) {
     limit?: number;
     single?: boolean;
     values?: Record<string, unknown>;
+    onConflict?: string;
   };
 
   try {
@@ -182,6 +209,7 @@ export async function POST(req: NextRequest) {
     personas: db.persona,
     content_drafts: db.contentDraft,
     assets: db.asset,
+    connected_accounts: db.connectedAccount,
   };
   const delegate = delegates[table];
 
@@ -240,6 +268,35 @@ export async function POST(req: NextRequest) {
     if (op === "insert") {
       const data = coerce(table, mapKeys(payload.values || {}, cols));
       data.userId = userId; // never trust client-supplied user_id
+
+      // Upsert emulation: when the caller passes an onConflict column list,
+      // look up an existing row by those columns (scoped to the user) and
+      // update it instead of creating a duplicate.
+      const onConflict =
+        typeof payload.onConflict === "string" && payload.onConflict.trim().length > 0
+          ? payload.onConflict.split(",").map((c) => c.trim()).filter(Boolean)
+          : null;
+      if (onConflict && onConflict.length > 0) {
+        const conflictWhere: Record<string, unknown> = { userId };
+        let resolvable = true;
+        for (const col of onConflict) {
+          const camel = cols[col];
+          const v = camel ? data[camel] : undefined;
+          if (!camel || v === undefined) {
+            resolvable = false;
+            break;
+          }
+          conflictWhere[camel] = v;
+        }
+        if (resolvable) {
+          const existing = await delegate.findFirst({ where: conflictWhere });
+          if (existing) {
+            const updated = await delegate.update({ where: { id: (existing as { id: string }).id }, data });
+            return NextResponse.json({ data: [mapRow(updated, cols)], error: null });
+          }
+        }
+      }
+
       const created = await delegate.create({ data });
       let mapped = [mapRow(created, cols)];
       if (wantsPersonaEmbed && created.personaId) {

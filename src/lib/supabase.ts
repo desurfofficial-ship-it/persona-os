@@ -23,7 +23,7 @@ type MockUser = { id: string; email: string };
 type MockError = { message: string; status?: number } | null;
 type DbResponse<T = any> = { data: T; error: MockError; count?: number | null };
 
-type Filter = { type: "eq" | "in"; column: string; value: unknown };
+type Filter = { type: "eq" | "in" | "gte" | "lte" | "gt" | "lt" | "ne"; column: string; value: unknown };
 
 interface SelectOptions {
   count?: "exact" | "planned" | "estimated";
@@ -79,6 +79,7 @@ class PostgrestQueryBuilder {
   private _order?: { column: string; ascending: boolean };
   private _limit?: number;
   private _single = false;
+  private _upsertConflict?: string;
   private _select?: string;
   private _promise?: Promise<DbResponse<any>>;
 
@@ -107,9 +108,10 @@ class PostgrestQueryBuilder {
     return this;
   }
 
-  upsert(values: Record<string, unknown>): PostgrestQueryBuilder {
+  upsert(values: Record<string, unknown>, options?: { onConflict?: string }): PostgrestQueryBuilder {
     this.op = "insert";
     this.values = values;
+    this._upsertConflict = options?.onConflict;
     return this;
   }
 
@@ -120,6 +122,31 @@ class PostgrestQueryBuilder {
 
   eq(column: string, value: unknown): PostgrestQueryBuilder {
     this.filters.push({ type: "eq", column, value });
+    return this;
+  }
+
+  gte(column: string, value: unknown): PostgrestQueryBuilder {
+    this.filters.push({ type: "gte", column, value });
+    return this;
+  }
+
+  lte(column: string, value: unknown): PostgrestQueryBuilder {
+    this.filters.push({ type: "lte", column, value });
+    return this;
+  }
+
+  gt(column: string, value: unknown): PostgrestQueryBuilder {
+    this.filters.push({ type: "gt", column, value });
+    return this;
+  }
+
+  lt(column: string, value: unknown): PostgrestQueryBuilder {
+    this.filters.push({ type: "lt", column, value });
+    return this;
+  }
+
+  ne(column: string, value: unknown): PostgrestQueryBuilder {
+    this.filters.push({ type: "ne", column, value });
     return this;
   }
 
@@ -155,6 +182,7 @@ class PostgrestQueryBuilder {
         limit: this._limit,
         single: this._single,
         values: this.values,
+        onConflict: this._upsertConflict,
       });
     }
     return this._promise;

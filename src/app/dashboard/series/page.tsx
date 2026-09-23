@@ -1,20 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { supabase, authedFetch } from "@/lib/supabase";
+import { useEffect, useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
-import { fetchVoiceSamples } from "@/lib/voiceSamples";
 
-export default function SeriesPlannerPage() {
+function SeriesContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const preselectedId = searchParams.get("persona");
+
   const [personas, setPersonas] = useState<Persona[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(preselectedId || "");
   const [theme, setTheme] = useState("");
   const [days, setDays] = useState(5);
   const [result, setResult] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [avoidContent, setAvoidContent] = useState<string[]>([]);
+  const [workedContent, setWorkedContent] = useState<string[]>([]);
+  const [floppedContent, setFloppedContent] = useState<string[]>([]);
 
   useEffect(() => {
     const load = async () => {
@@ -33,10 +38,51 @@ export default function SeriesPlannerPage() {
         .order("created_at", { ascending: false });
 
       setPersonas(data || []);
-      if (data && data.length > 0) setSelectedId(data[0].id);
+      if (preselectedId) setSelectedId(preselectedId);
+      else if (data && data.length > 0) setSelectedId(data[0].id);
     };
     load();
-  }, [router]);
+  }, [router, preselectedId]);
+
+  useEffect(() => {
+    const loadSignals = async () => {
+      if (!selectedId) {
+        setAvoidContent([]);
+        setWorkedContent([]);
+        setFloppedContent([]);
+        return;
+      }
+
+      const [postedRes, workedRes, floppedRes] = await Promise.all([
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("posted", true)
+          .order("created_at", { ascending: false })
+          .limit(15),
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("performance", "worked")
+          .order("created_at", { ascending: false })
+          .limit(8),
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("performance", "flopped")
+          .order("created_at", { ascending: false })
+          .limit(6),
+      ]);
+
+      setAvoidContent((postedRes.data || []).map((d) => d.content));
+      setWorkedContent((workedRes.data || []).map((d) => d.content));
+      setFloppedContent((floppedRes.data || []).map((d) => d.content));
+    };
+    loadSignals();
+  }, [selectedId]);
 
   const selectedPersona = personas.find((p) => p.id === selectedId);
 
@@ -47,31 +93,42 @@ export default function SeriesPlannerPage() {
     setResult("");
 
     try {
-      const res = await authedFetch("/api/generate", {
+      const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           persona: selectedPersona,
           type: "story_arc",
-          voiceSamples: await fetchVoiceSamples(selectedPersona.id),
-          topic: `Create a ${days}-day content series${theme ? ` around the theme: ${theme}` : ""}.
+          topic: `Create a ${days}-day content series${theme ? ` around the theme: ${theme}` : ""}. 
 For each day provide:
 - Day number
 - Post type (caption / short script / carousel idea)
 - Full post content or script
 - Why it fits the persona
 
-Make the series feel cohesive and progressive. Stay 100% in character.`,
+Make the series feel cohesive and progressive. Stay 100% in character.
+${workedContent.length > 0 ? "Lean into themes and hooks from posts that WORKED." : ""}
+${floppedContent.length > 0 ? "Avoid patterns from posts that FLOPPED." : ""}`,
           model: "openai/gpt-4o-mini",
+          avoidContent,
+          workedContent,
+          floppedContent,
         }),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Generation failed");
+      if (!res.ok) {
+        const msg = data.error || "Generation failed";
+        if (msg.toLowerCase().includes("key") || msg.toLowerCase().includes("auth")) {
+          throw new Error(
+            "AI key missing or invalid. Add OPENROUTER_API_KEY to .env.local and restart the server."
+          );
+        }
+        throw new Error(msg);
+      }
 
       setResult(data.content);
 
-      // Save as draft
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -90,6 +147,22 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
     }
   };
 
+  if (personas.length === 0 && !loading) {
+    return (
+      <div className="min-h-screen p-6 sm:p-8 flex items-center justify-center">
+        <div className="text-center max-w-md">
+          <p className="text-zinc-400 mb-4">Create a persona first to plan a series.</p>
+          <a
+            href="/dashboard/personas/from-posts"
+            className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+          >
+            Build from posts
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-6 sm:p-8">
       <div className="max-w-3xl mx-auto">
@@ -101,7 +174,7 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
         </div>
 
         <p className="text-zinc-400 text-sm mb-8">
-          Generate a multi-day content series that stays completely in character.
+          Multi-day series in character — steered by what worked and what flopped.
         </p>
 
         <div className="space-y-6">
@@ -124,6 +197,21 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
               <p className="font-medium text-zinc-200">{selectedPersona.name}</p>
               <p className="line-clamp-2 mt-1">{selectedPersona.backstory}</p>
+              <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                {workedContent.length > 0 && (
+                  <span className="text-emerald-400">
+                    Doubling down on {workedContent.length} that worked
+                  </span>
+                )}
+                {floppedContent.length > 0 && (
+                  <span className="text-red-400">Avoiding {floppedContent.length} that flopped</span>
+                )}
+                {avoidContent.length > 0 && (
+                  <span className="text-green-400">
+                    Skipping {avoidContent.length} already posted
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -184,5 +272,17 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SeriesPlannerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>
+      }
+    >
+      <SeriesContent />
+    </Suspense>
   );
 }

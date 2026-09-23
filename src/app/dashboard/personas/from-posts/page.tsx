@@ -2,28 +2,31 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase, authedFetch } from "@/lib/supabase";
-import PostImport from "@/components/PostImport";
+import { supabase } from "@/lib/supabase";
 
 export default function FromPostsPage() {
   const router = useRouter();
   const [posts, setPosts] = useState("");
+  const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<any>(null);
 
   const handleAnalyze = async () => {
-    if (!posts.trim()) return;
+    if (!posts.trim() && !url.trim()) return;
     setLoading(true);
     setError(null);
     setPreview(null);
 
     try {
-      const res = await authedFetch("/api/analyze-posts", {
+      const res = await fetch("/api/analyze-posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ posts }),
+        body: JSON.stringify({
+          posts: posts.trim() || undefined,
+          url: url.trim() || undefined,
+        }),
       });
 
       const data = await res.json();
@@ -54,59 +57,37 @@ export default function FromPostsPage() {
         return;
       }
 
-      const { data: created, error: insertError } = await supabase.from("personas").insert({
-        user_id: user.id,
-        name: name || preview.name || "My Persona",
-        backstory: preview.backstory || "",
-        tone_of_voice: preview.tone_of_voice || "",
-        lifestyle_pillars: preview.lifestyle_pillars || [],
-        content_rules: preview.content_rules || [],
-        forbidden_topics: preview.forbidden_topics || [],
-      });
+      let example_posts: string[] = preview.example_posts || [];
+      if ((!example_posts || example_posts.length === 0) && posts.trim()) {
+        example_posts = posts
+          .split(/\n\s*\n/)
+          .map((p: string) => p.trim())
+          .filter((p: string) => p.length > 20)
+          .slice(0, 8);
+      }
+
+      const { data: inserted, error: insertError } = await supabase
+        .from("personas")
+        .insert({
+          user_id: user.id,
+          name: name || preview.name || "My Persona",
+          backstory: preview.backstory || "",
+          tone_of_voice: preview.tone_of_voice || "",
+          lifestyle_pillars: preview.lifestyle_pillars || [],
+          content_rules: preview.content_rules || [],
+          forbidden_topics: preview.forbidden_topics || [],
+          example_posts,
+        })
+        .select("id")
+        .single();
 
       if (insertError) throw insertError;
 
-      const newId = (created as any)?.[0]?.id;
-
-      // Keep the user's REAL posts. They are the most valuable consistency
-      // evidence the product has: the Consistency Engine scans them for
-      // contradictions against everything generated later, and the voice
-      // curator can import them as gold samples. Already published, so
-      // they land as posted drafts of type "imported".
-      const pastedPosts = posts
-        .split(/\n\s*\n/)
-        .map((p) => p.trim())
-        .filter((p) => p.length > 3)
-        .slice(0, 20);
-      if (newId && pastedPosts.length > 0) {
-        // One insert per post — works on both the local shim and real Supabase.
-        // Failure here must never block persona creation.
-        for (const content of pastedPosts) {
-          const { error: rowError } = await supabase.from("content_drafts").insert({
-            persona_id: newId,
-            user_id: user.id,
-            type: "imported",
-            content,
-            posted: true,
-          });
-          if (rowError) {
-            console.error("Imported post could not be saved:", rowError);
-            break;
-          }
-        }
-        // Fire-and-forget: tag the imported posts (topic/mood) so the drafts
-        // page gains a working filter dimension. Must not block the redirect.
-        void authedFetch("/api/tag-drafts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ personaId: newId }),
-        }).catch(() => {});
+      if (inserted?.id) {
+        router.push(`/dashboard/generate?persona=${inserted.id}`);
+      } else {
+        router.push("/dashboard");
       }
-
-      // Keep the loop going: persona created → first generation immediately.
-      router.push(
-        newId ? `/dashboard/generate?persona=${newId}&first=1` : "/dashboard/generate?first=1"
-      );
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -124,43 +105,49 @@ export default function FromPostsPage() {
           <h1 className="text-2xl font-bold">Build from Posts</h1>
         </div>
 
-        <p className="text-zinc-400 text-sm mb-8">
-          Paste 3–10 of your best posts. We’ll extract the voice, tone, rules, and pillars automatically.
+        <p className="text-zinc-400 text-sm mb-4">
+          Paste posts or a public URL. We extract voice, tone, rules — then take you to generate.
         </p>
 
+        <a
+          href="/dashboard/connect"
+          className="inline-block mb-8 text-sm text-zinc-400 hover:text-white border border-zinc-700 rounded-lg px-3 py-2"
+        >
+          Prefer to connect an account? Optional →
+        </a>
+
         <div className="space-y-6">
-          <PostImport
-            onAddPosts={(imported) =>
-              setPosts((prev) =>
-                prev.trim() ? `${prev.trim()}\n\n${imported.join("\n\n")}` : imported.join("\n\n")
-              )
-            }
-          />
+          <div>
+            <label className="block text-sm text-zinc-400 mb-2">
+              Profile or blog URL (optional)
+            </label>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://…"
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+            />
+          </div>
 
           <div>
             <label className="block text-sm text-zinc-400 mb-2">
-              Paste your posts (separate with blank lines)
+              Or paste your posts (separate with blank lines)
             </label>
             <textarea
               value={posts}
               onChange={(e) => setPosts(e.target.value)}
-              rows={12}
+              rows={10}
               placeholder="Paste real posts here...\n\nPost 1\n\nPost 2\n\nPost 3"
               className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
             />
-            <p className="text-xs text-zinc-500 mt-2">
-              These posts are saved as your persona&apos;s history — the Consistency Engine
-              cross-checks everything you generate against them, so old claims and new ones never
-              quietly drift apart.
-            </p>
           </div>
 
           <button
             onClick={handleAnalyze}
-            disabled={loading || !posts.trim()}
+            disabled={loading || (!posts.trim() && !url.trim())}
             className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
           >
-            {loading ? "Analyzing voice..." : "Analyze Posts"}
+            {loading && !preview ? "Analyzing voice..." : "Analyze"}
           </button>
 
           {error && (
@@ -220,28 +207,12 @@ export default function FromPostsPage() {
                 </div>
               )}
 
-              {preview.forbidden_topics?.length > 0 && (
-                <div>
-                  <p className="text-sm text-zinc-400 mb-2">Forbidden Topics</p>
-                  <div className="flex flex-wrap gap-2">
-                    {preview.forbidden_topics.map((t: string) => (
-                      <span
-                        key={t}
-                        className="px-2.5 py-1 bg-red-900/40 border border-red-800 rounded-full text-xs text-red-200"
-                      >
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               <button
                 onClick={handleCreate}
                 disabled={loading}
                 className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
               >
-                {loading ? "Creating..." : "Create Persona"}
+                {loading ? "Creating..." : "Create & Generate First Content"}
               </button>
             </div>
           )}

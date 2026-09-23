@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { PERSONA_TEMPLATES, type PersonaTemplate } from "@/lib/personaTemplates";
-
-const TEMPLATES = PERSONA_TEMPLATES;
+import {
+  PERSONA_TEMPLATES,
+  TEMPLATE_CATEGORIES,
+  type PersonaTemplate,
+} from "@/lib/templates";
 
 export default function NewPersonaPage() {
   const router = useRouter();
@@ -15,16 +17,26 @@ export default function NewPersonaPage() {
   const [pillars, setPillars] = useState("");
   const [rules, setRules] = useState("");
   const [forbidden, setForbidden] = useState("");
+  const [examples, setExamples] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [category, setCategory] = useState<string>("All");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const filtered = useMemo(() => {
+    if (category === "All") return PERSONA_TEMPLATES;
+    return PERSONA_TEMPLATES.filter((t) => t.category === category);
+  }, [category]);
+
   const applyTemplate = (template: PersonaTemplate) => {
+    setSelectedTemplateId(template.id);
     setName(template.name);
     setBackstory(template.backstory);
     setTone(template.tone);
     setPillars(template.pillars);
     setRules(template.rules);
     setForbidden(template.forbidden);
+    setExamples(template.example_posts.join("\n\n---\n\n"));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -59,19 +71,34 @@ export default function NewPersonaPage() {
         .map((t) => t.trim())
         .filter(Boolean);
 
-      const { error: insertError } = await supabase.from("personas").insert({
-        user_id: user.id,
-        name,
-        backstory,
-        tone_of_voice: tone,
-        lifestyle_pillars,
-        content_rules,
-        forbidden_topics,
-      });
+      const example_posts = examples
+        .split(/\n\s*---\s*\n/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 10)
+        .slice(0, 8);
+
+      const { data: inserted, error: insertError } = await supabase
+        .from("personas")
+        .insert({
+          user_id: user.id,
+          name: name.trim().slice(0, 120),
+          backstory: backstory.trim(),
+          tone_of_voice: tone.trim(),
+          lifestyle_pillars,
+          content_rules,
+          forbidden_topics,
+          example_posts,
+        })
+        .select("id")
+        .single();
 
       if (insertError) throw insertError;
 
-      router.push("/dashboard");
+      if (inserted?.id) {
+        router.push(`/dashboard/generate?persona=${inserted.id}`);
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err: any) {
       setError(err.message || "Failed to create persona");
     } finally {
@@ -89,45 +116,67 @@ export default function NewPersonaPage() {
           <h1 className="text-3xl font-bold">Create Persona</h1>
         </div>
 
-        {/* Two paths */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
           <a
             href="/dashboard/personas/from-posts"
-            className="p-5 bg-zinc-900 border border-zinc-700 rounded-xl hover:border-zinc-500 transition"
+            className="p-5 bg-white text-black rounded-xl hover:bg-zinc-200 transition"
           >
             <h3 className="font-semibold mb-1">Build from your posts</h3>
-            <p className="text-sm text-zinc-400">
-              Paste real posts → auto-extract voice, tone & rules
+            <p className="text-sm text-zinc-600">
+              Paste real posts or URL → auto-extract voice
             </p>
           </a>
-          <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-xl">
-            <h3 className="font-semibold mb-1">Start from template</h3>
-            <p className="text-sm text-zinc-400">Pick a starting point below and customize</p>
-          </div>
+          <a
+            href="/dashboard/connect"
+            className="p-5 bg-zinc-900 border border-zinc-700 rounded-xl hover:border-zinc-500 transition"
+          >
+            <h3 className="font-semibold mb-1">Connect account (optional)</h3>
+            <p className="text-sm text-zinc-400">Link a public X handle</p>
+          </a>
         </div>
 
         <div className="mb-8">
-          <p className="text-sm text-zinc-400 mb-3">
-            Quick start templates
-            <span className="text-zinc-600"> · {TEMPLATES.length} niches · click to fill the form</span>
-          </p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {TEMPLATES.map((t) => {
-              const active = name === t.name;
-              return (
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <p className="text-sm text-zinc-400">Templates</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATE_CATEGORIES.map((c) => (
                 <button
-                  key={t.name}
+                  key={c}
                   type="button"
-                  onClick={() => applyTemplate(t)}
-                  className={`text-left p-3 bg-zinc-900 rounded-lg transition ${
-                    active ? "border border-white" : "border border-zinc-800 hover:border-zinc-600"
+                  onClick={() => setCategory(c)}
+                  className={`text-xs px-2.5 py-1 rounded-full border ${
+                    category === c
+                      ? "border-white bg-white text-black"
+                      : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
                   }`}
                 >
-                  <p className="font-medium text-sm">{t.name}</p>
-                  <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{t.tagline}</p>
+                  {c}
                 </button>
-              );
-            })}
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {filtered.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => applyTemplate(t)}
+                className={`text-left p-4 rounded-xl border transition ${
+                  selectedTemplateId === t.id
+                    ? "bg-zinc-800 border-white"
+                    : "bg-zinc-900 border-zinc-800 hover:border-zinc-600"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <p className="font-medium text-sm">{t.name}</p>
+                  <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                    {t.category}
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-400 line-clamp-2">{t.tagline}</p>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -206,12 +255,28 @@ export default function NewPersonaPage() {
             />
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-zinc-300 mb-2">
+              Gold example posts (separate with ---)
+            </label>
+            <textarea
+              value={examples}
+              onChange={(e) => setExamples(e.target.value)}
+              rows={6}
+              placeholder="Template fills these in — edit freely"
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+            />
+            <p className="text-xs text-zinc-500 mt-1">
+              Generation matches the style of these examples.
+            </p>
+          </div>
+
           <button
             type="submit"
             disabled={loading}
             className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
           >
-            {loading ? "Creating..." : "Create Persona"}
+            {loading ? "Creating..." : "Create & Generate First Content"}
           </button>
         </form>
       </div>

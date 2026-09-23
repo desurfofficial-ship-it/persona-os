@@ -28,6 +28,8 @@ model Persona {
   forbiddenTopics  Json?
   /// Curated "gold set" voice samples: [{ id, text, source, enabled, addedAt }]
   voiceSamples     Json?
+  /// Gold example posts (e.g. imported from a persona template) that anchor voice.
+  examplePosts     Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -51,6 +53,8 @@ model ContentDraft {
   autoFill   Boolean   @default(false)
   /// Auto-extracted topic/mood tags (imported posts, vault pairing).
   tags       Json?
+  /// Manual performance verdict: worked | ok | flopped (feeds future generation).
+  performance String?
   createdAt  DateTime  @default(now())
 
   @@index([userId])
@@ -116,4 +120,21 @@ model GoalAlert {
 
   @@index([userId])
   @@index([goalId])
+}
+
+/// A social account the user connected for voice import (fetch-account-posts).
+model ConnectedAccount {
+  id           String    @id @default(uuid())
+  userId       String
+  /// x | linkedin | instagram | threads
+  platform     String
+  handle       String
+  profileUrl   String?
+  /// connected | error | disconnected
+  status       String    @default("connected")
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([userId, platform, handle])
+  @@index([userId])
 }

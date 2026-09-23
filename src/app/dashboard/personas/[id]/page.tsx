@@ -2,25 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { supabase, authedFetch } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
-import { fetchVoiceSamples } from "@/lib/voiceSamples";
-import VoiceCurator from "@/components/VoiceCurator";
-import ConsistencyPanel from "@/components/ConsistencyPanel";
-import PerformancePanel from "@/components/PerformancePanel";
 
 interface Draft {
   id: string;
   type: string;
   content: string;
   created_at: string;
-}
-
-interface PostedDraft {
-  id: string;
-  content: string;
-  type: string;
-  metrics?: unknown;
 }
 
 export default function PersonaDetailPage() {
@@ -31,8 +20,6 @@ export default function PersonaDetailPage() {
   const [persona, setPersona] = useState<Persona | null>(null);
   const [recentDrafts, setRecentDrafts] = useState<Draft[]>([]);
   const [draftCount, setDraftCount] = useState(0);
-  const [postedCount, setPostedCount] = useState(0);
-  const [postedDrafts, setPostedDrafts] = useState<PostedDraft[]>([]);
   const [assetCount, setAssetCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -46,6 +33,7 @@ export default function PersonaDetailPage() {
   const [pillars, setPillars] = useState("");
   const [rules, setRules] = useState("");
   const [forbidden, setForbidden] = useState("");
+  const [examples, setExamples] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -77,8 +65,9 @@ export default function PersonaDetailPage() {
       setPillars((data.lifestyle_pillars || []).join(", "));
       setRules((data.content_rules || []).join("\n"));
       setForbidden((data.forbidden_topics || []).join(", "));
+      setExamples((data.example_posts || []).join("\n\n---\n\n"));
 
-      const [draftsRes, assetsRes, recentRes, postedRes, postedFullRes] = await Promise.all([
+      const [draftsRes, assetsRes, recentRes] = await Promise.all([
         supabase
           .from("content_drafts")
           .select("id", { count: "exact", head: true })
@@ -93,25 +82,11 @@ export default function PersonaDetailPage() {
           .eq("persona_id", id)
           .order("created_at", { ascending: false })
           .limit(5),
-        supabase
-          .from("content_drafts")
-          .select("id", { count: "exact", head: true })
-          .eq("persona_id", id)
-          .eq("posted", true),
-        supabase
-          .from("content_drafts")
-          .select("id, content, type, metrics")
-          .eq("persona_id", id)
-          .eq("posted", true)
-          .order("created_at", { ascending: false })
-          .limit(60),
       ]);
 
       setDraftCount(draftsRes.count || 0);
       setAssetCount(assetsRes.count || 0);
       setRecentDrafts(recentRes.data || []);
-      setPostedCount(postedRes.count || 0);
-      setPostedDrafts(postedFullRes.data || []);
       setLoading(false);
     };
 
@@ -134,6 +109,10 @@ export default function PersonaDetailPage() {
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
+    const example_posts = examples
+      .split(/\n\s*---\s*\n/)
+      .map((e) => e.trim())
+      .filter(Boolean);
 
     const { error } = await supabase
       .from("personas")
@@ -144,6 +123,7 @@ export default function PersonaDetailPage() {
         lifestyle_pillars,
         content_rules,
         forbidden_topics,
+        example_posts,
       })
       .eq("id", persona.id);
 
@@ -158,6 +138,7 @@ export default function PersonaDetailPage() {
         lifestyle_pillars,
         content_rules,
         forbidden_topics,
+        example_posts,
       });
       setEditing(false);
     }
@@ -169,23 +150,14 @@ export default function PersonaDetailPage() {
     setSampleLoading(true);
     setSample("");
     try {
-      // Gold set first — the curated voice beats auto-collected drafts.
-      const gold = (persona.voice_samples || [])
-        .filter(
-          (s): s is { id: string; text: string; source: "curated" | "draft" | "posted"; enabled: boolean; addedAt: string } =>
-            !!s && typeof s === "object" && typeof (s as { text?: unknown }).text === "string"
-        )
-        .filter((s) => s.enabled && s.text.trim().length > 20)
-        .map((s) => s.text);
-      const res = await authedFetch("/api/generate", {
+      const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           persona,
           type: "caption",
-          voiceSamples: await fetchVoiceSamples(persona.id),
-          ...(gold.length ? { goldSamples: gold } : {}),
-          topic: "Write one short sample post that perfectly demonstrates this persona's voice and energy.",
+          topic:
+            "Write one short sample post that perfectly demonstrates this persona's voice and energy.",
           model: "openai/gpt-4o-mini",
         }),
       });
@@ -203,7 +175,7 @@ export default function PersonaDetailPage() {
     if (!persona) return;
     setStrengthenLoading(true);
     try {
-      const res = await authedFetch("/api/strengthen-persona", {
+      const res = await fetch("/api/strengthen-persona", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ persona }),
@@ -211,7 +183,6 @@ export default function PersonaDetailPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
 
-      // Apply suggestions
       setName(data.name || persona.name);
       setBackstory(data.backstory || persona.backstory);
       setTone(data.tone_of_voice || persona.tone_of_voice || "");
@@ -244,6 +215,9 @@ ${(persona.content_rules || []).map((r) => `- ${r}`).join("\n") || "—"}
 
 FORBIDDEN TOPICS:
 ${(persona.forbidden_topics || []).join(", ") || "—"}
+
+GOLD EXAMPLES:
+${(persona.example_posts || []).join("\n\n---\n\n") || "—"}
 `;
     const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -304,13 +278,15 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
               <span className="font-medium ml-1">{draftCount}</span>
             </div>
             <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
-              <span className="text-zinc-500">Posted</span>{" "}
-              <span className="font-medium ml-1 text-green-400">{postedCount}</span>
-            </div>
-            <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
               <span className="text-zinc-500">Assets</span>{" "}
               <span className="font-medium ml-1">{assetCount}</span>
             </div>
+            {(persona.example_posts?.length || 0) > 0 && (
+              <div className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+                <span className="text-zinc-500">Gold examples</span>{" "}
+                <span className="font-medium ml-1">{persona.example_posts!.length}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -340,20 +316,6 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
             Check
           </a>
         </div>
-
-        <VoiceCurator persona={persona} />
-
-        <ConsistencyPanel personaId={persona.id} />
-
-        <PerformancePanel
-          drafts={postedDrafts.map((d) => ({
-            id: d.id,
-            content: d.content,
-            type: d.type,
-            metrics: d.metrics,
-          }))}
-          stats={{ draftCount, postedCount }}
-        />
 
         {editing ? (
           <div className="space-y-5 mb-10">
@@ -406,6 +368,21 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
                 onChange={(e) => setForbidden(e.target.value)}
                 className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
               />
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-2">
+                Gold example posts (separate with ---)
+              </label>
+              <textarea
+                value={examples}
+                onChange={(e) => setExamples(e.target.value)}
+                rows={8}
+                placeholder="Paste 3–8 of your best posts here. Separate each with ---\n\nPost one\n\n---\n\nPost two"
+                className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+              />
+              <p className="text-xs text-zinc-500 mt-1">
+                Generation will match the style of these examples.
+              </p>
             </div>
             <div className="flex gap-3">
               <button
@@ -472,6 +449,22 @@ ${(persona.forbidden_topics || []).join(", ") || "—"}
                     >
                       {t}
                     </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {persona.example_posts && persona.example_posts.length > 0 && (
+              <div>
+                <h2 className="text-sm font-medium text-zinc-400 mb-2">Gold examples</h2>
+                <div className="space-y-3">
+                  {persona.example_posts.map((ex, i) => (
+                    <div
+                      key={i}
+                      className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-300 whitespace-pre-wrap"
+                    >
+                      {ex}
+                    </div>
                   ))}
                 </div>
               </div>
