@@ -27,6 +27,7 @@ function GenerateContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
+  const [avoidContent, setAvoidContent] = useState<string[]>([]);
 
   useEffect(() => {
     const load = async () => {
@@ -50,6 +51,26 @@ function GenerateContent() {
     };
     load();
   }, [router, preselectedId]);
+
+  // Load posted drafts for the selected persona (for avoid list)
+  useEffect(() => {
+    const loadPosted = async () => {
+      if (!selectedId) {
+        setAvoidContent([]);
+        return;
+      }
+      const { data } = await supabase
+        .from("content_drafts")
+        .select("content")
+        .eq("persona_id", selectedId)
+        .eq("posted", true)
+        .order("created_at", { ascending: false })
+        .limit(15);
+
+      setAvoidContent((data || []).map((d) => d.content));
+    };
+    loadPosted();
+  }, [selectedId]);
 
   const selectedPersona = personas.find((p) => p.id === selectedId);
 
@@ -86,6 +107,7 @@ function GenerateContent() {
             type,
             topic,
             model,
+            avoidContent,
           }),
         });
 
@@ -117,6 +139,7 @@ function GenerateContent() {
           type,
           topic: `${instruction}\n\nOriginal:\n${results[index]}`,
           model,
+          avoidContent,
         }),
       });
 
@@ -147,6 +170,7 @@ function GenerateContent() {
           type: newType,
           topic: `${instruction}\n\nOriginal content:\n${results[index]}`,
           model,
+          avoidContent,
         }),
       });
 
@@ -161,6 +185,15 @@ function GenerateContent() {
       alert(err.message);
     } finally {
       setRewritingIndex(null);
+    }
+  };
+
+  const openPlatform = (text: string, platform: "x" | "linkedin") => {
+    navigator.clipboard.writeText(text);
+    if (platform === "x") {
+      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
+    } else {
+      window.open("https://www.linkedin.com/feed/", "_blank");
     }
   };
 
@@ -194,6 +227,11 @@ function GenerateContent() {
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
               <p className="font-medium text-zinc-200 mb-1">{selectedPersona.name}</p>
               <p className="line-clamp-2">{selectedPersona.backstory}</p>
+              {avoidContent.length > 0 && (
+                <p className="mt-2 text-xs text-green-400">
+                  Avoiding {avoidContent.length} already-posted draft{avoidContent.length > 1 ? "s" : ""}
+                </p>
+              )}
             </div>
           )}
 
@@ -258,7 +296,7 @@ function GenerateContent() {
           <button
             onClick={handleGenerate}
             disabled={loading || !selectedPersona}
-            className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
+            className="w-full py-3.5 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50 text-base"
           >
             {loading
               ? `Generating ${variations > 1 ? variations + " variations" : "..."}`
@@ -277,19 +315,32 @@ function GenerateContent() {
                 <h3 className="font-medium">
                   {results.length > 1 ? `Variation ${idx + 1}` : "Result"}
                 </h3>
-                <button
-                  onClick={() => navigator.clipboard.writeText(result)}
-                  className="text-xs text-zinc-400 hover:text-white"
-                >
-                  Copy
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => navigator.clipboard.writeText(result)}
+                    className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
+                  >
+                    Copy
+                  </button>
+                  <button
+                    onClick={() => openPlatform(result, "x")}
+                    className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
+                  >
+                    Copy + X
+                  </button>
+                  <button
+                    onClick={() => openPlatform(result, "linkedin")}
+                    className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
+                  >
+                    Copy + LinkedIn
+                  </button>
+                </div>
               </div>
 
               <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-4">
                 {rewritingIndex === idx ? "Working..." : result}
               </pre>
 
-              {/* Quick actions */}
               <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
                 <button
                   onClick={() => handleQuickRewrite(idx, "Make this shorter and punchier")}
