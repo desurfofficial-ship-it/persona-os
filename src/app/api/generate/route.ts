@@ -1,126 +1,100 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  sanitizePersona,
+  sanitizeStringList,
+  buildSystemPrompt,
+  buildUserPrompt,
+  safeModel,
+} from "@/lib/persona-prompt";
+
+const ALLOWED_TYPES = new Set(["caption", "script", "story_arc", "image_prompt", "rewrite"]);
 
 export async function POST(req: NextRequest) {
   try {
-    const { persona, type, topic, model, avoidContent, workedContent, floppedContent } =
-      await req.json();
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
 
-    if (!persona || !type) {
+    const { persona: rawPersona, type, topic, model, avoidContent, workedContent, floppedContent } =
+      body;
+
+    if (!rawPersona || !type) {
       return NextResponse.json({ error: "Missing persona or type" }, { status: 400 });
     }
 
-    let avoidSection = "";
-    if (avoidContent && Array.isArray(avoidContent) && avoidContent.length > 0) {
-      avoidSection = `\n\nALREADY POSTED / RECENT CONTENT (do NOT repeat these topics, angles, or phrasing):\n${avoidContent
-        .slice(0, 15)
-        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 200)}`)
-        .join("\n")}\n\nGenerate something fresh that covers new ground.`;
+    if (!ALLOWED_TYPES.has(type)) {
+      return NextResponse.json({ error: "Invalid content type" }, { status: 400 });
     }
 
-    let workedSection = "";
-    if (workedContent && Array.isArray(workedContent) && workedContent.length > 0) {
-      workedSection = `\n\nPOSTS THAT WORKED WELL (double down on these themes, hooks, and angles — do not copy verbatim):\n${workedContent
-        .slice(0, 8)
-        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 300)}`)
-        .join("\n")}`;
+    let persona;
+    try {
+      persona = sanitizePersona(rawPersona);
+    } catch (e: any) {
+      return NextResponse.json({ error: e.message || "Invalid persona" }, { status: 400 });
     }
 
-    let floppedSection = "";
-    if (floppedContent && Array.isArray(floppedContent) && floppedContent.length > 0) {
-      floppedSection = `\n\nPOSTS THAT FLOPPED (avoid similar topics, tone, or structure):\n${floppedContent
-        .slice(0, 6)
-        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 200)}`)
-        .join("\n")}`;
-    }
-
-    let examplesSection = "";
-    if (persona.example_posts && Array.isArray(persona.example_posts) && persona.example_posts.length > 0) {
-      examplesSection = `\n\nGOLD EXAMPLE POSTS (match this style, rhythm, and energy closely):\n${persona.example_posts
-        .slice(0, 8)
-        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 400)}`)
-        .join("\n")}`;
-    }
-
-    const systemPrompt = `You are a content writer that MUST stay 100% in character for the following persona.
-
-PERSONA NAME: ${persona.name}
-BACKSTORY: ${persona.backstory}
-TONE OF VOICE: ${persona.tone_of_voice || "natural and authentic"}
-LIFESTYLE PILLARS: ${(persona.lifestyle_pillars || []).join(", ") || "none specified"}
-CONTENT RULES: ${(persona.content_rules || []).join("; ") || "none"}
-FORBIDDEN TOPICS: ${(persona.forbidden_topics || []).join(", ") || "none"}
-${examplesSection}
-${workedSection}
-${floppedSection}
-${avoidSection}
-
-STRICT RULES:
-- Never break character.
-- Never mention that you are an AI or that this is generated.
-- Match the tone of voice exactly.
-- If gold example posts are provided, match their sentence length, rhythm, and energy.
-- Prefer themes and hooks similar to posts that WORKED; avoid patterns from posts that FLOPPED.
-- Stay consistent with the backstory and lifestyle pillars.
-- Follow every content rule.
-- Completely avoid any forbidden topics.
-- If the requested topic conflicts with the persona, reframe it or refuse politely in character.
-- Do not repeat ideas, angles, or near-identical phrasing from the already-posted content above.`;
-
-    let userPrompt = "";
-    switch (type) {
-      case "caption":
-        userPrompt = `Write a short, high-performing social media caption${topic ? ` about: ${topic}` : ""}. Keep it punchy and under 280 characters if possible. Make it feel completely native to this persona.`;
-        break;
-      case "script":
-        userPrompt = `Write a short video script (30-60 seconds spoken)${topic ? ` about: ${topic}` : ""}. Include a strong hook in the first 3 seconds and natural spoken language.`;
-        break;
-      case "story_arc":
-        userPrompt = `Create a short content series outline (3-5 posts)${topic ? ` around: ${topic}` : ""}. Each post should feel like a natural progression for this persona.`;
-        break;
-      case "image_prompt":
-        userPrompt = `Write a detailed image generation prompt that would produce a photo matching this persona's world${topic ? ` related to: ${topic}` : ""}. Be specific about lighting, setting, clothing, expression, and mood.`;
-        break;
-      case "rewrite":
-        userPrompt = `Rewrite the following text so it sounds exactly like this persona — same tone, rhythm, rules, and energy. Keep the core meaning.\n\n${topic || ""}`;
-        break;
-      default:
-        userPrompt = `Generate content of type "${type}"${topic ? ` about ${topic}` : ""}.`;
-    }
+    const systemPrompt = buildSystemPrompt(persona, {
+      avoidContent: sanitizeStringList(avoidContent, 15, 250),
+      workedContent: sanitizeStringList(workedContent, 8, 300),
+      floppedContent: sanitizeStringList(floppedContent, 6, 200),
+    });
+    const userPrompt = buildUserPrompt(type, topic);
+    const selectedModel = safeModel(model);
 
     const openrouterKey = process.env.OPENROUTER_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
     const anthropicKey = process.env.ANTHROPIC_API_KEY;
 
-    const selectedModel = model || "openai/gpt-4o-mini";
-
     if (openrouterKey) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openrouterKey}`,
-          "HTTP-Referer": "https://persona-os.app",
-          "X-Title": "Persona OS",
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.75,
-        }),
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 45000);
 
-      const data = await res.json();
+      try {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openrouterKey}`,
+            "HTTP-Referer": "https://persona-os.app",
+            "X-Title": "Persona OS",
+          },
+          body: JSON.stringify({
+            model: selectedModel,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+            temperature: 0.75,
+            max_tokens: 2048,
+          }),
+          signal: controller.signal,
+        });
 
-      if (!res.ok) {
-        console.error("OpenRouter error:", data);
-        throw new Error(data.error?.message || data.message || "OpenRouter error");
+        const data = await res.json();
+
+        if (!res.ok) {
+          console.error("OpenRouter error:", data);
+          const msg = data.error?.message || data.message || "OpenRouter error";
+          // Don't leak key fragments
+          throw new Error(String(msg).replace(/sk-[a-zA-Z0-9-]+/g, "[redacted]"));
+        }
+
+        const content = data.choices?.[0]?.message?.content;
+        if (!content || typeof content !== "string") {
+          return NextResponse.json({ error: "Empty model response" }, { status: 502 });
+        }
+        return NextResponse.json({ content });
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          return NextResponse.json({ error: "Generation timed out. Try again." }, { status: 504 });
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const content = data.choices?.[0]?.message?.content || "No content generated";
-      return NextResponse.json({ content });
     }
 
     if (openaiKey) {
@@ -137,6 +111,7 @@ STRICT RULES:
             { role: "user", content: userPrompt },
           ],
           temperature: 0.75,
+          max_tokens: 2048,
         }),
       });
 
@@ -176,7 +151,11 @@ STRICT RULES:
       content: `[Simulated ${type} — ${persona.name}]\n\n${userPrompt}\n\n---\nAdd OPENROUTER_API_KEY to .env.local and restart the server for real generation.`,
     });
   } catch (err: any) {
-    console.error(err);
-    return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
+    console.error("[generate]", err);
+    const message = err?.message || "Server error";
+    return NextResponse.json(
+      { error: String(message).slice(0, 300) },
+      { status: 500 }
+    );
   }
 }

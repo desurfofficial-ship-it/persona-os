@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
 function cleanHandle(raw: string) {
-  return raw.replace(/^@/, "").replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "").split(/[/?]/)[0].trim();
+  return raw
+    .replace(/^@/, "")
+    .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "")
+    .split(/[/?#]/)[0]
+    .trim()
+    .replace(/[^a-zA-Z0-9_]/g, "")
+    .slice(0, 40);
 }
 
-/** Try public X syndication / nitter-style text extraction. Best-effort; may fail. */
 async function fetchXPosts(handle: string): Promise<string[]> {
   const h = cleanHandle(handle);
-  if (!h) throw new Error("Invalid X handle");
+  if (!h || h.length < 1) throw new Error("Invalid X handle");
 
   const urls = [
     `https://r.jina.ai/http://x.com/${h}`,
@@ -36,7 +41,9 @@ async function fetchXPosts(handle: string): Promise<string[]> {
     );
   }
 
-  // Split into rough post-sized chunks from the reader text
+  // Cap raw text
+  text = text.slice(0, 30000);
+
   const lines = text
     .split(/\n+/)
     .map((l) => l.trim())
@@ -59,7 +66,6 @@ async function fetchXPosts(handle: string): Promise<string[]> {
   if (buf.length > 40 && posts.length < 10) posts.push(buf.slice(0, 500));
 
   if (posts.length < 2) {
-    // Fallback: use large chunks of the page text
     const chunks = text.match(/[^.!?]{80,400}[.!?]/g) || [];
     return chunks.slice(0, 8).map((c) => c.trim());
   }
@@ -69,7 +75,15 @@ async function fetchXPosts(handle: string): Promise<string[]> {
 
 export async function POST(req: NextRequest) {
   try {
-    const { platform, handle } = await req.json();
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    const platform = body.platform;
+    const handle = typeof body.handle === "string" ? body.handle : "";
 
     if (!platform || !handle) {
       return NextResponse.json({ error: "platform and handle required" }, { status: 400 });
@@ -79,7 +93,7 @@ export async function POST(req: NextRequest) {
       const posts = await fetchXPosts(handle);
       return NextResponse.json({
         posts,
-        combined: posts.join("\n\n"),
+        combined: posts.join("\n\n").slice(0, 15000),
         handle: cleanHandle(handle),
         platform: "x",
       });
@@ -98,7 +112,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: "Unsupported platform" }, { status: 400 });
   } catch (err: any) {
-    console.error(err);
-    return NextResponse.json({ error: err.message || "Fetch failed" }, { status: 500 });
+    console.error("[fetch-account-posts]", err);
+    return NextResponse.json(
+      { error: String(err.message || "Fetch failed").slice(0, 300) },
+      { status: 500 }
+    );
   }
 }

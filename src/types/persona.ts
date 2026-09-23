@@ -23,6 +23,8 @@ export interface Asset {
   created_at: string;
 }
 
+export type DraftPerformance = "worked" | "ok" | "flopped";
+
 export interface ContentDraft {
   id: string;
   persona_id: string;
@@ -31,5 +33,9 @@ export interface ContentDraft {
   consistency_score?: number;
   flags?: string[];
   posted?: boolean;
+  performance?: DraftPerformance | null;
   created_at: string;
 }
+
+export const CONTENT_TYPES = ["caption", "script", "story_arc", "image_prompt", "rewrite"] as const;
+export type ContentType = (typeof CONTENT_TYPES)[number];
