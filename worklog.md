@@ -319,3 +319,23 @@ Stage Summary:
 - The agent workspace survives a deeper red team: SSRF (incl. redirect-based bypass) is dead, runaway agents hit rate walls, tag injection is allowlisted, /api/personas matches the 401 contract, and prompt injection via chat leaks nothing. Preview fully restored + verified after the third sandbox reset.
 - Remaining backlog: per-alert mark-read (currently all-at-once on open), scan mid-Layer-2 streaming counts, goals history pagination past 15.
 - PAT rotation reminder: the old PAT remains exposed in chat history AND was used for pushes — rotate at github.com/settings/tokens; a fresh PAT (or "push it for me" with the token) is needed to ship commit d8f4e57.
+
+---
+Task ID: 13
+Agent: Super Z (main agent)
+Task: "Add more templates" — persona quick-start templates + agent workspace prompt starters. Side quest: full recovery of the preview backend wiped by a deep sandbox reset.
+
+Work Log:
+- Discovered on verification: sandbox reset (deeper than prior ones, incl. ignored files) had wiped src/lib/local-session.ts AND /api/local-auth|local-db|local-storage — auth/DB/storage shim layer was gone; dev server only appeared alive via cached compile. Also found tracked-but-deleted vault/upload route.
+- Recovered all missing files byte-identical from the nested persona-os/ clone; `git checkout --` restored vault/upload/route.ts.
+- Root cause: broad `local-*` gitignore glob swallowed the essential layer; deep clean (-x) removed ignored files. Fixed .gitignore with explicit negations (!src/lib/local-session.ts, !src/app/api/local-auth/, !src/app/api/local-db/, !src/app/api/local-storage/) and committed the layer — tracked files survive reset --hard AND clean -fdx, so future resets self-heal.
+- New src/lib/personaTemplates.ts: 12 persona quick-start templates (original 4 + Wellness Coach, Travel Storyteller, Food & Recipe Creator, Money Educator, LinkedIn Thought Leader, Real Estate Insider, Beauty & Style Curator, Creative Photographer) — full backstory/tone/pillars/rules/forbidden, enforceable-rule quality bar.
+- /dashboard/personas/new: imports shared module, responsive grid-cols-2 sm:grid-cols-3, tagline card copy, active-state ring when template applied.
+- /dashboard/generate: STARTERS map keyed by AgentContentType (4 caption / 3 script / 3 story_arc / 3 image_prompt one-click prompt templates) rendered as chips under the composer; click fills the textarea; chips swap with content type.
+- Verified: tsc --noEmit clean (was 12 module-not-found errors before restore); API signin demo@persona-os.app returns token; /api/personas bearer-auth returns The Disciplined Founder; agent-browser confirmed 12 cards render, Wellness Coach click fills name/tone/pillars, chips fill prompt and swap per type. Screenshots: download/task13-persona-templates.png, download/task13-prompt-starters.png.
+- Committed 922d1cf (8 files, 805 insertions). Push to GitHub failed: no stored credentials (old PAT revoked — correct). User must push with fresh credentials.
+
+Stage Summary:
+- Templates: 12 persona templates + per-type prompt starters, both surfaces live-verified.
+- Preview backend fully restored and now reset-proof (committed + gitignore negations).
+- Push pending: user needs to add fresh GitHub credentials (PAT rotation still owed).
