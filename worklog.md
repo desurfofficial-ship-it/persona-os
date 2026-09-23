@@ -485,3 +485,19 @@ Stage Summary:
 - All 4 round-2 holes closed and proven: storage tenant-scoped, auth limiter 10/min/IP, 7-day expiring tokens (legacy rejected), all AI surfaces rate-limited. Known-left (per report, not in scope): SHA-256 passwords, in-memory limiter, GET public read, ignoreBuildErrors.
 - One-time effect: every existing session invalidated once (re-login). LOCAL_SESSION_SECRET added to .env.local (not echoed).
 - Grade trajectory: storage D->A, auth C->B, AI-abuse D->B+ (generate/agent were already B+).
+
+---
+Task ID: 20-round2-push
+Agent: Super Z (main agent)
+Task: Deliver round-2 hardening commits to GitHub via user-supplied one-time PAT.
+
+Work Log:
+- Session-continuity audit: outer repo /home/z/my-project IS persona-os (remote desurfofficial-ship-it/persona-os); nested persona-os/ dir is a stale four-pillars mirror, untouched.
+- Round-2 work already committed (2cdf4a0) + proof-artifact commit (3780bcd); both UNPUSHED - push was the pending step.
+- Pre-push re-verification on live server: redteam-round2 25/25 PASS; redteam-agent 20/20 PASS (first run hit our OWN new 10/min/IP auth limiter after the round-2 spray test - confirmed 429, waited for window, green. The limiter works exactly as shipped).
+- Secret scan of origin/main..HEAD diff: 0 secret-pattern hits (github_pat_/sk-or-/sk-ant-/JWT/LOCAL_SESSION_SECRET=).
+- Pushed via one-time PAT URL: 6420ba6..3780bcd main -> main. Output sed-masked; tree grep 0 hits; pickaxe --all 0 hits; tracking ref updated to 3780bcd.
+
+Stage Summary:
+- Round-2 red-team remediation is now LIVE on origin/main (3780bcd). Storage D->A, auth C->B, AI-abuse D->B+ per round-2 grading.
+- PAT residue: zero (tree + full history). Rotation reminder re-issued to user (PAT shared in chat >= 4 times now).
