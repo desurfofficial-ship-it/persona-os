@@ -19,11 +19,18 @@ import { PLATFORMS, type PlatformId } from "@/lib/platforms";
 import type { VariantResult } from "@/lib/generation";
 import ThreadComposer from "@/components/ThreadComposer";
 
+/**
+ * Models VERIFIED against the live OpenRouter catalog (2026-09).
+ * The old pills (openai/gpt-4o-mini, anthropic/claude-3.5-haiku,
+ * google/gemini-flash-1.5) 404 or are region-blocked — every request
+ * burned two retries then degraded to the built-in model (rate-limited),
+ * which is what made Generate return junk or nothing.
+ */
 const MODELS = [
-  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini (Fast)" },
-  { id: "anthropic/claude-3.5-haiku", name: "Claude 3.5 Haiku" },
-  { id: "google/gemini-flash-1.5", name: "Gemini Flash" },
-  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B" },
+  { id: "meta-llama/llama-3.3-70b-instruct", name: "Llama 3.3 70B (Best)" },
+  { id: "deepseek/deepseek-chat-v3-0324", name: "DeepSeek V3 (Smart)" },
+  { id: "mistralai/mistral-small-24b-instruct-2501", name: "Mistral Small 24B" },
+  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B (Fast)" },
 ];
 
 const SENSITIVITY_KEY = "persona-os-dup-sensitivity";
@@ -67,7 +74,7 @@ function GenerateContent() {
   const [selectedId, setSelectedId] = useState(preselectedId || "");
   const [type, setType] = useState<ContentType>("caption");
   const [topic, setTopic] = useState("");
-  const [model, setModel] = useState("openai/gpt-4o-mini");
+  const [model, setModel] = useState("meta-llama/llama-3.3-70b-instruct");
   const [variantCount, setVariantCount] = useState(3);
   const [platform, setPlatform] = useState<PlatformId>("x");
   const [results, setResults] = useState<VariantResult[]>([]);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
 interface Draft {
@@ -150,7 +150,7 @@ export default function PersonaDetailPage() {
     setSampleLoading(true);
     setSample("");
     try {
-      const res = await fetch("/api/generate", {
+      const res = await authedFetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -158,7 +158,7 @@ export default function PersonaDetailPage() {
           type: "caption",
           topic:
             "Write one short sample post that perfectly demonstrates this persona's voice and energy.",
-          model: "openai/gpt-4o-mini",
+          model: "meta-llama/llama-3.3-70b-instruct",
         }),
       });
       const data = await res.json();
@@ -175,7 +175,7 @@ export default function PersonaDetailPage() {
     if (!persona) return;
     setStrengthenLoading(true);
     try {
-      const res = await fetch("/api/strengthen-persona", {
+      const res = await authedFetch("/api/strengthen-persona", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ persona }),

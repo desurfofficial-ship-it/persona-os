@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { resolveUserId } from "@/lib/server/agentAuth";
 
 function cleanHandle(raw: string) {
   return raw
@@ -74,6 +75,11 @@ async function fetchXPosts(handle: string): Promise<string[]> {
 }
 
 export async function POST(req: NextRequest) {
+  // Outbound fetches + jina quota belong to signed-in users only.
+  const userId = await resolveUserId(req);
+  if (!userId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
   try {
     let body: any;
     try {

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
 function IdeasContent() {
@@ -92,7 +92,7 @@ function IdeasContent() {
     setResult("");
 
     try {
-      const res = await fetch("/api/generate", {
+      const res = await authedFetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -107,7 +107,7 @@ For each idea provide:
 Make the ideas specific, timely-feeling, and true to the persona's voice and lifestyle pillars. Avoid generic advice.
 ${workedContent.length > 0 ? "Prioritize angles similar to what has already WORKED for this persona." : ""}
 ${floppedContent.length > 0 ? "Do not suggest topics similar to what FLOPPED." : ""}`,
-          model: "openai/gpt-4o-mini",
+          model: "meta-llama/llama-3.3-70b-instruct",
           avoidContent,
           workedContent,
           floppedContent,

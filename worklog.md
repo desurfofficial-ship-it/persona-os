@@ -426,3 +426,23 @@ Work Log:
 
 Stage Summary:
 - GitHub main now at f2639c0: contains Task 13, agent-page fix + OpenRouter live, hardening (untracked .env). Local and remote in sync. PAT used once, never persisted; rotation reminder issued.
+
+---
+Task ID: 17-bug-sweep-hardening
+Agent: Super Z (main agent)
+Task: "Yes execute" - full bug sweep + red-team hardening pass.
+
+Work Log:
+- Sandbox reset had wiped .env.local (gitignored by design) -> recreated from .env.local.example + user's OpenRouter key (verified check-ignore). Generate was silently dead on fresh boots again.
+- E2E browser test of Studio generate exposed BUG: server log "All providers failed - openrouter:openai/gpt-4o-mini: not available in your region | built-in: 429/timed out"; UI rendered junk variants ("flood 39", "xxxx..."). Studio page still shipped the 3 dead model pills with gpt-4o-mini default.
+- Fix A: studio page MODELS -> verified live allowlist (llama-3.3-70b default, deepseek-v3, mistral-small, llama-3.1-8b).
+- Fix B: llmComplete gains openrouter:default provider before built-in (requested model failing no longer degrades to the rate-limited built-in); /api/generate validates body.model against OPENROUTER_ALLOWED_MODELS (junk ids fall back to default instead of burning retries).
+- SECURITY CRITICAL: /api/local-storage POST had NO auth (DELETE was gated) - red-team exploit wrote+read back a file unauthenticated. Patched -> 401; verified authed upload still 200. Exploit artifacts removed.
+- SECURITY: /api/fetch-account-posts (outbound jina fetch) fully unauth -> resolveUserId gate; connect page call switched to authedFetch.
+- FUNCTIONAL: 6 more client call sites were plain fetch to now-auth-gated routes -> silent 401s since Task 15/16 hardening: drafts improve, series, ideas, persona improve x2, from-posts, connect analyze. All switched to authedFetch (imports added to 5 files). Dead model refs in series/ideas/personas/drafts payloads -> llama-3.3-70b.
+- Tooling: redteam battery T7 target /api/vault/upload (nonexistent route) -> now probes /api/local-storage POST.
+- Verified: tsc clean; red-team battery 20/20 PASS; Studio generate returns real in-voice caption in 3.7s (was 47s junk/fail); Ideas flow renders real hooks (was silent 401); 14/14 pages load with zero console errors.
+- Committed + pushed (one-time URL PAT, no storage).
+
+Stage Summary:
+- Generate chain fully healed end-to-end; open upload endpoint closed; 8 dead client flows resurrected. Secrets: OpenRouter key + this PAT both pasted in chat - rotation reminder stands.

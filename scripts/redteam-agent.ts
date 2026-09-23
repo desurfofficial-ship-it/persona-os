@@ -159,7 +159,7 @@ async function main() {
     ["/api/drafts", { method: "PATCH", body: JSON.stringify({ id: "x" }) }],
     ["/api/goals", { method: "POST", body: JSON.stringify({ goalTitle: "x", checkUrl: "https://x.com", persona_id: "x" }) }],
     ["/api/goals/check", { method: "POST", body: JSON.stringify({}) }],
-    ["/api/vault/upload", { method: "POST" }],
+    ["/api/local-storage?path=assets/rt-probe.txt", { method: "POST" }],
     ["/api/personas", { method: "GET" }],
     ["/api/generate", { method: "POST", body: JSON.stringify({}) }],
   ];

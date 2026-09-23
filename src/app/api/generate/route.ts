@@ -5,6 +5,7 @@ import {
   rankVariants,
   runVariant,
   strategiesFor,
+  OPENROUTER_ALLOWED_MODELS,
   type GenType,
   type PersonaInput,
   type VariantResult,
@@ -105,7 +106,10 @@ export async function POST(req: NextRequest) {
           rewrite: body.rewrite,
           moreLike,
           polish,
-          model: body.model,
+          model:
+            typeof body.model === "string" && OPENROUTER_ALLOWED_MODELS.has(body.model)
+              ? body.model
+              : undefined,
         })
       )
     );

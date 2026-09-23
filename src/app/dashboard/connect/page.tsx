@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 
 interface ConnectedAccount {
   id: string;
@@ -82,7 +82,7 @@ export default function ConnectPage() {
       }
 
       // X: try fetch posts then analyze → create persona
-      const fetchRes = await fetch("/api/fetch-account-posts", {
+      const fetchRes = await authedFetch("/api/fetch-account-posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ platform: "x", handle: h }),
@@ -97,7 +97,7 @@ export default function ConnectPage() {
       await saveAccount(h, "x", "linked");
       setInfo(`Pulled ${fetchData.posts?.length || 0} snippets. Building persona…`);
 
-      const analyzeRes = await fetch("/api/analyze-posts", {
+      const analyzeRes = await authedFetch("/api/analyze-posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ posts: fetchData.combined }),

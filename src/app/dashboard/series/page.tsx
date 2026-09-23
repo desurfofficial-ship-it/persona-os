@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
 function SeriesContent() {
@@ -93,7 +93,7 @@ function SeriesContent() {
     setResult("");
 
     try {
-      const res = await fetch("/api/generate", {
+      const res = await authedFetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -109,7 +109,7 @@ For each day provide:
 Make the series feel cohesive and progressive. Stay 100% in character.
 ${workedContent.length > 0 ? "Lean into themes and hooks from posts that WORKED." : ""}
 ${floppedContent.length > 0 ? "Avoid patterns from posts that FLOPPED." : ""}`,
-          model: "openai/gpt-4o-mini",
+          model: "meta-llama/llama-3.3-70b-instruct",
           avoidContent,
           workedContent,
           floppedContent,

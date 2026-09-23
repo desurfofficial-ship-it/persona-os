@@ -101,6 +101,18 @@ const TIMEOUT_MS = 45_000;
  */
 export const OPENROUTER_DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct";
 
+/**
+ * Model ids the API will honor. Anything else (stale clients, junk from a
+ * tampered request) falls back to the default instead of burning retries on
+ * ids that are dead on the live catalog.
+ */
+export const OPENROUTER_ALLOWED_MODELS = new Set([
+  "meta-llama/llama-3.3-70b-instruct",
+  "deepseek/deepseek-chat-v3-0324",
+  "mistralai/mistral-small-24b-instruct-2501",
+  "meta-llama/llama-3.1-8b-instruct",
+]);
+
 export interface LlmResult {
   content: string;
   provider: string;
@@ -232,6 +244,14 @@ export async function llmComplete(
     providers.push({
       name: `openrouter:${opts?.model || OPENROUTER_DEFAULT_MODEL.replace(/.*\//, "")}`,
       run: () => callOpenRouter(orKey, opts?.model || OPENROUTER_DEFAULT_MODEL, messages, temp, !!opts?.json, t),
+    });
+  // Requested model failed on OpenRouter? Try the verified default there
+  // BEFORE degrading to built-in — the built-in model is rate-limited in some
+  // regions and a healthy OpenRouter model is always preferable.
+  if (orKey && opts?.model && opts.model !== OPENROUTER_DEFAULT_MODEL)
+    providers.push({
+      name: `openrouter:default(${OPENROUTER_DEFAULT_MODEL.replace(/.*\//, "")})`,
+      run: () => callOpenRouter(orKey, OPENROUTER_DEFAULT_MODEL, messages, temp, !!opts?.json, t),
     });
   if (oaKey)
     providers.push({ name: "openai:gpt-4o-mini", run: () => callOpenAI(oaKey, messages, temp, !!opts?.json, t) });

@@ -75,8 +75,14 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ---- POST: upload ------------------------------------------------------------
+// ---- POST: upload (auth-gated — an open upload endpoint is an arbitrary-
+// file-write + storage-DoS surface; DELETE was already gated, POST was not) ---
 export async function POST(req: NextRequest) {
+  const userId = userFromRequest(req);
+  if (!userId) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
   let form: FormData;
   try {
     form = await req.formData();
