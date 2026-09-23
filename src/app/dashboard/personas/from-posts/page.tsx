@@ -57,7 +57,6 @@ export default function FromPostsPage() {
         return;
       }
 
-      // Gold examples: from AI extract, or split pasted posts
       let example_posts: string[] = preview.example_posts || [];
       if ((!example_posts || example_posts.length === 0) && posts.trim()) {
         example_posts = posts
@@ -106,10 +105,16 @@ export default function FromPostsPage() {
           <h1 className="text-2xl font-bold">Build from Posts</h1>
         </div>
 
-        <p className="text-zinc-400 text-sm mb-8">
-          Paste posts or a public profile/blog URL. We extract voice, tone, rules — and save gold
-          examples — then take you to generate.
+        <p className="text-zinc-400 text-sm mb-4">
+          Paste posts or a public URL. We extract voice, tone, rules — then take you to generate.
         </p>
+
+        <a
+          href="/dashboard/connect"
+          className="inline-block mb-8 text-sm text-zinc-400 hover:text-white border border-zinc-700 rounded-lg px-3 py-2"
+        >
+          Prefer to connect an account? Optional →
+        </a>
 
         <div className="space-y-6">
           <div>
@@ -119,12 +124,9 @@ export default function FromPostsPage() {
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://linkedin.com/in/... or blog URL"
+              placeholder="https://…"
               className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
             />
-            <p className="text-xs text-zinc-500 mt-1">
-              Public pages only. Some sites block scrapers — if it fails, paste text below.
-            </p>
           </div>
 
           <div>
@@ -202,22 +204,6 @@ export default function FromPostsPage() {
                       <li key={i}>{r}</li>
                     ))}
                   </ul>
-                </div>
-              )}
-
-              {preview.forbidden_topics?.length > 0 && (
-                <div>
-                  <p className="text-sm text-zinc-400 mb-2">Forbidden Topics</p>
-                  <div className="flex flex-wrap gap-2">
-                    {preview.forbidden_topics.map((t: string) => (
-                      <span
-                        key={t}
-                        className="px-2.5 py-1 bg-red-900/40 border border-red-800 rounded-full text-xs text-red-200"
-                      >
-                        {t}
-                      </span>
-                    ))}
-                  </div>
                 </div>
               )}
 

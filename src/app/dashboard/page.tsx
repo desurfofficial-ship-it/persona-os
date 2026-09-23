@@ -124,15 +124,25 @@ export default function DashboardPage() {
               href="/dashboard/personas/from-posts"
               className="block p-6 bg-white text-black rounded-2xl hover:bg-zinc-200 transition"
             >
-              <h2 className="font-semibold text-lg mb-1">Paste posts or a profile URL</h2>
+              <h2 className="font-semibold text-lg mb-1">Paste posts or a URL</h2>
               <p className="text-sm text-zinc-600">
-                Recommended — we extract your voice, tone, and rules automatically
+                Recommended — extract voice from your real writing
+              </p>
+            </a>
+
+            <a
+              href="/dashboard/connect"
+              className="block p-6 bg-zinc-900 border border-zinc-600 rounded-2xl hover:border-zinc-400 transition"
+            >
+              <h2 className="font-semibold text-lg mb-1">Connect an account (optional)</h2>
+              <p className="text-sm text-zinc-400">
+                Link a public X handle — we pull posts and build your persona
               </p>
             </a>
 
             <a
               href="/dashboard/personas/new"
-              className="block p-6 bg-zinc-900 border border-zinc-700 rounded-2xl hover:border-zinc-500 transition"
+              className="block p-6 bg-zinc-900 border border-zinc-800 rounded-2xl hover:border-zinc-600 transition"
             >
               <h2 className="font-semibold text-lg mb-1">Start from a template</h2>
               <p className="text-sm text-zinc-400">
@@ -173,8 +183,8 @@ export default function DashboardPage() {
             <a href="/dashboard/series" className="text-zinc-400 hover:text-white">
               Series
             </a>
-            <a href="/dashboard/ideas" className="text-zinc-400 hover:text-white">
-              Ideas
+            <a href="/dashboard/connect" className="text-zinc-400 hover:text-white">
+              Connect
             </a>
             <a href="/dashboard/check" className="text-zinc-400 hover:text-white">
               Check
@@ -211,11 +221,11 @@ export default function DashboardPage() {
             <p className="text-zinc-400 text-xs">Multi-day plans</p>
           </a>
           <a
-            href="/dashboard/ideas"
+            href="/dashboard/connect"
             className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
-            <h2 className="font-semibold mb-1 text-sm sm:text-base">Ideas</h2>
-            <p className="text-zinc-400 text-xs">Topic lists</p>
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">Connect</h2>
+            <p className="text-zinc-400 text-xs">Optional</p>
           </a>
           <a
             href="/dashboard/check"
