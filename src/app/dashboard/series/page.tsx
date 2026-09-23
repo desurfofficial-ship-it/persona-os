@@ -1,19 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
 export default function SeriesPlannerPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const preselectedId = searchParams.get("persona");
+
   const [personas, setPersonas] = useState<Persona[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(preselectedId || "");
   const [theme, setTheme] = useState("");
   const [days, setDays] = useState(5);
   const [result, setResult] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [avoidContent, setAvoidContent] = useState<string[]>([]);
 
   useEffect(() => {
     const load = async () => {
@@ -32,10 +36,29 @@ export default function SeriesPlannerPage() {
         .order("created_at", { ascending: false });
 
       setPersonas(data || []);
-      if (data && data.length > 0) setSelectedId(data[0].id);
+      if (preselectedId) setSelectedId(preselectedId);
+      else if (data && data.length > 0) setSelectedId(data[0].id);
     };
     load();
-  }, [router]);
+  }, [router, preselectedId]);
+
+  useEffect(() => {
+    const loadPosted = async () => {
+      if (!selectedId) {
+        setAvoidContent([]);
+        return;
+      }
+      const { data } = await supabase
+        .from("content_drafts")
+        .select("content")
+        .eq("persona_id", selectedId)
+        .eq("posted", true)
+        .order("created_at", { ascending: false })
+        .limit(15);
+      setAvoidContent((data || []).map((d) => d.content));
+    };
+    loadPosted();
+  }, [selectedId]);
 
   const selectedPersona = personas.find((p) => p.id === selectedId);
 
@@ -61,15 +84,23 @@ For each day provide:
 
 Make the series feel cohesive and progressive. Stay 100% in character.`,
           model: "openai/gpt-4o-mini",
+          avoidContent,
         }),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Generation failed");
+      if (!res.ok) {
+        const msg = data.error || "Generation failed";
+        if (msg.toLowerCase().includes("key") || msg.toLowerCase().includes("auth")) {
+          throw new Error(
+            "AI key missing or invalid. Add OPENROUTER_API_KEY to .env.local and restart the server."
+          );
+        }
+        throw new Error(msg);
+      }
 
       setResult(data.content);
 
-      // Save as draft
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -87,6 +118,22 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
       setLoading(false);
     }
   };
+
+  if (personas.length === 0 && !loading) {
+    return (
+      <div className="min-h-screen p-6 sm:p-8 flex items-center justify-center">
+        <div className="text-center max-w-md">
+          <p className="text-zinc-400 mb-4">Create a persona first to plan a series.</p>
+          <a
+            href="/dashboard/personas/from-posts"
+            className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+          >
+            Build from posts
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-6 sm:p-8">
@@ -122,6 +169,16 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
               <p className="font-medium text-zinc-200">{selectedPersona.name}</p>
               <p className="line-clamp-2 mt-1">{selectedPersona.backstory}</p>
+              {avoidContent.length > 0 ? (
+                <p className="mt-2 text-xs text-green-400">
+                  Avoiding {avoidContent.length} already-posted draft
+                  {avoidContent.length > 1 ? "s" : ""}
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-zinc-500">
+                  Mark drafts as Posted so future series avoid those topics.
+                </p>
+              )}
             </div>
           )}
 
