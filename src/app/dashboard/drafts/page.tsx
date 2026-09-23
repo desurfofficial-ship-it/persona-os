@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
 interface Draft {
@@ -13,7 +13,14 @@ interface Draft {
   created_at: string;
   posted?: boolean;
   performance?: string | null;
+  tags?: unknown;
   personas?: { name: string };
+}
+
+const PLATFORMS = ["X", "LinkedIn", "Instagram", "Threads", "TikTok", "YouTube", "Other"];
+
+function draftTags(raw: unknown): string[] {
+  return Array.isArray(raw) ? (raw as unknown[]).filter((t): t is string => typeof t === "string") : [];
 }
 
 export default function DraftsPage() {
@@ -27,6 +34,7 @@ export default function DraftsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [improvingId, setImprovingId] = useState<string | null>(null);
   const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
+  const [taggingId, setTaggingId] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -133,6 +141,27 @@ export default function DraftsPage() {
       if (error.message?.includes("performance")) {
         alert("Run this in Supabase SQL once:\nalter table content_drafts add column if not exists performance text;");
       }
+    }
+  };
+
+  const handleSuggestTags = async (draft: Draft) => {
+    if (taggingId) return;
+    setTaggingId(draft.id);
+    try {
+      const res = await authedFetch("/api/tag-drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId: draft.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Tag suggestion failed");
+      const tags: string[] = Array.isArray(data.tags) ? data.tags : [];
+      setDrafts((prev) => prev.map((d) => (d.id === draft.id ? { ...d, tags } : d)));
+      if (!tags.length) alert("No tags came back for this one — try again after editing it.");
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setTaggingId(null);
     }
   };
 
@@ -360,6 +389,20 @@ export default function DraftsPage() {
                         {(draft.personas as any)?.name || "Unknown"} ·{" "}
                         {new Date(draft.created_at).toLocaleString()}
                       </p>
+                      {draftTags(draft.tags).length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                          {draftTags(draft.tags).map((t) => (
+                            <button
+                              key={t}
+                              onClick={() => setSearch(t)}
+                              title={`Show everything tagged ${t}`}
+                              className="text-[10px] px-1.5 py-0.5 rounded-full border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500"
+                            >
+                              #{t}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 shrink-0">
@@ -375,6 +418,13 @@ export default function DraftsPage() {
                       className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
                     >
                       {improvingId === draft.id ? "Improving..." : "Improve"}
+                    </button>
+                    <button
+                      onClick={() => handleSuggestTags(draft)}
+                      disabled={taggingId === draft.id}
+                      className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      {taggingId === draft.id ? "Suggesting…" : "# Suggest tags"}
                     </button>
                     <button
                       onClick={() => navigator.clipboard.writeText(draft.content)}
