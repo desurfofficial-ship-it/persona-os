@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 import fs from "fs/promises";
 import path from "path";
 
@@ -29,6 +30,15 @@ export async function POST(req: NextRequest) {
   const userId = userFromRequest(req);
   if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // Round-3: LLM route — 20/min/user, enforced before any validation/LLM spend.
+  const rl = await rateLimit(`auto-tag:${clientKey(req, userId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Too many requests. Retry in ${rl.retryAfterSec}s.` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
   }
 
   let assetId = "";

@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { llmComplete } from "@/lib/generation";
 import { db } from "@/lib/db";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 /**
  * Auto-tag drafts by text: imported (and other untagged) posts get 3-6
@@ -60,6 +61,15 @@ export async function POST(req: NextRequest) {
   const userId = userFromRequest(req);
   if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // Round-3: LLM route — 20/min/user, enforced before any validation/LLM spend.
+  const rl = await rateLimit(`tag-drafts:${clientKey(req, userId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Too many requests. Retry in ${rl.retryAfterSec}s.` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
   }
 
   let personaId = "";

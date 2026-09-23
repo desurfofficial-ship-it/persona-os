@@ -45,19 +45,67 @@ function getSecret(): string {
   return "";
 }
 
-export function hashPassword(password: string, salt?: string): string {
-  const s = salt || crypto.randomBytes(8).toString("hex");
-  const digest = crypto.createHash("sha256").update(`${s}:${password}`).digest("hex");
-  return `${s}:${digest}`;
+// ---- password hashing (round-3: salted SHA-256 -> scrypt) ------------------
+//
+// Old scheme was a single unsalted-iteration SHA-256 — fast to brute-force if
+// the DB leaks. Passwords are now scrypt KDF outputs (N=16384, r=8, p=1,
+// 32-byte key, 16-byte random salt per user), which are memory-hard and slow
+// to attack on GPU/ASIC hardware. Legacy `salt:sha256(salt:password)` rows
+// still verify (transparent upgrade path): sign-in checks them, then the
+// route rehashes the password into the new format via needsRehash() — no
+// forced password reset for existing users.
+
+const SCRYPT_N = 16384;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEYLEN = 32;
+const SCRYPT_PREFIX = `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$`;
+
+/** Hash a password into the persistent `scrypt$N$r$p$salt$hash` format. */
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto
+    .scryptSync(password, salt, SCRYPT_KEYLEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P })
+    .toString("hex");
+  return `${SCRYPT_PREFIX}${salt}$${hash}`;
 }
 
+/** True if the stored hash predates scrypt and should be upgraded on next sign-in. */
+export function needsRehash(stored: string): boolean {
+  return !stored.startsWith(SCRYPT_PREFIX);
+}
+
+/**
+ * Constant-time-ish password verification. Understands both formats:
+ *  - `scrypt$N$r$p$<salthex>$<hashhex>` (current)
+ *  - `<salthex>:<sha256hex>` (legacy — caller should rehash after success)
+ */
 export function verifyPassword(password: string, stored: string): boolean {
-  const [salt] = stored.split(":");
-  if (!salt) return false;
-  const candidate = hashPassword(password, salt);
-  const a = Buffer.from(candidate);
-  const b = Buffer.from(stored);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  try {
+    if (stored.startsWith(SCRYPT_PREFIX)) {
+      const [salt, hash] = stored.slice(SCRYPT_PREFIX.length).split("$");
+      if (!salt || !hash) return false;
+      const candidate = crypto.scryptSync(password, salt, SCRYPT_KEYLEN, {
+        N: SCRYPT_N,
+        r: SCRYPT_R,
+        p: SCRYPT_P,
+      });
+      const expected = Buffer.from(hash, "hex");
+      return expected.length === candidate.length && crypto.timingSafeEqual(expected, candidate);
+    }
+
+    // Legacy salted SHA-256 (format "salt:digest").
+    const salt = stored.split(":")[0];
+    if (!salt) return false;
+    const digest = crypto.createHash("sha256").update(`${salt}:${password}`).digest("hex");
+    const candidate = Buffer.from(`${salt}:${digest}`);
+    const storedBuf = Buffer.from(stored);
+    return (
+      candidate.length === storedBuf.length && crypto.timingSafeEqual(candidate, storedBuf)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Session lifetime: 7 days from issue. */

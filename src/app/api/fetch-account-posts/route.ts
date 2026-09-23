@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Each call burns a real outbound jina fetch — cap it per user.
-  const rl = rateLimit(`fetch-account-posts:${clientKey(req, userId)}`, 20, 60_000);
+  const rl = await rateLimit(`fetch-account-posts:${clientKey(req, userId)}`, 20, 60_000);
   if (!rl.ok) {
     return NextResponse.json(
       { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },

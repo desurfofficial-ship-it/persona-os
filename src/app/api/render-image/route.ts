@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 /**
  * Render an image from a generated image prompt.
@@ -12,8 +13,19 @@ import { userFromRequest } from "@/lib/local-session";
  */
 export async function POST(req: NextRequest) {
   // Auth: image rendering costs real money — never an open endpoint.
-  if (!userFromRequest(req)) {
+  const userId = userFromRequest(req);
+  if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // Round-3: image generation is the most expensive surface per call —
+  // 20/min/user, enforced before any prompt parsing or provider spend.
+  const rl = await rateLimit(`render-image:${clientKey(req, userId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Too many requests. Retry in ${rl.retryAfterSec}s.` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
   }
   try {
     const body = await req.json();

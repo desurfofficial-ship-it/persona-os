@@ -501,3 +501,25 @@ Work Log:
 Stage Summary:
 - Round-2 red-team remediation is now LIVE on origin/main (3780bcd). Storage D->A, auth C->B, AI-abuse D->B+ per round-2 grading.
 - PAT residue: zero (tree + full history). Rotation reminder re-issued to user (PAT shared in chat >= 4 times now).
+
+---
+Task ID: 21-round3-hardening
+Agent: Super Z (main agent)
+Task: "Start round 3 and all the fixes in the project" — close every Known-left item from round-2 + full-project sweep.
+
+Work Log:
+- Sweep found one UNREPORTED critical hole: /api/import-posts was a live SSRF read primitive (user URL fetched directly, redirect:"follow", response echoed back; safeUrl guard only ever covered goals). Fixed: entry assertPublicHttpUrl + manual redirect loop re-validating EVERY hop with fresh DNS + 512KB streamed body cap + text/* only.
+- R3-1 (local-session.ts): passwords salted-SHA-256 -> scrypt N=16384/r=8/p=1 (memory-hard), format scrypt$N$r$p$salt$hash; legacy rows verify + transparently rehash on first successful signin (no forced reset); signup min password 6 -> 8.
+- R3-2 (rateLimit.ts rewrite): in-memory -> SQLite persistent buckets via atomic UPSERT...RETURNING; survives restarts + shared across processes; failover to memory on DB outage; occasional expired-bucket sweep. Battery caught my first UPSERT version resetting the window on EVERY hit (excluded-vs-stored comparison always true) — fixed to anchor window at first hit (stored.resetAt <= now -> reset else increment).
+- R3-3: rate limits added to ALL remaining LLM/outbound/destructive routes: consistency-scan, tag-drafts, auto-tag, render-image, scheduled-ideas POST (LLM), goals/check (worker-or-user keyed), import-posts 20/min; delete-account 10/min; storage POST 30/min (disk-fill). Existing 7 call sites awaited.
+- R3-4 (local-storage GET): strict assets/<user-uuid>/ shape before filesystem touch; X-Content-Type-Options:nosniff always; SVG/PDF/text forced to Content-Disposition:attachment (uploaded SVG with <script> was a stored-XSS token-stealer); raster images stay inline — vault grid verified loading 200s.
+- R3-5: ignoreBuildErrors flipped false — tsc was already clean (previous rounds paid the debt).
+- R3-6 (delete-account): now wipes goalAlert + contentGoal + connectedAccount too (were orphaned), then user row, then disk folder; 10/min cap.
+- scripts/redteam-round3.ts: 27-check battery. UI E2E: real-UI demo signin (scrypt path) -> dashboard/studio/vault render clean, zero page errors; vault <img> loads 200 through new GET headers.
+- Restart-persistence proof: /api/check burst -> 429; dev server killed & restarted; immediate re-request STILL 429 (bucket from SQLite).
+- Verified: round3 27/27, round2 25/25, agent 20/20, tsc clean, eslint 0 errors.
+
+Stage Summary:
+- Round-2 Known-left all closed: password hashing C->A-, limiter architecture (in-memory) -> persistent, GET probing closed, ignoreBuildErrors gone. Plus round-3 catches: import-posts SSRF (critical, was missed by rounds 1-2), SVG stored-XSS, delete-account orphaned rows.
+- Every AI/outbound/destructive route now sits behind a limiter; passwords are KDF-backed; limits survive restarts.
+- PUSH PENDING: awaiting fresh PAT from user (previous one to be revoked).

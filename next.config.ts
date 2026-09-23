@@ -2,10 +2,11 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  // Keep ignoreBuildErrors true until the agent/studio graph typechecks clean
-  // under memory-constrained preview builds. Flip to false for production CI.
+  // Round-3: the type debt this used to paper over is fully paid —
+  // `tsc --noEmit` is clean, so build-time type errors now fail the build
+  // like they should (was: ignoreBuildErrors: true).
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   // Re-enabled: catches accidental double-mount bugs in agent/draft flows.
   reactStrictMode: true,

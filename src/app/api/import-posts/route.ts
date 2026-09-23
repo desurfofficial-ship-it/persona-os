@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
+import { assertPublicHttpUrl } from "@/lib/safeUrl";
 
 /**
  * Read-only post import: best-effort fetch of a public profile's recent posts
@@ -13,6 +15,10 @@ import { userFromRequest } from "@/lib/local-session";
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+/** Round-3: cap how much of a page we buffer — huge pages are a memory-DoS. */
+const MAX_PAGE_BYTES = 512 * 1024;
+const MAX_REDIRECTS = 3;
 
 function normalizeUrl(raw: string): { url: URL; platform: "x" | "linkedin" | "other" } | null {
   let s = raw.trim();
@@ -71,22 +77,75 @@ function extractCandidates(html: string): string[] {
   return out;
 }
 
-async function fetchWithTimeout(url: string, ms: number): Promise<string | null> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { "User-Agent": UA, Accept: "text/html" },
-      redirect: "follow",
-    });
-    if (!res.ok) return null;
-    return await res.text();
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
+/**
+ * Round-3 hardened page fetch:
+ *  - every hop (entry + each redirect) re-runs the SSRF guard with a fresh
+ *    DNS resolution — `redirect: "follow"` would happily hop into the
+ *    private network after passing the entry check;
+ *  - response body is streamed and capped (huge pages are a memory-DoS);
+ *  - only text/* pages are parsed.
+ */
+async function fetchWithTimeout(
+  rawUrl: string,
+  ms: number
+): Promise<string | null> {
+  let current = new URL(rawUrl);
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const guard = await assertPublicHttpUrl(current.toString(), "profile URL");
+    if (!guard.ok) {
+      console.warn(`[import-posts] SSRF guard blocked: ${guard.reason}`);
+      return null;
+    }
+
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const res = await fetch(current, {
+        signal: ctrl.signal,
+        headers: { "User-Agent": UA, Accept: "text/html" },
+        redirect: "manual",
+      });
+
+      // Follow redirects manually so every hop is re-validated.
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) return null;
+        const next = new URL(loc, current);
+        if (!/^https?:$/.test(next.protocol)) return null;
+        current = next;
+        continue;
+      }
+
+      if (!res.ok) return null;
+      const ctype = (res.headers.get("content-type") || "").toLowerCase();
+      if (ctype && !ctype.startsWith("text/")) return null;
+      const declared = Number(res.headers.get("content-length") || 0);
+      if (declared > MAX_PAGE_BYTES) return null;
+
+      const reader = res.body?.getReader();
+      if (!reader) return null;
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_PAGE_BYTES) {
+          await reader.cancel().catch(() => {});
+          return null;
+        }
+        if (value) chunks.push(value);
+      }
+      return Buffer.concat(chunks).toString("utf8");
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
   }
+
+  return null; // too many redirects
 }
 
 export async function POST(req: NextRequest) {
@@ -94,6 +153,15 @@ export async function POST(req: NextRequest) {
   const authUserId = userFromRequest(req);
   if (!authUserId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // Round-3: outbound-fetch route — 20/min/user, before any parsing/fetch.
+  const rl = await rateLimit(`import-posts:${clientKey(req, authUserId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Too many requests. Retry in ${rl.retryAfterSec}s.` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
   }
 
   let rawUrl = "";
@@ -112,6 +180,15 @@ export async function POST(req: NextRequest) {
   }
 
   const { url, platform } = normalized;
+
+  // Round-3 SSRF entry guard: the profile URL is fetched directly by the
+  // server, so it must resolve to a globally routable address — no
+  // loopback / private-network / cloud-metadata targets. (fetchWithTimeout
+  // re-applies the guard to every redirect hop as well.)
+  const entryGuard = await assertPublicHttpUrl(url.toString(), "profile URL");
+  if (!entryGuard.ok) {
+    return NextResponse.json({ error: entryGuard.reason }, { status: 400 });
+  }
 
   // Try the page itself, then reader proxies that often expose text server-side.
   const attempts: string[] = [url.toString()];

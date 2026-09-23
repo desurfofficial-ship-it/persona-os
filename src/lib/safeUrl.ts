@@ -77,40 +77,43 @@ export function isForbiddenIp(ip: string): boolean {
  * Validate a URL for server-side fetching. Returns ok:false with a
  * human-readable reason the caller can surface verbatim.
  */
-export async function assertPublicHttpUrl(raw: string): Promise<SafeUrlResult> {
+export async function assertPublicHttpUrl(
+  raw: string,
+  label = "checkUrl"
+): Promise<SafeUrlResult> {
   let url: URL;
   try {
     url = new URL(raw.trim());
   } catch {
-    return { ok: false, reason: "checkUrl must be a valid URL" };
+    return { ok: false, reason: `${label} must be a valid URL` };
   }
   if (!/^https?:$/.test(url.protocol)) {
-    return { ok: false, reason: "checkUrl must be http(s)" };
+    return { ok: false, reason: `${label} must be http(s)` };
   }
 
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (!host) return { ok: false, reason: "checkUrl has no host" };
+  if (!host) return { ok: false, reason: `${label} has no host` };
   if (host === "localhost" || host.endsWith(".localhost") || LOCAL_HOST_SUFFIXES.some((s) => host.endsWith(s))) {
-    return { ok: false, reason: "checkUrl cannot point at a local/internal host" };
+    return { ok: false, reason: `${label} cannot point at a local/internal host` };
   }
 
   // Metadata-style literal hostnames some resolvers answer on.
   if (host === "metadata.google.internal" || host === "instance-data") {
-    return { ok: false, reason: "checkUrl cannot point at a metadata service" };
+    return { ok: false, reason: `${label} cannot point at a metadata service` };
   }
 
   let addresses: dns.LookupAddress[];
   try {
     addresses = await dns.promises.lookup(host, { all: true });
   } catch {
-    return { ok: false, reason: `checkUrl host could not be resolved: ${host}` };
+    return { ok: false, reason: `${label} host could not be resolved: ${host}` };
   }
   if (!addresses.length) {
-    return { ok: false, reason: `checkUrl host resolved to no addresses: ${host}` };
+    return { ok: false, reason: `${label} host resolved to no addresses: ${host}` };
   }
   for (const a of addresses) {
     if (isForbiddenIp(a.address)) {
-      return { ok: false, reason: "checkUrl resolves to a private/protected network address" };
+      return { ok: false, reason: `${label} resolves to a private/protected network address` };
     }
   }
   return { ok: true };

@@ -25,6 +25,7 @@ import crypto from "crypto";
 import { db } from "@/lib/db";
 import { resolveUserId } from "@/lib/server/agentAuth";
 import { readUrl } from "@/lib/browserWorker";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 import {
   runVariant,
   buildSystemPrompt,
@@ -164,6 +165,16 @@ export async function POST(req: NextRequest) {
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized (need worker token or session)" }, { status: 401 });
     }
+  }
+
+  // Round-3: the check loop performs server-side page fetches (and can
+  // auto-generate content) — 20/min per caller (user, or worker IP).
+  const rl = await rateLimit(`goals-check:${clientKey(req, userId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Too many requests. Retry in ${rl.retryAfterSec}s.` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
   }
 
   let goalId: string | undefined;

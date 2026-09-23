@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 /**
  * Local preview storage — on-disk bucket storage backing the supabase shim's
@@ -74,8 +75,24 @@ function contentTypeFor(fileName: string): string {
 }
 
 // ---- GET: serve a stored object (public URLs point here) --------------------
+// Round-3 hardening: GET is public by design (CDN-like; <img> tags cannot
+// attach Authorization headers), but it now only serves keys that match the
+// strict asset shape `assets/<user-uuid>/<...>` — probing other buckets,
+// nested files or config-ish paths is rejected before the filesystem is
+// touched. Responses carry `X-Content-Type-Options: nosniff`, and anything
+// that can execute or embed script (SVG, PDF, text/json) is forced to
+// download instead of rendering inline — an uploaded SVG with <script> used
+// to be a stored-XSS token-stealer on this origin.
+const ASSET_GET_RE = /^assets\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i;
+const INLINE_SAFE_RE = /\.(png|jpe?g|gif|webp|avif|mp4|mov|webm|mp3|wav)$/i;
+
 export async function GET(req: NextRequest) {
   const key = req.nextUrl.searchParams.get("path") || "";
+  const normalized = path.normalize(key).replace(/^([/\\])+/, "");
+  if (!ASSET_GET_RE.test(normalized)) {
+    return NextResponse.json({ error: "Bad path" }, { status: 400 });
+  }
+
   const abs = safeResolve(key);
   if (!abs) return NextResponse.json({ error: "Bad path" }, { status: 400 });
 
@@ -83,13 +100,17 @@ export async function GET(req: NextRequest) {
     const stat = await fs.stat(abs);
     if (!stat.isFile()) throw new Error("not a file");
     const data = await fs.readFile(abs);
-    return new NextResponse(new Uint8Array(data), {
-      headers: {
-        "Content-Type": contentTypeFor(abs),
-        "Content-Length": String(stat.size),
-        "Cache-Control": "public, max-age=3600",
-      },
-    });
+    const inline = INLINE_SAFE_RE.test(abs);
+    const headers: Record<string, string> = {
+      "Content-Type": contentTypeFor(abs),
+      "Content-Length": String(stat.size),
+      "Cache-Control": "public, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+    };
+    if (!inline) {
+      headers["Content-Disposition"] = `attachment; filename="${path.basename(abs).replace(/"/g, "")}"`;
+    }
+    return new NextResponse(new Uint8Array(data), { headers });
   } catch {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -101,6 +122,15 @@ export async function POST(req: NextRequest) {
   const userId = userFromRequest(req);
   if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // Round-3: uploads write to disk — cap request rate (disk-fill guard).
+  const rl = await rateLimit(`storage-post:${clientKey(req, userId)}`, 30, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Too many uploads. Retry in ${rl.retryAfterSec}s.` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
   }
 
   let form: FormData;

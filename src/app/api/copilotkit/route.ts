@@ -190,7 +190,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   // Agent burns model quota hard — tighter than generate (20/min per user).
-  const rl = rateLimit(`copilotkit:${clientKey(req, userId)}`, 20, 60_000);
+  const rl = await rateLimit(`copilotkit:${clientKey(req, userId)}`, 20, 60_000);
   if (!rl.ok) {
     return NextResponse.json(
       { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 import {
   buildSystemPrompt,
   fingerprintFrom,
@@ -29,6 +30,16 @@ export async function POST(req: NextRequest) {
   const userId = userFromRequest(req);
   if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  // Round-3: drafting a due idea runs real generation (LLM) — 20/min/user,
+  // enforced before any validation or provider spend.
+  const rl = await rateLimit(`scheduled-ideas:${clientKey(req, userId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Too many requests. Retry in ${rl.retryAfterSec}s.` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+    );
   }
 
   let ideaId = "";

@@ -138,3 +138,19 @@ model ConnectedAccount {
   @@unique([userId, platform, handle])
   @@index([userId])
 }
+
+/// Persistent fixed-window rate-limit buckets. Round-3 upgrade: the round-2
+/// limiter lived in process memory, so a dev-server restart reset every
+/// budget to full (attackers just waited for a deploy). Buckets now live in
+/// SQLite and are shared by every process pointing at the same database file.
+/// If the DB is unreachable the limiter fails over to per-process memory so
+/// availability never depends on the counter store.
+model RateLimitBucket {
+  /// Full bucket key, e.g. "check:u:<userId>" or "auth:ip:1.2.3.4"
+  key     String @id
+  count   Int
+  /// Epoch millis when the current window refills (BigInt: ms exceeds Int32)
+  resetAt BigInt
+
+  @@index([resetAt])
+}

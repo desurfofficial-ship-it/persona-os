@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { hashPassword, verifyPassword, signToken, verifyToken } from "@/lib/local-session";
+import { hashPassword, verifyPassword, needsRehash, signToken, verifyToken } from "@/lib/local-session";
 import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 /**
- * Local preview auth — email/password with salted SHA-256 hashes and
+ * Local preview auth — email/password with scrypt-hashed passwords
+ * (legacy SHA-256 rows transparently rehashed on sign-in) and
  * stateless HMAC session tokens (src/lib/local-session.ts).
  *
  * Speaks the exact protocol the supabase shim (src/lib/supabase.ts) emits:
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
   // per IP (password spray on known emails, signup flood filling SQLite).
   // Session lookup ("get") is exempt — it verifies a token, no password path.
   if (action === "signup" || action === "signin") {
-    const rl = rateLimit(`auth:${clientKey(req)}`, 10, 60_000);
+    const rl = await rateLimit(`auth:${clientKey(req)}`, 10, 60_000);
     if (!rl.ok) {
       return NextResponse.json(
         { error: `Too many attempts. Retry in ${rl.retryAfterSec}s.` },
@@ -66,8 +67,8 @@ export async function POST(req: NextRequest) {
     if (!EMAIL_RE.test(email)) {
       return NextResponse.json({ error: "Enter a valid email address" }, { status: 400 });
     }
-    if (password.length < 6) {
-      return NextResponse.json({ error: "Password must be at least 6 characters" }, { status: 400 });
+    if (password.length < 8) {
+      return NextResponse.json({ error: "Password must be at least 8 characters" }, { status: 400 });
     }
     const existing = await db.localUser.findUnique({ where: { email } });
     if (existing) {
@@ -87,6 +88,13 @@ export async function POST(req: NextRequest) {
     const user = await db.localUser.findUnique({ where: { email } });
     if (!user || !verifyPassword(password, user.password)) {
       return NextResponse.json({ error: "Invalid email or password" }, { status: 400 });
+    }
+    // Transparent upgrade: pre-round-3 salted-SHA-256 rows get rehashed into
+    // scrypt on the first successful sign-in (no forced password reset).
+    if (needsRehash(user.password)) {
+      await db.localUser
+        .update({ where: { id: user.id }, data: { password: hashPassword(password) } })
+        .catch(() => {}); // best-effort; verification already succeeded
     }
     return NextResponse.json({ token: signToken(user.id), user: publicUser(user) });
   }

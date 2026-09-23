@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const rl = rateLimit(`analyze:${clientKey(req, authUserId)}`, 20, 60_000);
+  const rl = await rateLimit(`analyze:${clientKey(req, authUserId)}`, 20, 60_000);
   if (!rl.ok) {
     return NextResponse.json(
       { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },
