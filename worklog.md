@@ -462,3 +462,26 @@ Work Log:
 
 Stage Summary:
 - All auth-gated surfaces re-verified through their real UI paths; vault upload regression caught and fixed the same session it shipped. Probe tooling now diagnoses "generate didn't generate" against the live protocol.
+
+---
+Task ID: 19-round2-hardening
+Agent: Super Z (main agent)
+Task: "Execute" - Round-2 red-team fixes on top of 6420ba6: (1) storage tenancy, (2) local-auth rate limit, (3) session expiry, (4) rate-limit remaining AI routes.
+
+Work Log:
+- Synced local main 14bdc18+checkpoint -> origin/main 6420ba6 (10-commit gap: round-1 hardening lived on remote; checkpoint kept at backup/local-checkpoint-3bf5c4b; restored download/persona-os-fix-proof.pdf from it - PDF was already delivered).
+- Sandbox reset had ALSO wiped db/custom.db (gitignored) -> prisma db push + scripts/seed-demo.ts (demo user/persona fixtures for redteam-agent.ts).
+- Fix 3 (local-session.ts): token v2 "<uid>.<exp-sec>.<hmac(uid.exp)>" with SESSION_TTL_SEC=7d; legacy tokens rejected fail-closed; verifyToken parses from the right so dotted ids survive.
+- Fix 2 (local-auth/route.ts): signup/signin 10/min/IP via rateLimit(); action "get" exempt (token verify only). Spray -> 429 + Retry-After, correct creds also blocked while limited.
+- Fix 1 (local-storage/route.ts): belongsToUser() - POST/DELETE keys must normalize under assets/<userId>/ (accepts assets//uid/x; rejects cross-uid, unprefixed, ../, dot-dot-in-assets). DELETE is all-or-nothing. GET stays public BY DESIGN (CDN-like; <img> can't attach auth headers) - documented.
+- Client compat: vault already uploaded as <userId>/<ts>.ext (compatible); studio save-to-vault was PERSONA-scoped -> fixed to user.id (getUser before upload).
+- Fix 4: /api/check, /api/strengthen-persona, /api/fetch-account-posts -> 20/min/user, limiter BEFORE body validation (junk requests consume bucket, zero LLM burn).
+- scripts/redteam-round2.ts (25 checks): token shape/roundtrip/legacy/expired/tampered forgeries (in-process with .env.local secret), 14 tenancy probes, 3 AI bursts (400x20 then 429 - zero-cost), auth spray (400x8 then 429). 25/25 PASS after fixing a test-math bug (TTL assertion).
+- Regression: redteam-agent.ts 20/20 PASS (T2 draft flood capped 40/50 w/ 10x 429; T8 cross-user 404s). Both initially failed on fresh DB (no demo persona) - environment, not security.
+- UI E2E (agent-browser): stale token -> /login bounce (fail-closed works); fresh signup -> template persona -> vault upload -> file landed db/uploads/assets/<uid>/<ts>.png + grid renders via public GET; /api/check real call 1.8s score=90. Note: agent-browser CDP-injected Files hang in dev multipart ("Failed to fetch") - automation artifact; synthetic-File change-event through the real UI handler works (200 + render).
+- tsc + eslint clean on all changed files; secret scan clean. Committed 2cdf4a0 (9 files, +414/-18). PUSH PENDING: no credentials in session.
+
+Stage Summary:
+- All 4 round-2 holes closed and proven: storage tenant-scoped, auth limiter 10/min/IP, 7-day expiring tokens (legacy rejected), all AI surfaces rate-limited. Known-left (per report, not in scope): SHA-256 passwords, in-memory limiter, GET public read, ignoreBuildErrors.
+- One-time effect: every existing session invalidated once (re-login). LOCAL_SESSION_SECRET added to .env.local (not echoed).
+- Grade trajectory: storage D->A, auth C->B, AI-abuse D->B+ (generate/agent were already B+).
