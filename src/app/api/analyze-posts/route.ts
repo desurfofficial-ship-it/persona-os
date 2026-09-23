@@ -1,11 +1,63 @@
 import { NextRequest, NextResponse } from "next/server";
 
+async function fetchUrlText(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (compatible; PersonaOS/1.0; +https://persona-os.app)",
+      Accept: "text/html,application/xhtml+xml,text/plain",
+    },
+    signal: AbortSignal.timeout(12000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Could not fetch URL (${res.status}). Paste the page text instead.`);
+  }
+
+  const html = await res.text();
+  // Strip scripts/styles and tags for a rough text extract
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (text.length < 80) {
+    throw new Error(
+      "Could not extract enough text from that URL (page may be blocked or empty). Paste posts manually."
+    );
+  }
+
+  return text.slice(0, 15000);
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { posts } = await req.json();
+    const body = await req.json();
+    let posts = body.posts || "";
+    const url = body.url || "";
+
+    if (url && typeof url === "string" && url.startsWith("http")) {
+      try {
+        const fetched = await fetchUrlText(url.trim());
+        posts = posts ? `${posts}\n\n${fetched}` : fetched;
+      } catch (e: any) {
+        return NextResponse.json({ error: e.message || "URL fetch failed" }, { status: 400 });
+      }
+    }
 
     if (!posts || !posts.trim()) {
-      return NextResponse.json({ error: "No posts provided" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Provide posts text or a public profile/blog URL" },
+        { status: 400 }
+      );
     }
 
     const openrouterKey = process.env.OPENROUTER_API_KEY;
@@ -17,9 +69,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const systemPrompt = `You are an expert at reverse-engineering personal brands and writing voices from real posts.
+    const systemPrompt = `You are an expert at reverse-engineering personal brands and writing voices from real posts or profile content.
 
-Analyze the provided posts and extract a clean persona definition.
+Analyze the provided text and extract a clean persona definition.
 
 Return ONLY valid JSON with these exact fields:
 {
@@ -28,10 +80,13 @@ Return ONLY valid JSON with these exact fields:
   "tone_of_voice": "clear description of how they sound (e.g. direct, irreverent, calm, high-agency)",
   "lifestyle_pillars": ["pillar1", "pillar2", "pillar3"],
   "content_rules": ["rule1", "rule2", "rule3"],
-  "forbidden_topics": ["topic1", "topic2"]
+  "forbidden_topics": ["topic1", "topic2"],
+  "example_posts": ["short excerpt or reconstructed sample post 1", "sample 2", "sample 3"]
 }
 
-Be specific. Infer rules and forbidden topics from what they never talk about and how they write. Do not invent things that contradict the posts.`;
+For example_posts: extract or lightly clean 3-5 of the strongest real post-like excerpts from the input (keep them short). If input is mostly bio text, invent 3 sample posts that match the voice.
+
+Be specific. Infer rules and forbidden topics from what they never talk about and how they write. Do not invent things that contradict the source.`;
 
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -45,7 +100,7 @@ Be specific. Infer rules and forbidden topics from what they never talk about an
         model: "openai/gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Here are the posts:\n\n${posts}` },
+          { role: "user", content: `Here is the source material:\n\n${posts.slice(0, 12000)}` },
         ],
         temperature: 0.4,
         response_format: { type: "json_object" },
@@ -64,7 +119,6 @@ Be specific. Infer rules and forbidden topics from what they never talk about an
     try {
       parsed = JSON.parse(content);
     } catch {
-      // fallback if not pure JSON
       parsed = {
         name: "Extracted Persona",
         backstory: content.slice(0, 500),
@@ -72,6 +126,7 @@ Be specific. Infer rules and forbidden topics from what they never talk about an
         lifestyle_pillars: [],
         content_rules: [],
         forbidden_topics: [],
+        example_posts: [],
       };
     }
 
