@@ -28,6 +28,7 @@ function GenerateContent() {
   const [error, setError] = useState<string | null>(null);
   const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
   const [avoidContent, setAvoidContent] = useState<string[]>([]);
+  const [nudgeIndex, setNudgeIndex] = useState<number | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -93,12 +94,12 @@ function GenerateContent() {
     setLoading(true);
     setError(null);
     setResults([]);
+    setNudgeIndex(null);
 
     try {
-      const allResults: string[] = [];
-
-      for (let i = 0; i < variations; i++) {
-        const res = await fetch("/api/generate", {
+      // Parallel variations
+      const promises = Array.from({ length: variations }, () =>
+        fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -108,16 +109,26 @@ function GenerateContent() {
             model,
             avoidContent,
           }),
-        });
+        }).then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) {
+            const msg = data.error || "Generation failed";
+            if (msg.toLowerCase().includes("key") || msg.toLowerCase().includes("auth")) {
+              throw new Error(
+                "AI key missing or invalid. Add OPENROUTER_API_KEY to .env.local and restart the server."
+              );
+            }
+            throw new Error(msg);
+          }
+          return data.content as string;
+        })
+      );
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Generation failed");
-
-        allResults.push(data.content);
-        await saveDraft(data.content, type);
-      }
-
+      const allResults = await Promise.all(promises);
       setResults(allResults);
+
+      // Save all drafts
+      await Promise.all(allResults.map((content) => saveDraft(content, type)));
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -187,14 +198,31 @@ function GenerateContent() {
     }
   };
 
-  const openPlatform = (text: string, platform: "x" | "linkedin") => {
+  const openPlatform = (text: string, platform: "x" | "linkedin", index: number) => {
     navigator.clipboard.writeText(text);
     if (platform === "x") {
       window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank");
     } else {
       window.open("https://www.linkedin.com/feed/", "_blank");
     }
+    setNudgeIndex(index);
   };
+
+  if (personas.length === 0) {
+    return (
+      <div className="min-h-screen p-6 sm:p-8 flex items-center justify-center">
+        <div className="text-center max-w-md">
+          <p className="text-zinc-400 mb-4">Create a persona first to generate content.</p>
+          <a
+            href="/dashboard/personas/from-posts"
+            className="inline-block px-5 py-2.5 bg-white text-black rounded-lg text-sm font-medium"
+          >
+            Build from posts
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-6 sm:p-8 pb-28">
@@ -226,10 +254,14 @@ function GenerateContent() {
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
               <p className="font-medium text-zinc-200 mb-1">{selectedPersona.name}</p>
               <p className="line-clamp-2">{selectedPersona.backstory}</p>
-              {avoidContent.length > 0 && (
+              {avoidContent.length > 0 ? (
                 <p className="mt-2 text-xs text-green-400">
                   Avoiding {avoidContent.length} already-posted draft
                   {avoidContent.length > 1 ? "s" : ""}
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-zinc-500">
+                  Mark drafts as Posted so we stop repeating topics.
                 </p>
               )}
             </div>
@@ -293,7 +325,6 @@ function GenerateContent() {
             />
           </div>
 
-          {/* Desktop generate button */}
           <button
             onClick={handleGenerate}
             disabled={loading || !selectedPersona}
@@ -324,13 +355,13 @@ function GenerateContent() {
                     Copy
                   </button>
                   <button
-                    onClick={() => openPlatform(result, "x")}
+                    onClick={() => openPlatform(result, "x", idx)}
                     className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
                   >
                     Copy + X
                   </button>
                   <button
-                    onClick={() => openPlatform(result, "linkedin")}
+                    onClick={() => openPlatform(result, "linkedin", idx)}
                     className="text-xs px-2.5 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
                   >
                     Copy + LinkedIn
@@ -341,6 +372,18 @@ function GenerateContent() {
               <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-4">
                 {rewritingIndex === idx ? "Working..." : result}
               </pre>
+
+              {nudgeIndex === idx && (
+                <div className="mb-4 p-3 bg-zinc-800 border border-zinc-700 rounded-lg text-sm flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-zinc-300">Shipped it? Mark as Posted so we don’t repeat it.</span>
+                  <a
+                    href="/dashboard/drafts"
+                    className="text-xs px-3 py-1.5 bg-white text-black rounded-lg font-medium"
+                  >
+                    Open Drafts →
+                  </a>
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-800">
                 <button
@@ -411,7 +454,6 @@ function GenerateContent() {
         </div>
       </div>
 
-      {/* Sticky mobile generate bar */}
       <div className="sm:hidden fixed bottom-0 left-0 right-0 p-4 bg-zinc-950/95 border-t border-zinc-800 backdrop-blur">
         <button
           onClick={handleGenerate}
