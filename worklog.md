@@ -413,3 +413,16 @@ Work Log:
 
 Stage Summary:
 - Branch = main. Task 13 pushed. 3 newer commits (incl. agent-page fix) NOT pushed; need fresh PAT from user.
+
+---
+Task ID: push-f2639c0
+Agent: main (Super Z)
+Task: User provided fresh GitHub PAT; push all local work to GitHub.
+
+Work Log:
+- Pre-push secret scan on origin/main..HEAD diff: CLEAN (no OpenRouter key, no PAT in any commit; .env in history = SQLite path only).
+- Found .env tracked in git (pre-dates .gitignore rule) -> git rm --cached .env, commit f2639c0 "Harden: untrack .env".
+- One-time URL push (token not stored): c3bf439..f2639c0, main -> main. Verified remote main == local HEAD (f2639c0). No token residue in .git/config or worklog.
+
+Stage Summary:
+- GitHub main now at f2639c0: contains Task 13, agent-page fix + OpenRouter live, hardening (untracked .env). Local and remote in sync. PAT used once, never persisted; rotation reminder issued.
