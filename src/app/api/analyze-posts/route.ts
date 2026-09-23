@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { llmComplete } from "@/lib/generation";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
-/** Extract a JSON object from a model response that may be fenced or wrapped. */
 function parseJsonLoose(content: string): Record<string, unknown> | null {
   const trimmed = content.trim();
   const candidates: string[] = [];
@@ -22,25 +22,37 @@ function parseJsonLoose(content: string): Record<string, unknown> | null {
       const parsed = JSON.parse(candidate.trim());
       if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
     } catch {
-      // try next candidate
+      // try next
     }
   }
   return null;
 }
 
 export async function POST(req: NextRequest) {
-  // Agent-family routes are never public: AI quota belongs to signed-in users.
   const authUserId = userFromRequest(req);
   if (!authUserId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
+  const rl = rateLimit(`analyze:${clientKey(req, authUserId)}`, 20, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSec) },
+      }
+    );
+  }
+
   try {
     const { posts } = await req.json();
 
-    if (!posts || !posts.trim()) {
+    if (!posts || typeof posts !== "string" || !posts.trim()) {
       return NextResponse.json({ error: "No posts provided" }, { status: 400 });
     }
+
+    const clipped = posts.trim().slice(0, 20000);
 
     const systemPrompt = `You are an expert at reverse-engineering personal brands and writing voices from real posts.
 
@@ -58,14 +70,8 @@ Return ONLY valid JSON with these exact fields:
 
 Be specific. Infer rules and forbidden topics from what they never talk about and how they write. Do not invent things that contradict the posts. Respond with the JSON object only — no markdown fences, no commentary.`;
 
-    const userPrompt = `Here are the posts:\n\n${posts}`;
+    const userPrompt = `Here are the posts:\n\n${clipped}`;
 
-    /**
-     * One unified provider chain (OpenRouter → OpenAI → Anthropic → built-in,
-     * with retries + JSON mode — see src/lib/generation.ts). Replaces the old
-     * two-branch code that hardcoded the region-blocked openai/gpt-4o-mini
-     * and could 500 the whole request on one bad OpenRouter response.
-     */
     try {
       const llm = await llmComplete(
         [

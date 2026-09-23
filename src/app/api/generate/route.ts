@@ -12,15 +12,26 @@ import {
 } from "@/lib/generation";
 import type { PlatformId } from "@/lib/platforms";
 import { userFromRequest } from "@/lib/local-session";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 const VALID_TYPES: GenType[] = ["caption", "script", "story_arc", "image_prompt"];
 const VALID_PLATFORMS: PlatformId[] = ["x", "linkedin", "instagram", "threads"];
 
 export async function POST(req: NextRequest) {
-  // Agent-family routes are never public: AI quota belongs to signed-in users.
   const authUserId = userFromRequest(req);
   if (!authUserId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  const rl = rateLimit(`generate:${clientKey(req, authUserId)}`, 30, 60_000);
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSec) },
+      }
+    );
   }
 
   try {
@@ -35,9 +46,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Legacy callers (ideas, series, drafts improve, persona sample) omit
-    // `platform` — they get the old single-string response, no platform
-    // formatting, one variant. The generate page sends the full request.
     const legacy = !body.platform;
     const platform: PlatformId = VALID_PLATFORMS.includes(body.platform)
       ? body.platform
@@ -47,9 +55,6 @@ export async function POST(req: NextRequest) {
     const voiceSamples = Array.isArray(body.voiceSamples)
       ? (body.voiceSamples as string[]).filter((s: unknown) => typeof s === "string" && s.length > 20)
       : [];
-    // Curated gold set wins when present — it is the voice the user chose to
-    // represent them, and it keeps AI-generated drafts from teaching the AI
-    // its own voice (drift loop).
     const goldSamples = Array.isArray(body.goldSamples)
       ? (body.goldSamples as string[]).filter((s: unknown) => typeof s === "string" && s.length > 20)
       : [];
@@ -72,8 +77,6 @@ export async function POST(req: NextRequest) {
           }
         : undefined;
 
-    // Voice DNA: measured from the persona's real writing (gold set when
-    // curated, otherwise drafts + posted content).
     const fingerprint = fingerprintFrom([
       ...voiceSource,
       ...postedContext.map((p) => p.content || ""),
@@ -81,8 +84,6 @@ export async function POST(req: NextRequest) {
     const systemBase = buildSystemPrompt(persona, fingerprint, voiceSource);
     const strategies = strategiesFor(type);
 
-    // strategyOffset lets per-card regeneration rotate structures instead of
-    // always producing the same first strategy.
     const offset = Number.isFinite(Number(body.strategyOffset))
       ? Math.abs(Math.floor(Number(body.strategyOffset)))
       : 0;
@@ -125,7 +126,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (ok.length === 0) {
-      const reason = settled[0]?.status === "rejected" ? String(settled[0].reason?.message || settled[0].reason) : "unknown";
+      const reason =
+        settled[0]?.status === "rejected"
+          ? String(settled[0].reason?.message || settled[0].reason)
+          : "unknown";
       return NextResponse.json(
         { error: `Generation failed on every provider — ${reason.slice(0, 200)}` },
         { status: 502 }
@@ -134,9 +138,7 @@ export async function POST(req: NextRequest) {
 
     const ranked = rankVariants(ok);
     const best = ranked.find((v) => !v.blocked) || ranked[0];
-    const provider = (settled.find((s) => s.status === "fulfilled") as PromiseFulfilledResult<VariantResult> | undefined)
-      ? "chain"
-      : "chain";
+    const provider = "chain";
 
     const usable = ranked.filter((v) => !v.blocked);
     const fingerprintMeta = fingerprint.samples
@@ -155,9 +157,10 @@ export async function POST(req: NextRequest) {
       provider,
       degraded: failed > 0,
       failed,
-      // Legacy single-string shape for ideas / series / drafts / persona sample.
       ...(legacy ? { content: best.content } : {}),
-      ...(usable.length === 0 ? { warning: "All variants failed the quality gate — shown with reasons" } : {}),
+      ...(usable.length === 0
+        ? { warning: "All variants failed the quality gate — shown with reasons" }
+        : {}),
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Server error";
