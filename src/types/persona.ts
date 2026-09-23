@@ -8,6 +8,7 @@ export interface Persona {
   lifestyle_pillars: string[];
   content_rules: string[];
   forbidden_topics: string[];
+  example_posts?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -15,7 +16,7 @@ export interface Persona {
 export interface Asset {
   id: string;
   persona_id: string;
-  type: 'image' | 'video' | 'text' | 'metric';
+  type: "image" | "video" | "text" | "metric";
   url?: string;
   content?: string;
   tags: string[];
@@ -25,9 +26,10 @@ export interface Asset {
 export interface ContentDraft {
   id: string;
   persona_id: string;
-  type: 'caption' | 'script' | 'story_arc' | 'image_prompt';
+  type: "caption" | "script" | "story_arc" | "image_prompt";
   content: string;
   consistency_score?: number;
   flags?: string[];
+  posted?: boolean;
   created_at: string;
 }

@@ -16,6 +16,14 @@ export async function POST(req: NextRequest) {
         .join("\n")}\n\nGenerate something fresh that covers new ground.`;
     }
 
+    let examplesSection = "";
+    if (persona.example_posts && Array.isArray(persona.example_posts) && persona.example_posts.length > 0) {
+      examplesSection = `\n\nGOLD EXAMPLE POSTS (match this style, rhythm, and energy closely):\n${persona.example_posts
+        .slice(0, 8)
+        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 400)}`)
+        .join("\n")}`;
+    }
+
     const systemPrompt = `You are a content writer that MUST stay 100% in character for the following persona.
 
 PERSONA NAME: ${persona.name}
@@ -24,12 +32,14 @@ TONE OF VOICE: ${persona.tone_of_voice || "natural and authentic"}
 LIFESTYLE PILLARS: ${(persona.lifestyle_pillars || []).join(", ") || "none specified"}
 CONTENT RULES: ${(persona.content_rules || []).join("; ") || "none"}
 FORBIDDEN TOPICS: ${(persona.forbidden_topics || []).join(", ") || "none"}
+${examplesSection}
 ${avoidSection}
 
 STRICT RULES:
 - Never break character.
 - Never mention that you are an AI or that this is generated.
 - Match the tone of voice exactly.
+- If gold example posts are provided, match their sentence length, rhythm, and energy.
 - Stay consistent with the backstory and lifestyle pillars.
 - Follow every content rule.
 - Completely avoid any forbidden topics.
@@ -49,6 +59,9 @@ STRICT RULES:
         break;
       case "image_prompt":
         userPrompt = `Write a detailed image generation prompt that would produce a photo matching this persona's world${topic ? ` related to: ${topic}` : ""}. Be specific about lighting, setting, clothing, expression, and mood.`;
+        break;
+      case "rewrite":
+        userPrompt = `Rewrite the following text so it sounds exactly like this persona — same tone, rhythm, rules, and energy. Keep the core meaning.\n\n${topic || ""}`;
         break;
       default:
         userPrompt = `Generate content of type "${type}"${topic ? ` about ${topic}` : ""}.`;
