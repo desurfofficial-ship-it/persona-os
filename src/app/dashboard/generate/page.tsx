@@ -35,6 +35,8 @@ function GenerateContent() {
   const [error, setError] = useState<string | null>(null);
   const [rewritingIndex, setRewritingIndex] = useState<number | null>(null);
   const [avoidContent, setAvoidContent] = useState<string[]>([]);
+  const [workedContent, setWorkedContent] = useState<string[]>([]);
+  const [floppedContent, setFloppedContent] = useState<string[]>([]);
   const [nudgeIndex, setNudgeIndex] = useState<number | null>(null);
 
   useEffect(() => {
@@ -61,22 +63,43 @@ function GenerateContent() {
   }, [router, preselectedId]);
 
   useEffect(() => {
-    const loadPosted = async () => {
+    const loadSignals = async () => {
       if (!selectedId) {
         setAvoidContent([]);
+        setWorkedContent([]);
+        setFloppedContent([]);
         return;
       }
-      const { data } = await supabase
-        .from("content_drafts")
-        .select("content")
-        .eq("persona_id", selectedId)
-        .eq("posted", true)
-        .order("created_at", { ascending: false })
-        .limit(15);
 
-      setAvoidContent((data || []).map((d) => d.content));
+      const [postedRes, workedRes, floppedRes] = await Promise.all([
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("posted", true)
+          .order("created_at", { ascending: false })
+          .limit(15),
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("performance", "worked")
+          .order("created_at", { ascending: false })
+          .limit(8),
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("performance", "flopped")
+          .order("created_at", { ascending: false })
+          .limit(6),
+      ]);
+
+      setAvoidContent((postedRes.data || []).map((d) => d.content));
+      setWorkedContent((workedRes.data || []).map((d) => d.content));
+      setFloppedContent((floppedRes.data || []).map((d) => d.content));
     };
-    loadPosted();
+    loadSignals();
   }, [selectedId]);
 
   const selectedPersona = personas.find((p) => p.id === selectedId);
@@ -115,6 +138,17 @@ function GenerateContent() {
     setScores(scored);
   };
 
+  const genBody = (overrides: Record<string, unknown> = {}) => ({
+    persona: selectedPersona,
+    type,
+    topic,
+    model,
+    avoidContent,
+    workedContent,
+    floppedContent,
+    ...overrides,
+  });
+
   const handleGenerate = async () => {
     if (!selectedPersona) return;
     setLoading(true);
@@ -128,13 +162,7 @@ function GenerateContent() {
         fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            persona: selectedPersona,
-            type,
-            topic,
-            model,
-            avoidContent,
-          }),
+          body: JSON.stringify(genBody()),
         }).then(async (res) => {
           const data = await res.json();
           if (!res.ok) {
@@ -169,13 +197,11 @@ function GenerateContent() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          persona: selectedPersona,
-          type,
-          topic: `${instruction}\n\nOriginal:\n${results[index]}`,
-          model,
-          avoidContent,
-        }),
+        body: JSON.stringify(
+          genBody({
+            topic: `${instruction}\n\nOriginal:\n${results[index]}`,
+          })
+        ),
       });
 
       const data = await res.json();
@@ -201,13 +227,12 @@ function GenerateContent() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          persona: selectedPersona,
-          type: newType,
-          topic: `${instruction}\n\nOriginal content:\n${results[index]}`,
-          model,
-          avoidContent,
-        }),
+        body: JSON.stringify(
+          genBody({
+            type: newType,
+            topic: `${instruction}\n\nOriginal content:\n${results[index]}`,
+          })
+        ),
       });
 
       const data = await res.json();
@@ -281,16 +306,30 @@ function GenerateContent() {
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
               <p className="font-medium text-zinc-200 mb-1">{selectedPersona.name}</p>
               <p className="line-clamp-2">{selectedPersona.backstory}</p>
-              {avoidContent.length > 0 ? (
-                <p className="mt-2 text-xs text-green-400">
-                  Avoiding {avoidContent.length} already-posted draft
-                  {avoidContent.length > 1 ? "s" : ""}
-                </p>
-              ) : (
-                <p className="mt-2 text-xs text-zinc-500">
-                  Mark drafts as Posted so we stop repeating topics.
-                </p>
-              )}
+              <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                {workedContent.length > 0 && (
+                  <span className="text-emerald-400">
+                    Doubling down on {workedContent.length} that worked
+                  </span>
+                )}
+                {floppedContent.length > 0 && (
+                  <span className="text-red-400">
+                    Avoiding {floppedContent.length} that flopped
+                  </span>
+                )}
+                {avoidContent.length > 0 && (
+                  <span className="text-green-400">
+                    Skipping {avoidContent.length} already posted
+                  </span>
+                )}
+                {workedContent.length === 0 &&
+                  floppedContent.length === 0 &&
+                  avoidContent.length === 0 && (
+                    <span className="text-zinc-500">
+                      Mark Posted + Worked/Flopped on Drafts to train generation.
+                    </span>
+                  )}
+              </div>
             </div>
           )}
 
@@ -423,7 +462,7 @@ function GenerateContent() {
               {nudgeIndex === idx && (
                 <div className="mb-4 p-3 bg-zinc-800 border border-zinc-700 rounded-lg text-sm flex flex-wrap items-center justify-between gap-2">
                   <span className="text-zinc-300">
-                    Shipped it? Mark as Posted so we don’t repeat it.
+                    Shipped it? Mark Posted + Worked/Flopped on Drafts.
                   </span>
                   <a
                     href="/dashboard/drafts"
