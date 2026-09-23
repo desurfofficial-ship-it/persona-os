@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { llmComplete } from "@/lib/generation";
 import { db } from "@/lib/db";
 import { userFromRequest } from "@/lib/local-session";
 import {
@@ -143,44 +143,20 @@ RULES:
 
   let llmContradictions: Contradiction[] = [];
   try {
-    const openrouterKey = process.env.OPENROUTER_API_KEY;
-    let content: string | null = null;
-
-    if (openrouterKey) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openrouterKey}`,
-          "HTTP-Referer": "https://persona-os.app",
-          "X-Title": "Persona OS",
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-4o-mini",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.2,
-          response_format: { type: "json_object" },
-        }),
-        signal: AbortSignal.timeout(45000),
-      });
-      const data = await res.json();
-      if (res.ok) content = data.choices?.[0]?.message?.content || null;
-    }
-
-    if (!content) {
-      const zai = await ZAI.create();
-      const completion = await zai.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        thinking: { type: "disabled" },
-      });
-      content = completion.choices[0]?.message?.content || null;
-    }
+    /**
+     * One unified provider chain (OpenRouter → OpenAI → Anthropic → built-in,
+     * with retries + JSON mode — see src/lib/generation.ts). Replaces the old
+     * hand-rolled branch that hardcoded the region-blocked openai/gpt-4o-mini.
+     */
+    const llm = await llmComplete(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      0.2,
+      { json: true }
+    );
+    const content = llm.content;
 
     const parsed = parseJsonLoose(content || "");
     if (parsed && Array.isArray(parsed.contradictions)) {

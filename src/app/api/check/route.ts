@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { llmComplete } from "@/lib/generation";
 import { userFromRequest } from "@/lib/local-session";
 import { scrubCliches, detectAiTells, detectForbidden } from "@/lib/quality";
 import { voiceMatchScore, extractVoiceFingerprint } from "@/lib/voice";
@@ -120,44 +120,24 @@ RULES:
 
     const userPrompt = `Analyze this text:\n\n${text}`;
 
-    const openrouterKey = process.env.OPENROUTER_API_KEY;
     let analysis: CheckAnalysis | null = null;
 
+    /**
+     * One unified provider chain (OpenRouter → OpenAI → Anthropic → built-in,
+     * with retries and JSON mode — see src/lib/generation.ts). Replaces the
+     * hand-rolled OpenRouter branch that hardcoded the region-blocked
+     * openai/gpt-4o-mini and had no retry on transient failures.
+     */
     const askOnce = async (): Promise<CheckAnalysis | null> => {
-      if (openrouterKey) {
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${openrouterKey}`,
-            "HTTP-Referer": "https://persona-os.app",
-            "X-Title": "Persona OS",
-          },
-          body: JSON.stringify({
-            model: "openai/gpt-4o-mini",
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-            temperature: 0.3,
-            response_format: { type: "json_object" },
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "OpenRouter error");
-        return normalize(parseJsonLoose(data.choices?.[0]?.message?.content || ""));
-      }
-      // Preview fallback: built-in SDK.
-      const zai = await ZAI.create();
-      const completion = await zai.chat.completions.create({
-        messages: [
+      const llm = await llmComplete(
+        [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        thinking: { type: "disabled" },
-      });
-      const content = completion.choices[0]?.message?.content;
-      return content ? normalize(parseJsonLoose(content)) : null;
+        0.3,
+        { json: true }
+      );
+      return normalize(parseJsonLoose(llm.content));
     };
 
     try {

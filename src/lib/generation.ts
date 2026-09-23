@@ -93,13 +93,21 @@ export interface GenerateResponse {
 
 const TIMEOUT_MS = 45_000;
 
+/**
+ * Verified-against-catalog OpenRouter default (2026-09). The previous default
+ * (openai/gpt-4o-mini) is region-blocked on current OpenRouter and burned two
+ * retries on every call before falling back — degrading every generation.
+ * Callers can still pass an explicit model via opts.model.
+ */
+export const OPENROUTER_DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct";
+
 export interface LlmResult {
   content: string;
   provider: string;
   degraded: boolean;
 }
 
-type ChatMessage = { role: "system" | "user"; content: string };
+export type ChatMessage = { role: "system" | "user"; content: string };
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
@@ -222,8 +230,8 @@ export async function llmComplete(
   const t = opts?.timeoutMs ?? TIMEOUT_MS;
   if (orKey)
     providers.push({
-      name: `openrouter:${opts?.model || "gpt-4o-mini"}`,
-      run: () => callOpenRouter(orKey, opts?.model || "openai/gpt-4o-mini", messages, temp, !!opts?.json, t),
+      name: `openrouter:${opts?.model || OPENROUTER_DEFAULT_MODEL.replace(/.*\//, "")}`,
+      run: () => callOpenRouter(orKey, opts?.model || OPENROUTER_DEFAULT_MODEL, messages, temp, !!opts?.json, t),
     });
   if (oaKey)
     providers.push({ name: "openai:gpt-4o-mini", run: () => callOpenAI(oaKey, messages, temp, !!opts?.json, t) });

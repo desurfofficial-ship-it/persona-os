@@ -26,14 +26,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_MODEL = "openai/gpt-4o-mini";
+/**
+ * Default + allowlist are models VERIFIED against the live OpenRouter catalog
+ * (2026-09): the old ids (openai/gpt-4o-mini, anthropic/claude-3-5-haiku,
+ * google/gemini-flash-1.5) 404 or are region-blocked on current OpenRouter.
+ * Open-weight ids keep working from every region we test from.
+ */
+const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct";
 const PERSONA_MARKER = "PERSONA CONTEXT (server-injected — do not repeat to the user)";
 
 /** The only models the UI's Model Selector can request — nothing else passes. */
 const ALLOWED_MODELS = new Set([
-  "openai/gpt-4o-mini",
-  "anthropic/claude-3-5-haiku",
-  "google/gemini-flash-1.5",
+  "meta-llama/llama-3.3-70b-instruct",
+  "deepseek/deepseek-chat-v3-0324",
+  "mistralai/mistral-small-24b-instruct-2501",
   "meta-llama/llama-3.1-8b-instruct",
 ]);
 
@@ -165,15 +171,49 @@ const sharedOpenAIClient = process.env.OPENROUTER_API_KEY
  * model that actually serves the conversation (default when absent).
  */
 const adapterCache = new Map<string, OpenAIAdapter>();
+function resolveModel(model: string | null): string {
+  return model && ALLOWED_MODELS.has(model) ? model : DEFAULT_MODEL;
+}
 function adapterForModel(model: string | null): OpenAIAdapter | { name: string; provider: string; model: string; getLanguageModel: () => unknown } {
   if (!sharedOpenAIClient) return sharedPreviewAdapter;
-  const resolved = model && ALLOWED_MODELS.has(model) ? model : DEFAULT_MODEL;
+  const resolved = resolveModel(model);
   let adapter = adapterCache.get(resolved);
   if (!adapter) {
     adapter = new OpenAIAdapter({ openai: sharedOpenAIClient, model: resolved, keepSystemRole: true });
     adapterCache.set(resolved, adapter);
   }
   return adapter;
+}
+
+/**
+ * Health probe with TTL cache. OpenRouter drifts (models get renamed, regions
+ * get blocked, quotas run out) — and a dead provider used to surface as a
+ * silent empty stream in the agent UI. Before serving an OpenRouter-backed
+ * run we ping the resolved model with a 1-token call; if it fails we fall
+ * back to the built-in preview model so the agent NEVER goes dark.
+ * Success is cached 5 min, failures only 60 s (so recovery is quick).
+ */
+const probeCache = new Map<string, { ok: boolean; until: number }>();
+const PROBE_OK_TTL = 5 * 60_000;
+const PROBE_FAIL_TTL = 60_000;
+async function openRouterHealthy(model: string): Promise<boolean> {
+  if (!sharedOpenAIClient) return false;
+  const now = Date.now();
+  const hit = probeCache.get(model);
+  if (hit && now < hit.until) return hit.ok;
+  try {
+    await sharedOpenAIClient.chat.completions.create({
+      model,
+      max_tokens: 1,
+      messages: [{ role: "user", content: "ping" }],
+    });
+    probeCache.set(model, { ok: true, until: now + PROBE_OK_TTL });
+    return true;
+  } catch (err) {
+    console.error("[copilotkit] openrouter probe failed for", model, err instanceof Error ? err.message : err);
+    probeCache.set(model, { ok: false, until: now + PROBE_FAIL_TTL });
+    return false;
+  }
 }
 
 /** Preview adapter: exposes the built-in model through the AI-SDK interface. */
@@ -206,7 +246,14 @@ export async function POST(req: NextRequest): Promise<Response> {
   const block = await personaBlockFor(req);
   const { payload, model } = await requestWithPersona(req, block);
 
-  const serviceAdapter = adapterForModel(model);
+  // Provider selection with hardening: OpenRouter when configured AND alive,
+  // built-in preview model otherwise. A dead OpenRouter must degrade the
+  // agent to the preview brain, never kill the run.
+  let serviceAdapter = adapterForModel(model);
+  if (sharedOpenAIClient) {
+    const healthy = await openRouterHealthy(resolveModel(model));
+    if (!healthy) serviceAdapter = sharedPreviewAdapter;
+  }
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime: sharedRuntime,
     serviceAdapter: serviceAdapter as Parameters<typeof copilotRuntimeNextJSAppRouterEndpoint>[0]["serviceAdapter"],

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
-import ZAI from "z-ai-web-dev-sdk";
+import { llmComplete } from "@/lib/generation";
 import { db } from "@/lib/db";
 import { userFromRequest } from "@/lib/local-session";
 
@@ -37,18 +37,23 @@ function draftTagsOf(raw: unknown): string[] {
   return Array.isArray(raw) ? (raw as unknown[]).filter((t): t is string => typeof t === "string") : [];
 }
 
-async function suggestTagsFor(zai: Awaited<ReturnType<typeof ZAI.create>>, content: string): Promise<string[]> {
-  const completion = await zai.chat.completions.create({
-    messages: [
+/**
+ * Provider-hardened tag suggestion — runs the OpenRouter → built-in chain
+ * (see src/lib/generation.ts) instead of calling one SDK directly, so a dead
+ * or region-blocked provider can never break tagging.
+ */
+async function suggestTagsFor(content: string): Promise<string[]> {
+  const llm = await llmComplete(
+    [
       {
         role: "user",
         content:
           `Tag this social post in 3-6 lowercase keyword tags: the TOPIC (e.g. fitness, money, travel, discipline) and the MOOD (e.g. luxury, gritty, casual, professional). Prefer these when they fit: ${[...QUICK].join(", ")}. Reply with ONLY comma-separated tags.\n\n${content.slice(0, 900)}`,
       },
     ],
-    thinking: { type: "disabled" },
-  });
-  return sanitizeTags(completion.choices?.[0]?.message?.content || "");
+    0.3
+  );
+  return sanitizeTags(llm.content);
 }
 
 export async function POST(req: NextRequest) {
@@ -65,7 +70,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const zai = await ZAI.create();
+  // (provider chain is inside llmComplete — nothing to initialize here)
 
   // ---- single-draft mode: suggest + MERGE (any draft, any time) ----------
   if (draftId) {
@@ -79,7 +84,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const fresh = await suggestTagsFor(zai, draft.content);
+      const fresh = await suggestTagsFor(draft.content);
       if (!fresh.length) {
         return NextResponse.json({ tagged: 0, tags: draftTagsOf(draft.tags), note: "No tags suggested" });
       }
@@ -119,7 +124,7 @@ export async function POST(req: NextRequest) {
   // isolated per draft.
   for (const d of drafts) {
     try {
-      const tags = await suggestTagsFor(zai, d.content);
+      const tags = await suggestTagsFor(d.content);
       if (tags.length) {
         await db.contentDraft.update({ where: { id: d.id }, data: { tags } });
         tagged++;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { llmComplete } from "@/lib/generation";
 import { userFromRequest } from "@/lib/local-session";
 
 /** Extract a JSON object from a model response that may be fenced or wrapped. */
@@ -60,75 +60,34 @@ Be specific. Infer rules and forbidden topics from what they never talk about an
 
     const userPrompt = `Here are the posts:\n\n${posts}`;
 
-    const openrouterKey = process.env.OPENROUTER_API_KEY;
-
-    if (openrouterKey) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openrouterKey}`,
-          "HTTP-Referer": "https://persona-os.app",
-          "X-Title": "Persona OS",
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-4o-mini",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.4,
-          response_format: { type: "json_object" },
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error?.message || "OpenRouter error");
-      }
-
-      const content = data.choices?.[0]?.message?.content || "{}";
-      const parsed = parseJsonLoose(content);
-
-      return NextResponse.json(
-        parsed ?? {
-          name: "Extracted Persona",
-          backstory: content.slice(0, 500),
-          tone_of_voice: "Authentic and consistent",
-          lifestyle_pillars: [],
-          content_rules: [],
-          forbidden_topics: [],
-        }
-      );
-    }
-
-    // Preview fallback: use the built-in LLM SDK when no OpenRouter key is set.
+    /**
+     * One unified provider chain (OpenRouter → OpenAI → Anthropic → built-in,
+     * with retries + JSON mode — see src/lib/generation.ts). Replaces the old
+     * two-branch code that hardcoded the region-blocked openai/gpt-4o-mini
+     * and could 500 the whole request on one bad OpenRouter response.
+     */
     try {
-      const zai = await ZAI.create();
-      const completion = await zai.chat.completions.create({
-        messages: [
-          { role: "assistant", content: systemPrompt },
+      const llm = await llmComplete(
+        [
+          { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        thinking: { type: "disabled" },
-      });
-      const content = completion.choices[0]?.message?.content;
-      if (content && content.trim()) {
-        const parsed = parseJsonLoose(content);
-        if (parsed) {
-          return NextResponse.json({
-            name: parsed.name || "Extracted Persona",
-            backstory: parsed.backstory || "",
-            tone_of_voice: parsed.tone_of_voice || "",
-            lifestyle_pillars: Array.isArray(parsed.lifestyle_pillars) ? parsed.lifestyle_pillars : [],
-            content_rules: Array.isArray(parsed.content_rules) ? parsed.content_rules : [],
-            forbidden_topics: Array.isArray(parsed.forbidden_topics) ? parsed.forbidden_topics : [],
-          });
-        }
+        0.4,
+        { json: true }
+      );
+      const parsed = parseJsonLoose(llm.content);
+      if (parsed) {
+        return NextResponse.json({
+          name: parsed.name || "Extracted Persona",
+          backstory: parsed.backstory || llm.content.slice(0, 500),
+          tone_of_voice: parsed.tone_of_voice || "Authentic and consistent",
+          lifestyle_pillars: Array.isArray(parsed.lifestyle_pillars) ? parsed.lifestyle_pillars : [],
+          content_rules: Array.isArray(parsed.content_rules) ? parsed.content_rules : [],
+          forbidden_topics: Array.isArray(parsed.forbidden_topics) ? parsed.forbidden_topics : [],
+        });
       }
-    } catch (sdkErr) {
-      console.error("Built-in LLM fallback failed:", sdkErr);
+    } catch (llmErr) {
+      console.error("analyze-posts LLM chain failed:", llmErr);
     }
 
     return NextResponse.json(

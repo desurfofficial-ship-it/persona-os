@@ -33,10 +33,13 @@ import type { Persona } from "@/types/persona";
 import { usePersonaAgent, type AgentContentType } from "@/hooks/usePersonaAgent";
 
 const MODELS = [
-  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini", hint: "fast + cheap" },
-  { id: "anthropic/claude-3-5-haiku", name: "Claude Haiku", hint: "best voice" },
-  { id: "google/gemini-flash-1.5", name: "Gemini Flash", hint: "long context" },
-  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1", hint: "open" },
+  // Verified against the live OpenRouter catalog (2026-09) — the previous set
+  // (gpt-4o-mini / claude-3-5-haiku / gemini-flash-1.5) 404s or is
+  // region-blocked on current OpenRouter, which is why Generate felt dead.
+  { id: "meta-llama/llama-3.3-70b-instruct", name: "Llama 3.3 70B", hint: "best voice" },
+  { id: "deepseek/deepseek-chat-v3-0324", name: "DeepSeek V3", hint: "creative + cheap" },
+  { id: "mistralai/mistral-small-24b-instruct-2501", name: "Mistral Small", hint: "fast" },
+  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1 8B", hint: "fastest" },
 ];
 
 const CONTENT_TYPES: { id: AgentContentType; label: string; example: string }[] = [
@@ -76,9 +79,9 @@ const STARTERS: Record<AgentContentType, string[]> = {
   ],
 };
 
-const ACCENT = "#E76F51";
-const CREAM = "#FFFBF5";
-const CHARCOAL = "#2B2724";
+const ACCENT = "#FFFFFF";
+const CREAM = "#09090B";
+const CHARCOAL = "#FAFAFA";
 
 interface GoalRow {
   id: string;
@@ -106,6 +109,7 @@ interface AlertRow {
 interface Notice {
   id: number;
   text: string;
+  kind?: "ok" | "error";
 }
 
 function hostOf(url: string): string {
@@ -212,7 +216,7 @@ export default function AgentPage() {
   }
 
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit" headers={buildHeaders}>
+    <CopilotKit runtimeUrl="/api/copilotkit" headers={buildHeaders} showDevConsole={false}>
       <AgentWorkspace
         personas={personas}
         selectedId={selectedId}
@@ -237,14 +241,15 @@ function AgentWorkspace({
   activePersona: Persona | null;
 }) {
   const [type, setType] = useState<AgentContentType>("caption");
-  const [model, setModel] = useState(MODELS[1].id);
+  const [model, setModel] = useState(MODELS[0].id);
   const [prompt, setPrompt] = useState("");
   const [notices, setNotices] = useState<Notice[]>([]);
 
-  const pushNotice = useCallback((text: string) => {
+  const pushNotice = useCallback((text: string, kind: "ok" | "error" = "ok") => {
     const id = Date.now() + Math.random();
-    setNotices((prev) => [...prev.slice(-2), { id, text }]);
-    setTimeout(() => setNotices((prev) => prev.filter((n) => n.id !== id)), 5000);
+    setNotices((prev) => [...prev.slice(-2), { id, text, kind }]);
+    // Errors stay up longer — a 5s error is a missed error.
+    setTimeout(() => setNotices((prev) => prev.filter((n) => n.id !== id)), kind === "error" ? 10000 : 5000);
   }, []);
 
   // Bump to make the GoalsPanel re-fetch (agent created a goal).
@@ -275,7 +280,7 @@ function AgentWorkspace({
     const text = prompt.trim();
     if (!text || isLoading) return;
     if (!selectedId) {
-      pushNotice("Select a persona first — the agent refuses to guess who it is.");
+      pushNotice("Select a persona first — the agent refuses to guess who it is.", "error");
       return;
     }
     setPrompt("");
@@ -284,7 +289,14 @@ function AgentWorkspace({
     // A typed TextMessage instance — the runtime client calls its type-guard
     // methods downstream, so plain objects break the pipeline.
     const message = new TextMessage({ role: Role.User, content: `[Model:${model}] [Type:${type}] [Persona:${selectedId}] ${text}` });
-    await appendMessage(message as unknown as Parameters<typeof appendMessage>[0]);
+    try {
+      await appendMessage(message as unknown as Parameters<typeof appendMessage>[0]);
+    } catch (err) {
+      // A failed run must be VISIBLE — silence was the bug users reported
+      // as "I hit generate and nothing happened".
+      const msg = err instanceof Error ? err.message : String(err);
+      pushNotice(`Run failed: ${msg.slice(0, 140)} — try again or switch model.`, "error");
+    }
   };
 
   const lastMessages = visibleMessages.slice(-3);
@@ -294,40 +306,41 @@ function AgentWorkspace({
       className="min-h-screen flex flex-col xl:flex-row"
       style={{ background: CREAM, color: CHARCOAL }}
     >
-      {/* Scoped CopilotKit theme: cream / charcoal / coral */}
+      {/* Scoped CopilotKit theme: zinc dark — matches the rest of the app */}
       <style>{`
+        cpk-web-inspector { display: none !important; }
         .agent-chat {
           --copilot-kit-background-color: ${CREAM};
           --copilot-kit-primary-color: ${ACCENT};
-          --copilot-kit-secondary-color: #F4E8DC;
+          --copilot-kit-secondary-color: #3F3F46;
           --copilot-kit-contrast-color: ${CHARCOAL};
-          --copilot-kit-muted-color: #8A8177;
-          --copilot-kit-separator-color: #EDE3D6;
-          --copilot-kit-input-background-color: #FFFFFF;
+          --copilot-kit-muted-color: #A1A1AA;
+          --copilot-kit-separator-color: #3F3F46;
+          --copilot-kit-input-background-color: #18181B;
         }
       `}</style>
 
       {/* ---------------- LEFT: 320px control sidebar ---------------- */}
-      <aside className="w-full xl:w-[320px] xl:min-w-[320px] border-b xl:border-b-0 xl:border-r p-5 space-y-6" style={{ borderColor: "#EDE3D6" }}>
+      <aside className="w-full xl:w-[320px] xl:min-w-[320px] border-b xl:border-b-0 xl:border-r p-5 space-y-6" style={{ borderColor: "#3F3F46" }}>
         <div>
-          <Link href="/dashboard" className="text-xs underline-offset-2 hover:underline" style={{ color: "#8A8177" }}>
+          <Link href="/dashboard" className="text-xs underline-offset-2 hover:underline" style={{ color: "#A1A1AA" }}>
             ← Dashboard
           </Link>
-          <h1 className="mt-2 text-2xl leading-tight font-serif" style={{ color: CHARCOAL }}>
+          <h1 className="mt-2 text-2xl leading-tight font-bold" style={{ color: CHARCOAL }}>
             Agent
           </h1>
-          <p className="text-xs mt-1" style={{ color: "#8A8177" }}>
+          <p className="text-xs mt-1" style={{ color: "#A1A1AA" }}>
             Research → generate → schedule → vault. In character, always.
           </p>
         </div>
 
         {/* Persona selector */}
         <div>
-          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#A1A1AA" }}>
             Persona
           </label>
           {personas.length === 0 ? (
-            <p className="text-xs leading-relaxed" style={{ color: "#8A8177" }}>
+            <p className="text-xs leading-relaxed" style={{ color: "#A1A1AA" }}>
               No personas yet.{" "}
               <Link href="/dashboard/personas/new" className="underline" style={{ color: ACCENT }}>
                 Build one first
@@ -338,8 +351,8 @@ function AgentWorkspace({
             <select
               value={selectedId}
               onChange={(e) => onSelect(e.target.value)}
-              className="w-full rounded-lg border px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2"
-              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+              className="w-full rounded-lg border px-3 py-2 text-sm bg-zinc-900 focus:outline-none focus:ring-2"
+              style={{ borderColor: "#3F3F46", color: CHARCOAL }}
               aria-label="Active persona"
             >
               {personas.map((p) => (
@@ -354,7 +367,7 @@ function AgentWorkspace({
 
         {/* Content type */}
         <div>
-          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#A1A1AA" }}>
             Content type
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -367,15 +380,15 @@ function AgentWorkspace({
                   onClick={() => setType(t.id)}
                   className="rounded-lg border px-3 py-2 text-left text-xs transition-colors"
                   style={{
-                    borderColor: active ? ACCENT : "#EDE3D6",
+                    borderColor: active ? ACCENT : "#3F3F46",
                     borderWidth: active ? 2 : 1,
-                    background: active ? "#FFF3EC" : "#FFFFFF",
+                    background: active ? "#27272A" : "#18181B",
                     color: CHARCOAL,
                   }}
                   title={t.example}
                 >
                   <span className="block font-medium">{t.label}</span>
-                  <span className="block text-[10px] mt-0.5" style={{ color: "#8A8177" }}>
+                  <span className="block text-[10px] mt-0.5" style={{ color: "#A1A1AA" }}>
                     {t.example}
                   </span>
                 </button>
@@ -386,7 +399,7 @@ function AgentWorkspace({
 
         {/* Model pills */}
         <div>
-          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#A1A1AA" }}>
             Model
           </label>
           <div className="flex flex-wrap gap-2">
@@ -399,9 +412,9 @@ function AgentWorkspace({
                   onClick={() => setModel(m.id)}
                   className="rounded-full border px-3 py-1.5 text-xs transition-colors"
                   style={{
-                    borderColor: active ? ACCENT : "#EDE3D6",
+                    borderColor: active ? ACCENT : "#3F3F46",
                     borderWidth: active ? 2 : 1,
-                    background: active ? "#FFF3EC" : "#FFFFFF",
+                    background: active ? "#27272A" : "#18181B",
                     color: CHARCOAL,
                   }}
                   title={m.hint}
@@ -411,12 +424,12 @@ function AgentWorkspace({
               );
             })}
           </div>
-          <p className="text-[10px] mt-2" style={{ color: "#8A8177" }}>
-            All AI runs through OpenRouter. Selected state shows the coral ring.
+          <p className="text-[10px] mt-2" style={{ color: "#A1A1AA" }}>
+            All AI runs through OpenRouter with a built-in fallback — if a model is unavailable, the agent keeps going.
           </p>
         </div>
 
-        <p className="text-[10px] leading-relaxed" style={{ color: "#8A8177" }}>
+        <p className="text-[10px] leading-relaxed" style={{ color: "#A1A1AA" }}>
           Prefer the classic engine?{" "}
           <Link href="/dashboard/studio" className="underline" style={{ color: ACCENT }}>
             Studio
@@ -427,13 +440,18 @@ function AgentWorkspace({
 
       {/* ---------------- CENTER: composer + CopilotChat ---------------- */}
       <main className="flex-1 flex flex-col min-w-0 xl:h-screen">
-        <div className="p-4 border-b" style={{ borderColor: "#EDE3D6" }}>
+        <div className="p-4 border-b" style={{ borderColor: "#3F3F46" }}>
           <div className="flex flex-col sm:flex-row gap-2">
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void sendPrompt();
+                // Enter sends (matches every chat surface users know);
+                // Shift+Enter inserts a newline.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void sendPrompt();
+                }
               }}
               rows={2}
               placeholder={
@@ -441,22 +459,22 @@ function AgentWorkspace({
                   ? `e.g. Research 5 viral wellness hooks this week, write ${type}s for ${activePersona.name}, schedule them, save assets to vault`
                   : "Research 5 viral hooks, generate a week of captions, schedule them…"
               }
-              className="flex-1 rounded-xl border bg-white px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2"
-              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+              className="flex-1 rounded-xl border bg-zinc-900 px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2"
+              style={{ borderColor: "#3F3F46", color: CHARCOAL }}
               aria-label="Prompt for the agent"
             />
             <button
               type="button"
               onClick={() => void sendPrompt()}
               disabled={isLoading || !prompt.trim()}
-              className="rounded-xl px-5 py-3 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+              className="rounded-xl px-5 py-3 text-sm font-semibold text-zinc-950 transition-opacity disabled:opacity-40 hover:opacity-90"
               style={{ background: ACCENT }}
             >
               {isLoading ? "Working…" : "Generate"}
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] mr-0.5" style={{ color: "#8A8177" }}>
+            <span className="text-[10px] mr-0.5" style={{ color: "#A1A1AA" }}>
               Templates
             </span>
             {STARTERS[type].map((s) => (
@@ -465,16 +483,16 @@ function AgentWorkspace({
                 type="button"
                 onClick={() => setPrompt(s)}
                 title={s}
-                className="rounded-full border bg-white px-2.5 py-1 text-[11px] transition-colors hover:bg-[#FFF3EC] max-w-[240px] truncate"
-                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                className="rounded-full border bg-zinc-900 px-2.5 py-1 text-[11px] transition-colors hover:bg-[#27272A] max-w-[240px] truncate"
+                style={{ borderColor: "#3F3F46", color: CHARCOAL }}
               >
                 {s.split(" ").slice(0, 4).join(" ").replace(/,$/, "")}…
               </button>
             ))}
           </div>
-          <p className="text-[10px] mt-1.5" style={{ color: "#8A8177" }}>
+          <p className="text-[10px] mt-1.5" style={{ color: "#A1A1AA" }}>
             Sends as [Model:{model}] [Type:{type}]
-            {selectedId ? ` [Persona:${selectedId.slice(0, 8)}…]` : ""} · ⌘/Ctrl+Enter
+            {selectedId ? ` [Persona:${selectedId.slice(0, 8)}…]` : ""} · Enter sends · Shift+Enter newline
           </p>
         </div>
 
@@ -488,17 +506,17 @@ function AgentWorkspace({
       </main>
 
       {/* ---------------- RIGHT: 340px preview + goals ---------------- */}
-      <aside className="w-full xl:w-[340px] xl:min-w-[340px] border-t xl:border-t-0 xl:border-l flex flex-col" style={{ borderColor: "#EDE3D6" }}>
-        <div className="p-5 border-b" style={{ borderColor: "#EDE3D6" }}>
-          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+      <aside className="w-full xl:w-[340px] xl:min-w-[340px] border-t xl:border-t-0 xl:border-l flex flex-col" style={{ borderColor: "#3F3F46" }}>
+        <div className="p-5 border-b" style={{ borderColor: "#3F3F46" }}>
+          <h2 className="text-lg" style={{ color: CHARCOAL }}>
             Live preview
           </h2>
-          <p className="text-[10px] mb-3" style={{ color: "#8A8177" }}>
+          <p className="text-[10px] mb-3" style={{ color: "#A1A1AA" }}>
             Last 3 messages · everything the agent saves lands in /dashboard/drafts and /dashboard/vault automatically.
           </p>
           <div className="space-y-2 max-h-64 overflow-y-auto">
             {lastMessages.length === 0 && (
-              <p className="text-xs" style={{ color: "#8A8177" }}>
+              <p className="text-xs" style={{ color: "#A1A1AA" }}>
                 Nothing yet — send the first prompt.
               </p>
             )}
@@ -515,12 +533,12 @@ function AgentWorkspace({
                   key={raw.id || i}
                   className="rounded-lg border px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
                   style={{
-                    borderColor: isUser ? "#EDE3D6" : ACCENT,
-                    background: isUser ? "#FFFFFF" : "#FFF3EC",
+                    borderColor: isUser ? "#3F3F46" : ACCENT,
+                    background: isUser ? "#18181B" : "#27272A",
                     color: CHARCOAL,
                   }}
                 >
-                  <span className="block text-[9px] uppercase tracking-wider mb-1" style={{ color: isUser ? "#8A8177" : ACCENT }}>
+                  <span className="block text-[9px] uppercase tracking-wider mb-1" style={{ color: isUser ? "#A1A1AA" : ACCENT }}>
                     {isUser ? "You" : "Agent"}
                   </span>
                   {content.slice(0, 600) || (isUser ? "" : "(working — tool call in progress)")}
@@ -531,8 +549,16 @@ function AgentWorkspace({
           {notices.length > 0 && (
             <div className="mt-3 space-y-1.5" aria-live="polite">
               {notices.map((n) => (
-                <div key={n.id} className="text-[11px] rounded-md px-2.5 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
-                  ✓ {n.text}
+                <div
+                  key={n.id}
+                  className="text-[11px] rounded-md px-2.5 py-1.5"
+                  style={
+                    n.kind === "error"
+                      ? { background: "#450A0A", color: "#FCA5A5", border: "1px solid #7F1D1D" }
+                      : { background: "#14532D", color: "#4ADE80" }
+                  }
+                >
+                  {n.kind === "error" ? "✕" : "✓"} {n.text}
                 </div>
               ))}
             </div>
@@ -593,11 +619,11 @@ function CopilotChatPane({
   return (
     <div className="flex-1 flex flex-col min-h-[50vh] xl:min-h-0">
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-3">
-        <div className="rounded-xl border p-4 text-xs leading-relaxed" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
-          <p className="font-serif text-sm mb-1" style={{ color: CHARCOAL }}>
+        <div className="rounded-xl border p-4 text-xs leading-relaxed" style={{ borderColor: "#3F3F46", background: "#18181B" }}>
+          <p className="text-sm mb-1" style={{ color: CHARCOAL }}>
             Persona Agent
           </p>
-          <p style={{ color: "#8A8177" }}>
+          <p style={{ color: "#A1A1AA" }}>
             {personaName
               ? `Generating ${type} using ${model} for ${personaName}. Ask for research, a week of posts, scheduling or vault saves — the agent acts, not just suggests.`
               : "Pick a persona on the left, then ask for research, posts, scheduling or vault saves."}
@@ -610,7 +636,7 @@ function CopilotChatPane({
             return (
               <div key={m.id || i} className="flex flex-col gap-1 items-start">
                 {toolCalls.map((tc, j) => (
-                  <div key={tc.id || j} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+                  <div key={tc.id || j} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#27272A", color: ACCENT }}>
                     🔧 {tc.function?.name || "tool"}…
                   </div>
                 ))}
@@ -619,7 +645,7 @@ function CopilotChatPane({
           }
           if (m.type === "ActionExecutionMessage") {
             return (
-              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#27272A", color: ACCENT }}>
                 🔧 {m.name}…
               </div>
             );
@@ -627,7 +653,7 @@ function CopilotChatPane({
           if (m.type === "ResultMessage" || m.role === "tool") {
             const result = String(m.result ?? (typeof m.content === "string" ? m.content : "")).slice(0, 200);
             return (
-              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
+              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5" style={{ background: "#14532D", color: "#4ADE80" }}>
                 ✓ {result}
               </div>
             );
@@ -638,11 +664,11 @@ function CopilotChatPane({
           return (
             <div key={m.id || i} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               <div
-                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${isUser ? "text-white" : ""}`}
+                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${isUser ? "text-zinc-950" : ""}`}
                 style={{
-                  background: isUser ? ACCENT : "#FFFFFF",
-                  color: isUser ? "#FFFFFF" : CHARCOAL,
-                  border: isUser ? "none" : "1px solid #EDE3D6",
+                  background: isUser ? ACCENT : "#18181B",
+                  color: isUser ? "#18181B" : CHARCOAL,
+                  border: isUser ? "none" : "1px solid #3F3F46",
                 }}
               >
                 {content}
@@ -652,7 +678,7 @@ function CopilotChatPane({
         })}
 
         {isLoading && (
-          <div className="text-xs px-2" style={{ color: "#8A8177" }} aria-live="polite">
+          <div className="text-xs px-2" style={{ color: "#A1A1AA" }} aria-live="polite">
             Working…
           </div>
         )}
@@ -673,7 +699,7 @@ function GoalsPanel({
 }: {
   activePersona: Persona | null;
   personas: Persona[];
-  pushNotice: (text: string) => void;
+  pushNotice: (text: string, kind?: "ok" | "error") => void;
   refreshSignal: number;
 }) {
   const [goals, setGoals] = useState<GoalRow[]>([]);
@@ -731,7 +757,7 @@ function GoalsPanel({
       pushNotice(`Goal created → ${goalTitle.trim()}`);
       setRefresh((n) => n + 1);
     } catch (err) {
-      pushNotice(`Goal failed: ${err instanceof Error ? err.message : "error"}`);
+      pushNotice(`Goal failed: ${err instanceof Error ? err.message : "error"}`, "error");
     } finally {
       setSaving(false);
     }
@@ -757,7 +783,7 @@ function GoalsPanel({
       else pushNotice(`Check ran → ${first.outcome || "error"}${first.detail ? ` (${first.detail})` : ""}`);
       setRefresh((n) => n + 1);
     } catch {
-      pushNotice("Check failed to run.");
+      pushNotice("Check failed to run.", "error");
     } finally {
       setCheckingId(null);
     }
@@ -768,7 +794,7 @@ function GoalsPanel({
       await authedFetch(`/api/goals?id=${encodeURIComponent(goalId)}`, { method: "DELETE" });
       setRefresh((n) => n + 1);
     } catch {
-      pushNotice("Could not remove the goal.");
+      pushNotice("Could not remove the goal.", "error");
     }
   };
 
@@ -789,7 +815,7 @@ function GoalsPanel({
       pushNotice(next === "paused" ? "Goal paused — checks stop until you resume it." : "Goal resumed — next check runs now.");
       setRefresh((n) => n + 1);
     } catch (err) {
-      pushNotice(err instanceof Error ? `Could not update goal: ${err.message}` : "Could not update goal.");
+      pushNotice(err instanceof Error ? `Could not update goal: ${err.message}` : "Could not update goal.", "error");
     } finally {
       setTogglingId(null);
     }
@@ -825,19 +851,19 @@ function GoalsPanel({
         aria-expanded={open}
       >
         <div>
-          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+          <h2 className="text-lg" style={{ color: CHARCOAL }}>
             Content Calendar Automation
             {unreadCount > 0 && !open && (
               <span
                 className="ml-2 inline-flex items-center justify-center rounded-full text-[10px] font-sans px-1.5 py-0.5 align-middle"
-                style={{ background: ACCENT, color: "#FFFFFF" }}
+                style={{ background: ACCENT, color: "#18181B" }}
                 title={`${unreadCount} unread alert${unreadCount === 1 ? "" : "s"}`}
               >
                 {unreadCount}
               </span>
             )}
           </h2>
-          <p className="text-[10px]" style={{ color: "#8A8177" }}>
+          <p className="text-[10px]" style={{ color: "#A1A1AA" }}>
             Goals &amp; Tracking — recurring page checks that auto-generate drafts
           </p>
         </div>
@@ -848,20 +874,20 @@ function GoalsPanel({
 
       {open && (
         <div className="mt-4 space-y-3">
-          <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+          <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "#3F3F46", background: "#18181B" }}>
             <input
               value={goalTitle}
               onChange={(e) => setGoalTitle(e.target.value)}
               placeholder="Goal title — e.g. Weekly viral check for MIRA"
-              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
-              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+              className="w-full rounded-lg border px-3 py-2 text-xs bg-zinc-900 focus:outline-none"
+              style={{ borderColor: "#3F3F46", color: CHARCOAL }}
             />
             <div className="flex gap-2">
               <select
                 value={recurrence}
                 onChange={(e) => setRecurrence(e.target.value as "daily" | "weekly")}
-                className="rounded-lg border px-2 py-2 text-xs bg-white"
-                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                className="rounded-lg border px-2 py-2 text-xs bg-zinc-900"
+                style={{ borderColor: "#3F3F46", color: CHARCOAL }}
                 aria-label="Recurrence"
               >
                 <option value="weekly">Weekly</option>
@@ -870,8 +896,8 @@ function GoalsPanel({
               <select
                 value={goalPersonaId}
                 onChange={(e) => setGoalPersonaId(e.target.value)}
-                className="flex-1 rounded-lg border px-2 py-2 text-xs bg-white"
-                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                className="flex-1 rounded-lg border px-2 py-2 text-xs bg-zinc-900"
+                style={{ borderColor: "#3F3F46", color: CHARCOAL }}
                 aria-label="Goal persona"
               >
                 <option value="">Persona…</option>
@@ -887,19 +913,19 @@ function GoalsPanel({
               value={checkUrl}
               onChange={(e) => setCheckUrl(e.target.value)}
               placeholder="checkUrl — e.g. https://www.tiktok.com/tag/wellness"
-              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
-              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+              className="w-full rounded-lg border px-3 py-2 text-xs bg-zinc-900 focus:outline-none"
+              style={{ borderColor: "#3F3F46", color: CHARCOAL }}
             />
             <button
               type="button"
               onClick={() => void createGoal()}
               disabled={saving || !goalTitle.trim() || !checkUrl.trim() || !goalPersonaId}
-              className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+              className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-zinc-950 disabled:opacity-40 hover:opacity-90"
               style={{ background: ACCENT }}
             >
               {saving ? "Creating…" : "Create goal"}
             </button>
-            <p className="text-[10px]" style={{ color: "#8A8177" }}>
+            <p className="text-[10px]" style={{ color: "#A1A1AA" }}>
               The worker reads the page (browser worker when configured), dedupes alerts per change, and auto-writes one
               in-character caption per detected change.
             </p>
@@ -910,21 +936,21 @@ function GoalsPanel({
               {goals.map((g) => {
                 const goalAlerts = alerts.filter((a) => a.goalId === g.id);
                 return (
-                <div key={g.id} className="rounded-xl border p-3" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+                <div key={g.id} className="rounded-xl border p-3" style={{ borderColor: "#3F3F46", background: "#18181B" }}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-xs font-medium truncate" style={{ color: CHARCOAL }}>
                         {g.title}
                       </p>
-                      <p className="text-[10px] mt-0.5 truncate" style={{ color: "#8A8177" }} title={g.checkUrl}>
+                      <p className="text-[10px] mt-0.5 truncate" style={{ color: "#A1A1AA" }} title={g.checkUrl}>
                         {g.recurrence} · {hostOf(g.checkUrl) || "invalid url"} · checked {timeAgo(g.lastCheckedAt)}
                         {g.failureCount ? ` · ${g.failureCount} failures` : ""}
                       </p>
-                      <p className="text-[10px] mt-0.5" style={{ color: g.status === "active" ? "#2F6B37" : "#B3261E" }}>
+                      <p className="text-[10px] mt-0.5" style={{ color: g.status === "active" ? "#4ADE80" : "#F87171" }}>
                         {g.status} · {timeUntil(g.nextCheckAt)}
                       </p>
                       {g.lastStateSample && (
-                        <p className="text-[10px] mt-1 leading-snug" style={{ color: "#8A8177" }}>
+                        <p className="text-[10px] mt-1 leading-snug" style={{ color: "#A1A1AA" }}>
                           Last snapshot: “{g.lastStateSample.slice(0, 80)}{g.lastStateSample.length > 80 ? "..." : ""}”
                         </p>
                       )}
@@ -935,7 +961,7 @@ function GoalsPanel({
                         onClick={() => void runCheck(g.id)}
                         disabled={checkingId === g.id || g.status !== "active"}
                         className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
-                        style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                        style={{ borderColor: "#3F3F46", color: CHARCOAL }}
                         title={g.status !== "active" ? "Resume the goal to run checks" : "Check now"}
                       >
                         {checkingId === g.id ? "…" : "Run check"}
@@ -945,7 +971,7 @@ function GoalsPanel({
                         onClick={() => void toggleGoal(g.id, g.status === "active" ? "paused" : "active")}
                         disabled={togglingId === g.id}
                         className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
-                        style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+                        style={{ borderColor: "#3F3F46", color: CHARCOAL }}
                       >
                         {togglingId === g.id ? "…" : g.status === "active" ? "Pause" : "Resume"}
                       </button>
@@ -953,16 +979,16 @@ function GoalsPanel({
                         type="button"
                         onClick={() => void removeGoal(g.id)}
                         className="text-[10px] rounded-md px-2 py-1"
-                        style={{ color: "#B3261E" }}
+                        style={{ color: "#F87171" }}
                       >
                         Remove
                       </button>
                     </div>
                   </div>
                   {goalAlerts.length > 0 && (
-                    <div className="mt-2 pt-2 border-t space-y-1" style={{ borderColor: "#F4E8DC" }}>
+                    <div className="mt-2 pt-2 border-t space-y-1" style={{ borderColor: "#3F3F46" }}>
                       {goalAlerts.slice(0, 3).map((a) => (
-                        <div key={a.id} className="text-[10px] leading-snug" style={{ color: "#8A8177" }}>
+                        <div key={a.id} className="text-[10px] leading-snug" style={{ color: "#A1A1AA" }}>
                           <span style={{ color: ACCENT }}>⚡ {timeAgo(a.createdAt)}</span> — {a.body}
                           {a.draftId && (
                             <Link
@@ -986,7 +1012,7 @@ function GoalsPanel({
           {/* ---- Goal history: the full alert timeline across all goals ---- */}
           {alerts.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "#8A8177" }}>
+              <p className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "#A1A1AA" }}>
                 Goal history — {alerts.length} alert{alerts.length === 1 ? "" : "s"}, newest first
               </p>
               <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
@@ -998,7 +1024,7 @@ function GoalsPanel({
                       key={a.id}
                       className="rounded-lg px-2.5 py-1.5 text-[11px]"
                       style={{
-                        background: "#FFF3EC",
+                        background: "#27272A",
                         borderLeft: unread ? `3px solid ${ACCENT}` : "3px solid transparent",
                         opacity: unread ? 1 : 0.72,
                       }}
@@ -1007,14 +1033,14 @@ function GoalsPanel({
                         <span className="font-medium truncate" style={{ color: CHARCOAL }}>
                           {unread && <span style={{ color: ACCENT }}>● </span>}{a.title}
                         </span>
-                        <span className="shrink-0 text-[9px]" style={{ color: "#8A8177" }}>
+                        <span className="shrink-0 text-[9px]" style={{ color: "#A1A1AA" }}>
                           {timeAgo(a.createdAt)}
                         </span>
                       </div>
-                      <span className="block" style={{ color: "#8A8177" }}>
+                      <span className="block" style={{ color: "#A1A1AA" }}>
                         {a.body}
                       </span>
-                      <span className="block mt-0.5 text-[9px] uppercase tracking-wider" style={{ color: "#B08968" }}>
+                      <span className="block mt-0.5 text-[9px] uppercase tracking-wider" style={{ color: "#71717A" }}>
                         {goal ? `${goal.recurrence} · ${hostOf(goal.checkUrl)}` : "goal removed"}
                       </span>
                       {a.draftId && (
@@ -1034,7 +1060,7 @@ function GoalsPanel({
           )}
 
           {open && goals.length === 0 && alerts.length === 0 && (
-            <p className="text-[11px]" style={{ color: "#8A8177" }}>
+            <p className="text-[11px]" style={{ color: "#A1A1AA" }}>
               No goals yet. Create one above — the first check runs immediately to record a baseline,
               then the schedule takes over. Every detected change lands here with the draft it produced.
             </p>
