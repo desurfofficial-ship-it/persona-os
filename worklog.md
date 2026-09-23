@@ -362,3 +362,19 @@ Stage Summary:
 - backup/sandbox-main preserves pre-integration sandbox line.
 - Four-pillars branch (9d9a8ab) noted in repo — confirm merged/superseded later.
 - PAT again exposed in chat history; user should rotate after this push.
+
+---
+Task ID: 15
+Agent: Super Z (main agent)
+Task: User confirmed investigating the four-pillars branch. Answer: fully merged already. Audit then caught merge regressions -> restored four-pillars features.
+
+Work Log:
+- Branch topology: four-pillars (9d9a8ab) is a strict ancestor of main (merge-base = its tip; main..four-pillars empty; main has 50 commits on top). Also origin/round-3-sandbox fully merged. Nothing to integrate; deleted local four-pillars branch (safe, merged).
+- BUT the audit exposed real regressions from Task 14's page-level resolution (remote never had four-pillars): dashboard due-today queue/auto-write, vault search+tag filter+auto-tag+tag edit, check Consistency Engine cross-post scan, drafts tag UI.
+- Restored: dashboard + vault + check from pre-merge 463159c (our versions are strict supersets — remote's only extras were a Supabase error hint and simple single-check page); drafts kept remote's base (Worked/Flopped + export + search) and ported our tags: draftTags helper, taggingId state, handleSuggestTags via /api/tag-drafts, tag chips (click sets search), '# Suggest tags' button. Added authedFetch import. Dashboard nav gained Week (/dashboard/calendar) + Connect (/dashboard/connect) links.
+- Verified: tsc clean; browser: dashboard nav + Due today (INCLUDES OVERDUE), vault search box + tag chips + '+ tag', check 'Consistency Engine scan' link, drafts '# Suggest tags' alongside Worked/Flopped/Export. Zero console errors.
+- Committed c3bf439, pushed to origin/main.
+
+Stage Summary:
+- main now = remote features + our four-pillars + preview backend, all verified. Local four-pillars branch deleted (merged). round-3-sandbox still on remote (harmless, merged). backup/sandbox-main kept as safety net.
+- PAT still in chat history — rotation reminder stands.
