@@ -400,3 +400,16 @@ Work Log:
 Stage Summary:
 - Generate works for real now: OpenRouter key wired, model pills live-verified, fallback keeps the agent alive, failures are visible, UI matches the rest of the product.
 - SECURITY: the OpenRouter key was pasted in chat (again, like the earlier PATs) — user should rotate it at openrouter.ai/keys after confirming things work; push of 374f151 still needs a fresh GitHub PAT.
+
+---
+Task ID: status-push-check
+Agent: main (Super Z)
+Task: User asked "Did you push it and what branch" - verify push status of Task 13 (922d1cf) and newer commits.
+
+Work Log:
+- Verified 922d1cf (Task 13) IS already on remote main (ancestor of remote tip c3bf439).
+- Fresh fetch: origin/main = c3bf439. Local main is ahead by 3 unpushed commits: 374f151 (agent page fix + OpenRouter live), eb52598, 54c6e33 (sandbox checkpoints).
+- Push attempt failed: no credentials in session (no helper, no ~/.git-credentials, no ambient token).
+
+Stage Summary:
+- Branch = main. Task 13 pushed. 3 newer commits (incl. agent-page fix) NOT pushed; need fresh PAT from user.
