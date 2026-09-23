@@ -53,19 +53,28 @@ export default function FromPostsPage() {
         return;
       }
 
-      const { error: insertError } = await supabase.from("personas").insert({
-        user_id: user.id,
-        name: name || preview.name || "My Persona",
-        backstory: preview.backstory || "",
-        tone_of_voice: preview.tone_of_voice || "",
-        lifestyle_pillars: preview.lifestyle_pillars || [],
-        content_rules: preview.content_rules || [],
-        forbidden_topics: preview.forbidden_topics || [],
-      });
+      const { data: inserted, error: insertError } = await supabase
+        .from("personas")
+        .insert({
+          user_id: user.id,
+          name: name || preview.name || "My Persona",
+          backstory: preview.backstory || "",
+          tone_of_voice: preview.tone_of_voice || "",
+          lifestyle_pillars: preview.lifestyle_pillars || [],
+          content_rules: preview.content_rules || [],
+          forbidden_topics: preview.forbidden_topics || [],
+        })
+        .select("id")
+        .single();
 
       if (insertError) throw insertError;
 
-      router.push("/dashboard");
+      // Go straight to generate with the new persona
+      if (inserted?.id) {
+        router.push(`/dashboard/generate?persona=${inserted.id}`);
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -84,7 +93,8 @@ export default function FromPostsPage() {
         </div>
 
         <p className="text-zinc-400 text-sm mb-8">
-          Paste 3–10 of your best posts. We’ll extract the voice, tone, rules, and pillars automatically.
+          Paste 3–10 of your best posts. We’ll extract the voice, tone, rules, and pillars
+          automatically — then take you straight to generate.
         </p>
 
         <div className="space-y-6">
@@ -106,7 +116,7 @@ export default function FromPostsPage() {
             disabled={loading || !posts.trim()}
             className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
           >
-            {loading ? "Analyzing voice..." : "Analyze Posts"}
+            {loading && !preview ? "Analyzing voice..." : "Analyze Posts"}
           </button>
 
           {error && (
@@ -187,7 +197,7 @@ export default function FromPostsPage() {
                 disabled={loading}
                 className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
               >
-                {loading ? "Creating..." : "Create Persona"}
+                {loading ? "Creating..." : "Create & Generate First Content"}
               </button>
             </div>
           )}

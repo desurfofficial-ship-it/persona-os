@@ -52,7 +52,6 @@ function GenerateContent() {
     load();
   }, [router, preselectedId]);
 
-  // Load posted drafts for the selected persona (for avoid list)
   useEffect(() => {
     const loadPosted = async () => {
       if (!selectedId) {
@@ -198,7 +197,7 @@ function GenerateContent() {
   };
 
   return (
-    <div className="min-h-screen p-6 sm:p-8">
+    <div className="min-h-screen p-6 sm:p-8 pb-28">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
@@ -229,7 +228,8 @@ function GenerateContent() {
               <p className="line-clamp-2">{selectedPersona.backstory}</p>
               {avoidContent.length > 0 && (
                 <p className="mt-2 text-xs text-green-400">
-                  Avoiding {avoidContent.length} already-posted draft{avoidContent.length > 1 ? "s" : ""}
+                  Avoiding {avoidContent.length} already-posted draft
+                  {avoidContent.length > 1 ? "s" : ""}
                 </p>
               )}
             </div>
@@ -293,10 +293,11 @@ function GenerateContent() {
             />
           </div>
 
+          {/* Desktop generate button */}
           <button
             onClick={handleGenerate}
             disabled={loading || !selectedPersona}
-            className="w-full py-3.5 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50 text-base"
+            className="hidden sm:block w-full py-3.5 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50 text-base"
           >
             {loading
               ? `Generating ${variations > 1 ? variations + " variations" : "..."}`
@@ -408,6 +409,19 @@ function GenerateContent() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Sticky mobile generate bar */}
+      <div className="sm:hidden fixed bottom-0 left-0 right-0 p-4 bg-zinc-950/95 border-t border-zinc-800 backdrop-blur">
+        <button
+          onClick={handleGenerate}
+          disabled={loading || !selectedPersona}
+          className="w-full py-3.5 bg-white text-black font-medium rounded-lg disabled:opacity-50"
+        >
+          {loading
+            ? `Generating ${variations > 1 ? variations + " variations" : "..."}`
+            : "Generate"}
+        </button>
       </div>
     </div>
   );
