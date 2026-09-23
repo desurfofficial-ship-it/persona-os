@@ -85,6 +85,7 @@ export default function DashboardPage() {
       lifestyle_pillars: persona.lifestyle_pillars,
       content_rules: persona.content_rules,
       forbidden_topics: persona.forbidden_topics,
+      example_posts: persona.example_posts || [],
     });
 
     if (error) {
@@ -109,7 +110,6 @@ export default function DashboardPage() {
     );
   }
 
-  // First-run: no personas yet
   if (personas.length === 0) {
     return (
       <div className="min-h-screen p-6 sm:p-8">
@@ -124,7 +124,7 @@ export default function DashboardPage() {
               href="/dashboard/personas/from-posts"
               className="block p-6 bg-white text-black rounded-2xl hover:bg-zinc-200 transition"
             >
-              <h2 className="font-semibold text-lg mb-1">Paste your best posts</h2>
+              <h2 className="font-semibold text-lg mb-1">Paste posts or a profile URL</h2>
               <p className="text-sm text-zinc-600">
                 Recommended — we extract your voice, tone, and rules automatically
               </p>
@@ -167,6 +167,9 @@ export default function DashboardPage() {
             <a href="/dashboard/generate" className="text-zinc-400 hover:text-white">
               Generate
             </a>
+            <a href="/dashboard/calendar" className="text-zinc-400 hover:text-white">
+              Week
+            </a>
             <a href="/dashboard/series" className="text-zinc-400 hover:text-white">
               Series
             </a>
@@ -175,9 +178,6 @@ export default function DashboardPage() {
             </a>
             <a href="/dashboard/check" className="text-zinc-400 hover:text-white">
               Check
-            </a>
-            <a href="/dashboard/vault" className="text-zinc-400 hover:text-white">
-              Vault
             </a>
             <a href="/dashboard/drafts" className="text-zinc-400 hover:text-white">
               Drafts
@@ -188,13 +188,20 @@ export default function DashboardPage() {
           </nav>
         </header>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-12">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-12">
           <a
             href="/dashboard/generate"
             className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
             <h2 className="font-semibold mb-1 text-sm sm:text-base">Generate</h2>
             <p className="text-zinc-400 text-xs">AI content</p>
+          </a>
+          <a
+            href="/dashboard/calendar"
+            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
+          >
+            <h2 className="font-semibold mb-1 text-sm sm:text-base">Week</h2>
+            <p className="text-zinc-400 text-xs">Calendar</p>
           </a>
           <a
             href="/dashboard/series"
@@ -222,7 +229,7 @@ export default function DashboardPage() {
             className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition"
           >
             <h2 className="font-semibold mb-1 text-sm sm:text-base">From Posts</h2>
-            <p className="text-zinc-400 text-xs">Auto-build</p>
+            <p className="text-zinc-400 text-xs">URL or paste</p>
           </a>
         </div>
 
