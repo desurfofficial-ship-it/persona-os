@@ -1,47 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-
-const TEMPLATES = [
-  {
-    name: "Ambitious Founder",
-    backstory:
-      "Early-stage founder building in public. Obsessed with speed, clarity, and results. Shares the real journey — wins, losses, and lessons — without the corporate fluff.",
-    tone: "Direct, confident, slightly irreverent, no-nonsense",
-    pillars: "Building in public, high agency, shipping fast, mental toughness",
-    rules: "Always speak in first person\nKeep it short and punchy\nNever sound corporate\nShare real numbers when possible",
-    forbidden: "politics, personal drama, empty motivation",
-  },
-  {
-    name: "Fitness Creator",
-    backstory:
-      "Dedicated to progressive training, recovery, and sustainable performance. Focuses on evidence-based methods and long-term consistency over quick fixes.",
-    tone: "Motivational but realistic, knowledgeable, encouraging",
-    pillars: "Strength training, recovery, nutrition, consistency",
-    rules: "Never promote extreme diets\nFocus on sustainable habits\nBe encouraging without toxic positivity",
-    forbidden: "steroids, extreme cuts, body shaming",
-  },
-  {
-    name: "Luxury Lifestyle",
-    backstory:
-      "Curates a high-end but intentional lifestyle. Values quality, experiences, and refined taste. Content feels aspirational yet grounded.",
-    tone: "Calm, sophisticated, understated confidence",
-    pillars: "Quality over quantity, travel, design, personal standards",
-    rules: "Never flex excessively\nFocus on taste and intention\nKeep language elegant and minimal",
-    forbidden: "cheap promotions, desperation, oversharing finances",
-  },
-  {
-    name: "Tech Operator",
-    backstory:
-      "Operator who has scaled products and teams. Shares practical systems, decision frameworks, and hard-earned lessons from the trenches.",
-    tone: "Precise, analytical, experienced, low-ego",
-    pillars: "Systems thinking, execution, product, leadership",
-    rules: "Prefer frameworks over opinions\nBe specific\nAvoid buzzwords",
-    forbidden: "hype, vague advice, guru energy",
-  },
-];
+import {
+  PERSONA_TEMPLATES,
+  TEMPLATE_CATEGORIES,
+  type PersonaTemplate,
+} from "@/lib/templates";
 
 export default function NewPersonaPage() {
   const router = useRouter();
@@ -51,16 +17,26 @@ export default function NewPersonaPage() {
   const [pillars, setPillars] = useState("");
   const [rules, setRules] = useState("");
   const [forbidden, setForbidden] = useState("");
+  const [examples, setExamples] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [category, setCategory] = useState<string>("All");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const applyTemplate = (template: (typeof TEMPLATES)[0]) => {
+  const filtered = useMemo(() => {
+    if (category === "All") return PERSONA_TEMPLATES;
+    return PERSONA_TEMPLATES.filter((t) => t.category === category);
+  }, [category]);
+
+  const applyTemplate = (template: PersonaTemplate) => {
+    setSelectedTemplateId(template.id);
     setName(template.name);
     setBackstory(template.backstory);
     setTone(template.tone);
     setPillars(template.pillars);
     setRules(template.rules);
     setForbidden(template.forbidden);
+    setExamples(template.example_posts.join("\n\n---\n\n"));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -95,16 +71,23 @@ export default function NewPersonaPage() {
         .map((t) => t.trim())
         .filter(Boolean);
 
+      const example_posts = examples
+        .split(/\n\s*---\s*\n/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 10)
+        .slice(0, 8);
+
       const { data: inserted, error: insertError } = await supabase
         .from("personas")
         .insert({
           user_id: user.id,
-          name,
-          backstory,
-          tone_of_voice: tone,
+          name: name.trim().slice(0, 120),
+          backstory: backstory.trim(),
+          tone_of_voice: tone.trim(),
           lifestyle_pillars,
           content_rules,
           forbidden_topics,
+          example_posts,
         })
         .select("id")
         .single();
@@ -140,27 +123,58 @@ export default function NewPersonaPage() {
           >
             <h3 className="font-semibold mb-1">Build from your posts</h3>
             <p className="text-sm text-zinc-600">
-              Paste real posts → auto-extract voice, tone & rules
+              Paste real posts or URL → auto-extract voice
             </p>
           </a>
-          <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-xl">
-            <h3 className="font-semibold mb-1">Start from template</h3>
-            <p className="text-sm text-zinc-400">Pick a starting point below and customize</p>
-          </div>
+          <a
+            href="/dashboard/connect"
+            className="p-5 bg-zinc-900 border border-zinc-700 rounded-xl hover:border-zinc-500 transition"
+          >
+            <h3 className="font-semibold mb-1">Connect account (optional)</h3>
+            <p className="text-sm text-zinc-400">Link a public X handle</p>
+          </a>
         </div>
 
         <div className="mb-8">
-          <p className="text-sm text-zinc-400 mb-3">Quick start templates</p>
-          <div className="grid grid-cols-2 gap-3">
-            {TEMPLATES.map((t) => (
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <p className="text-sm text-zinc-400">Templates</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATE_CATEGORIES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(c)}
+                  className={`text-xs px-2.5 py-1 rounded-full border ${
+                    category === c
+                      ? "border-white bg-white text-black"
+                      : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {filtered.map((t) => (
               <button
-                key={t.name}
+                key={t.id}
                 type="button"
                 onClick={() => applyTemplate(t)}
-                className="text-left p-3 bg-zinc-900 border border-zinc-800 rounded-lg hover:border-zinc-600 transition"
+                className={`text-left p-4 rounded-xl border transition ${
+                  selectedTemplateId === t.id
+                    ? "bg-zinc-800 border-white"
+                    : "bg-zinc-900 border-zinc-800 hover:border-zinc-600"
+                }`}
               >
-                <p className="font-medium text-sm">{t.name}</p>
-                <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{t.tone}</p>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <p className="font-medium text-sm">{t.name}</p>
+                  <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                    {t.category}
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-400 line-clamp-2">{t.tagline}</p>
               </button>
             ))}
           </div>
@@ -239,6 +253,22 @@ export default function NewPersonaPage() {
               onChange={(e) => setForbidden(e.target.value)}
               className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-zinc-300 mb-2">
+              Gold example posts (separate with ---)
+            </label>
+            <textarea
+              value={examples}
+              onChange={(e) => setExamples(e.target.value)}
+              rows={6}
+              placeholder="Template fills these in — edit freely"
+              className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+            />
+            <p className="text-xs text-zinc-500 mt-1">
+              Generation matches the style of these examples.
+            </p>
           </div>
 
           <button
