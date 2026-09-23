@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
-    const { persona, type, topic, model, avoidContent } = await req.json();
+    const { persona, type, topic, model, avoidContent, workedContent, floppedContent } =
+      await req.json();
 
     if (!persona || !type) {
       return NextResponse.json({ error: "Missing persona or type" }, { status: 400 });
@@ -14,6 +15,22 @@ export async function POST(req: NextRequest) {
         .slice(0, 15)
         .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 200)}`)
         .join("\n")}\n\nGenerate something fresh that covers new ground.`;
+    }
+
+    let workedSection = "";
+    if (workedContent && Array.isArray(workedContent) && workedContent.length > 0) {
+      workedSection = `\n\nPOSTS THAT WORKED WELL (double down on these themes, hooks, and angles — do not copy verbatim):\n${workedContent
+        .slice(0, 8)
+        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 300)}`)
+        .join("\n")}`;
+    }
+
+    let floppedSection = "";
+    if (floppedContent && Array.isArray(floppedContent) && floppedContent.length > 0) {
+      floppedSection = `\n\nPOSTS THAT FLOPPED (avoid similar topics, tone, or structure):\n${floppedContent
+        .slice(0, 6)
+        .map((c: string, i: number) => `${i + 1}. ${c.slice(0, 200)}`)
+        .join("\n")}`;
     }
 
     let examplesSection = "";
@@ -33,6 +50,8 @@ LIFESTYLE PILLARS: ${(persona.lifestyle_pillars || []).join(", ") || "none speci
 CONTENT RULES: ${(persona.content_rules || []).join("; ") || "none"}
 FORBIDDEN TOPICS: ${(persona.forbidden_topics || []).join(", ") || "none"}
 ${examplesSection}
+${workedSection}
+${floppedSection}
 ${avoidSection}
 
 STRICT RULES:
@@ -40,6 +59,7 @@ STRICT RULES:
 - Never mention that you are an AI or that this is generated.
 - Match the tone of voice exactly.
 - If gold example posts are provided, match their sentence length, rhythm, and energy.
+- Prefer themes and hooks similar to posts that WORKED; avoid patterns from posts that FLOPPED.
 - Stay consistent with the backstory and lifestyle pillars.
 - Follow every content rule.
 - Completely avoid any forbidden topics.

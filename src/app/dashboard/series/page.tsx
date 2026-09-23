@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 
-export default function SeriesPlannerPage() {
+function SeriesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const preselectedId = searchParams.get("persona");
@@ -18,6 +18,8 @@ export default function SeriesPlannerPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [avoidContent, setAvoidContent] = useState<string[]>([]);
+  const [workedContent, setWorkedContent] = useState<string[]>([]);
+  const [floppedContent, setFloppedContent] = useState<string[]>([]);
 
   useEffect(() => {
     const load = async () => {
@@ -43,21 +45,43 @@ export default function SeriesPlannerPage() {
   }, [router, preselectedId]);
 
   useEffect(() => {
-    const loadPosted = async () => {
+    const loadSignals = async () => {
       if (!selectedId) {
         setAvoidContent([]);
+        setWorkedContent([]);
+        setFloppedContent([]);
         return;
       }
-      const { data } = await supabase
-        .from("content_drafts")
-        .select("content")
-        .eq("persona_id", selectedId)
-        .eq("posted", true)
-        .order("created_at", { ascending: false })
-        .limit(15);
-      setAvoidContent((data || []).map((d) => d.content));
+
+      const [postedRes, workedRes, floppedRes] = await Promise.all([
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("posted", true)
+          .order("created_at", { ascending: false })
+          .limit(15),
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("performance", "worked")
+          .order("created_at", { ascending: false })
+          .limit(8),
+        supabase
+          .from("content_drafts")
+          .select("content")
+          .eq("persona_id", selectedId)
+          .eq("performance", "flopped")
+          .order("created_at", { ascending: false })
+          .limit(6),
+      ]);
+
+      setAvoidContent((postedRes.data || []).map((d) => d.content));
+      setWorkedContent((workedRes.data || []).map((d) => d.content));
+      setFloppedContent((floppedRes.data || []).map((d) => d.content));
     };
-    loadPosted();
+    loadSignals();
   }, [selectedId]);
 
   const selectedPersona = personas.find((p) => p.id === selectedId);
@@ -82,9 +106,13 @@ For each day provide:
 - Full post content or script
 - Why it fits the persona
 
-Make the series feel cohesive and progressive. Stay 100% in character.`,
+Make the series feel cohesive and progressive. Stay 100% in character.
+${workedContent.length > 0 ? "Lean into themes and hooks from posts that WORKED." : ""}
+${floppedContent.length > 0 ? "Avoid patterns from posts that FLOPPED." : ""}`,
           model: "openai/gpt-4o-mini",
           avoidContent,
+          workedContent,
+          floppedContent,
         }),
       });
 
@@ -146,7 +174,7 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
         </div>
 
         <p className="text-zinc-400 text-sm mb-8">
-          Generate a multi-day content series that stays completely in character.
+          Multi-day series in character — steered by what worked and what flopped.
         </p>
 
         <div className="space-y-6">
@@ -169,16 +197,21 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-400">
               <p className="font-medium text-zinc-200">{selectedPersona.name}</p>
               <p className="line-clamp-2 mt-1">{selectedPersona.backstory}</p>
-              {avoidContent.length > 0 ? (
-                <p className="mt-2 text-xs text-green-400">
-                  Avoiding {avoidContent.length} already-posted draft
-                  {avoidContent.length > 1 ? "s" : ""}
-                </p>
-              ) : (
-                <p className="mt-2 text-xs text-zinc-500">
-                  Mark drafts as Posted so future series avoid those topics.
-                </p>
-              )}
+              <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                {workedContent.length > 0 && (
+                  <span className="text-emerald-400">
+                    Doubling down on {workedContent.length} that worked
+                  </span>
+                )}
+                {floppedContent.length > 0 && (
+                  <span className="text-red-400">Avoiding {floppedContent.length} that flopped</span>
+                )}
+                {avoidContent.length > 0 && (
+                  <span className="text-green-400">
+                    Skipping {avoidContent.length} already posted
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -239,5 +272,17 @@ Make the series feel cohesive and progressive. Stay 100% in character.`,
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SeriesPlannerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-zinc-400">Loading...</div>
+      }
+    >
+      <SeriesContent />
+    </Suspense>
   );
 }
