@@ -40,12 +40,13 @@ create table if not exists public.content_drafts (
   consistency_score numeric,
   flags text[] default '{}',
   posted boolean default false,
+  performance text check (performance is null or performance in ('worked', 'ok', 'flopped')),
   created_at timestamptz default now()
 );
 
 alter table public.content_drafts add column if not exists posted boolean default false;
+alter table public.content_drafts add column if not exists performance text;
 
--- Optional connected social accounts (handle-based; OAuth tokens optional later)
 create table if not exists public.connected_accounts (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid references auth.users(id) on delete cascade not null,

@@ -12,6 +12,7 @@ interface Draft {
   content: string;
   created_at: string;
   posted?: boolean;
+  performance?: string | null;
   personas?: { name: string };
 }
 
@@ -96,24 +97,42 @@ export default function DraftsPage() {
 
   const togglePosted = async (draft: Draft) => {
     const newValue = !draft.posted;
-    // Optimistic update
     setDrafts((prev) =>
       prev.map((d) => (d.id === draft.id ? { ...d, posted: newValue } : d))
     );
 
-    // Note: requires a `posted` boolean column on content_drafts.
-    // If the column doesn't exist yet, this will fail silently in UI but we try.
     const { error } = await supabase
       .from("content_drafts")
       .update({ posted: newValue })
       .eq("id", draft.id);
 
     if (error) {
-      // Revert on error
       setDrafts((prev) =>
         prev.map((d) => (d.id === draft.id ? { ...d, posted: draft.posted } : d))
       );
-      console.error("Posted flag error (you may need to add a boolean column 'posted' to content_drafts):", error);
+      console.error(error);
+    }
+  };
+
+  const setPerformance = async (draft: Draft, value: "worked" | "ok" | "flopped" | null) => {
+    const next = draft.performance === value ? null : value;
+    setDrafts((prev) =>
+      prev.map((d) => (d.id === draft.id ? { ...d, performance: next } : d))
+    );
+
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ performance: next })
+      .eq("id", draft.id);
+
+    if (error) {
+      setDrafts((prev) =>
+        prev.map((d) => (d.id === draft.id ? { ...d, performance: draft.performance } : d))
+      );
+      // Column may not exist yet
+      if (error.message?.includes("performance")) {
+        alert("Run this in Supabase SQL once:\nalter table content_drafts add column if not exists performance text;");
+      }
     }
   };
 
@@ -163,7 +182,7 @@ export default function DraftsPage() {
         (d) =>
           `=== ${(d.personas as any)?.name || "Unknown"} | ${d.type} | ${new Date(
             d.created_at
-          ).toLocaleString()} ${d.posted ? "| POSTED" : ""} ===\n${d.content}\n`
+          ).toLocaleString()} ${d.posted ? "| POSTED" : ""} ${d.performance ? "| " + d.performance : ""} ===\n${d.content}\n`
       )
       .join("\n\n");
 
@@ -174,6 +193,37 @@ export default function DraftsPage() {
     a.download = `persona-os-drafts-${new Date().toISOString().slice(0, 10)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  /** Export selected (or filtered unposted) as a scheduler-ready post pack */
+  const handleExportPack = () => {
+    const source =
+      selectedIds.size > 0 ? filtered.filter((d) => selectedIds.has(d.id)) : filtered.filter((d) => !d.posted);
+
+    if (source.length === 0) {
+      alert("Select drafts or have unposted drafts to export a pack.");
+      return;
+    }
+
+    const pack = source
+      .map((d, i) => {
+        const day = i + 1;
+        return `--- Day ${day} | ${d.type.replace("_", " ")} | ${(d.personas as any)?.name || ""} ---\n${d.content}`;
+      })
+      .join("\n\n");
+
+    const header = `Persona OS Post Pack\nGenerated ${new Date().toLocaleString()}\n${source.length} posts\nPaste into Typefully, Buffer, or Notion.\n\n`;
+    const full = header + pack;
+
+    navigator.clipboard.writeText(full);
+    const blob = new Blob([full], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `post-pack-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    alert(`Post pack copied + downloaded (${source.length} posts).`);
   };
 
   if (loading) {
@@ -194,7 +244,7 @@ export default function DraftsPage() {
             </a>
             <h1 className="text-2xl font-bold">Content Drafts</h1>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {selectedIds.size > 0 && (
               <button
                 onClick={handleBulkDelete}
@@ -204,11 +254,17 @@ export default function DraftsPage() {
               </button>
             )}
             <button
+              onClick={handleExportPack}
+              className="px-4 py-2 bg-white text-black rounded-lg text-sm font-medium hover:bg-zinc-200"
+            >
+              Export post pack
+            </button>
+            <button
               onClick={handleExport}
               disabled={filtered.length === 0}
               className="px-4 py-2 border border-zinc-700 rounded-lg text-sm hover:bg-zinc-900 disabled:opacity-40"
             >
-              Export
+              Export all
             </button>
           </div>
         </div>
@@ -275,13 +331,28 @@ export default function DraftsPage() {
                       className="mt-1"
                     />
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs uppercase tracking-wide text-zinc-500">
                           {draft.type.replace("_", " ")}
                         </span>
                         {draft.posted && (
                           <span className="text-xs px-1.5 py-0.5 bg-green-900/40 text-green-300 rounded">
                             Posted
+                          </span>
+                        )}
+                        {draft.performance === "worked" && (
+                          <span className="text-xs px-1.5 py-0.5 bg-emerald-900/40 text-emerald-300 rounded">
+                            Worked
+                          </span>
+                        )}
+                        {draft.performance === "flopped" && (
+                          <span className="text-xs px-1.5 py-0.5 bg-red-900/40 text-red-300 rounded">
+                            Flopped
+                          </span>
+                        )}
+                        {draft.performance === "ok" && (
+                          <span className="text-xs px-1.5 py-0.5 bg-zinc-700 text-zinc-300 rounded">
+                            OK
                           </span>
                         )}
                       </div>
@@ -323,6 +394,40 @@ export default function DraftsPage() {
                 <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
                   {draft.content}
                 </pre>
+
+                <div className="mt-3 pt-3 border-t border-zinc-800 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-zinc-500">How did it do?</span>
+                  <button
+                    onClick={() => setPerformance(draft, "worked")}
+                    className={`text-xs px-2 py-1 rounded border ${
+                      draft.performance === "worked"
+                        ? "border-emerald-600 bg-emerald-900/40 text-emerald-200"
+                        : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                    }`}
+                  >
+                    Worked
+                  </button>
+                  <button
+                    onClick={() => setPerformance(draft, "ok")}
+                    className={`text-xs px-2 py-1 rounded border ${
+                      draft.performance === "ok"
+                        ? "border-zinc-500 bg-zinc-700 text-zinc-200"
+                        : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                    }`}
+                  >
+                    OK
+                  </button>
+                  <button
+                    onClick={() => setPerformance(draft, "flopped")}
+                    className={`text-xs px-2 py-1 rounded border ${
+                      draft.performance === "flopped"
+                        ? "border-red-600 bg-red-900/40 text-red-200"
+                        : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                    }`}
+                  >
+                    Flopped
+                  </button>
+                </div>
 
                 {improvedContent[draft.id] && (
                   <div className="mt-4 pt-4 border-t border-zinc-800">
