@@ -378,3 +378,25 @@ Work Log:
 Stage Summary:
 - main now = remote features + our four-pillars + preview backend, all verified. Local four-pillars branch deleted (merged). round-3-sandbox still on remote (harmless, merged). backup/sandbox-main kept as safety net.
 - PAT still in chat history — rotation reminder stands.
+
+---
+Task ID: 16
+Agent: Super Z (main agent)
+Task: "Fix the agent page (UI must match other pages), make Generate actually generate (OpenRouter key provided), find other errors, harden the product."
+
+Work Log:
+- Diagnosis: no .env.local existed, so /api/copilotkit silently ran the built-in z-ai preview model; provider failures surfaced as an empty stream (dev.log showed POST /api/copilotkit 200 in 21-34ms = instant, silent empties). Also: user-facing key facts — 3 of 4 model pills (gpt-4o-mini, claude-3-5-haiku, gemini-flash-1.5) now 404 or are region-blocked on live OpenRouter (verified with 1-token calls); only meta-llama/llama-3.1-8b-instruct still worked. Sandbox region blocks OpenAI/Anthropic/Google models entirely.
+- Root causes fixed:
+  (1) .env.local created from .env.local.example + user's OpenRouter key (gitignored, verified with git check-ignore; never echoed/committed).
+  (2) /api/copilotkit: new verified allowlist (llama-3.3-70b default, deepseek-chat-v3-0324, mistral-small-24b-instruct-2501, llama-3.1-8b-instruct) + 1-token health probe with TTL cache (5min ok / 60s fail) that degrades to the built-in preview model so a dead OpenRouter can never kill the agent.
+  (3) generation.ts: OPENROUTER_DEFAULT_MODEL switched to meta-llama/llama-3.3-70b-instruct (old default openai/gpt-4o-mini burned 2 retries per call before falling back).
+  (4) Provider-hardening sweep: /api/check, /api/tag-drafts, /api/analyze-posts, /api/strengthen-persona, /api/consistency-scan converted from hand-rolled OpenRouter branches (all hardcoding the dead gpt-4o-mini) or direct ZAI calls to the unified llmComplete chain (OpenRouter->OpenAI->Anthropic->built-in, retries, JSON mode). render-image + auto-tag (vision) left on z-ai SDK.
+  (5) Agent page UI: cream/coral inline-styled theme -> the dark zinc system the other pages use (#09090b bg, zinc-900 cards, white primary buttons, zinc-400 muted); font-serif -> Inter bold; same input/select/card tokens as /drafts.
+  (6) UX + error surfacing: Enter now sends (Shift+Enter newline; was Ctrl+Enter only); appendMessage wrapped in try/catch -> red error notice (10s); GoalsPanel error paths + "select a persona" now error-kind notices; showDevConsole={false} + CSS-hidden CPK-WEB-INSPECTOR.
+- Verified: tsc clean, eslint clean; browser E2E: Enter-send -> Llama 3.3 70B generated + saveToDrafts landed (badge "via meta-llama/llama-3.3-70b-instruct"), second run on DeepSeek V3 pill (badge via deepseek/...), real stream timings 3.5s/5.8s; studio /api/generate returns provider=chain degraded=false; red-team battery 20/20 PASS (SSRF/caps/allowlist/401s/cross-user isolation all intact); dirty "<script>alert(1)</script>" tag scrubbed from drafts DB (scripts/clean-dirty-tags.ts); mobile layout stacks cleanly; inspector widget hidden.
+- Infra note: restarting the dev server from a tool shell gets reaped (cgroup) AND pkill -f "next dev" misses the next-server child -> stale server on 3000 + new server on 3001 trap. Correct restart: pkill next-server + npm exec, then (setsid nohup ... &) subshell detach; verify with ss -tlnp.
+- Committed 374f151 (main repo, 10 files) + mirror commit fd2ed5b. NOT pushed: no GitHub PAT in this session (user provided an OpenRouter key, not a GitHub token).
+
+Stage Summary:
+- Generate works for real now: OpenRouter key wired, model pills live-verified, fallback keeps the agent alive, failures are visible, UI matches the rest of the product.
+- SECURITY: the OpenRouter key was pasted in chat (again, like the earlier PATs) — user should rotate it at openrouter.ai/keys after confirming things work; push of 374f151 still needs a fresh GitHub PAT.

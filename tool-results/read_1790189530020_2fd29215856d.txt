@@ -1,0 +1,1047 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→/**
+     4→     4→ * Agent workspace — Persona OS x OpenMuse integration.
+     5→     5→ *
+     6→     6→ * Three columns:
+     7→     7→ *   left (320px)   : persona selector, content type, model pills
+     8→     8→ *   center (flex)  : prompt composer + the agent conversation
+     9→     9→ *   right (340px)  : live preview (last 3 chat messages), auto-save note,
+    10→    10→ *                    Goals & Tracking ("Content Calendar Automation") panel
+    11→    11→ *
+    12→    12→ * The active persona id rides the `x-persona-id` header into /api/copilotkit
+    13→    13→ * where it is injected server-side as system instructions; the same persona
+    14→    14→ * is readable context + the saveToDrafts / saveToVault / createGoal /
+    15→    15→ * scheduleContent actions come from hooks/usePersonaAgent.ts.
+    16→    16→ *
+    17→    17→ * Chat surface: headless useCopilotChat (from @copilotkit/react-core) instead
+    18→    18→ * of the prebuilt @copilotkit/react-ui <CopilotChat/>. Same runtime, actions,
+    19→    19→ * readables and streaming — but the render fits this page's cream/charcoal
+    20→    20→ * identity and keeps the dependency graph small enough for memory-constrained
+    21→    21→ * preview environments (the prebuilt UI pulls in Lit + markdown and can OOM
+    22→    22→ * small dev boxes). To use the stock UI instead, install @copilotkit/react-ui,
+    23→    23→ * import its styles and swap <CopilotChatPane/> for <CopilotChat/>.
+    24→    24→ */
+    25→    25→
+    26→    26→import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+    27→    27→import Link from "next/link";
+    28→    28→import { useRouter } from "next/navigation";
+    29→    29→import { CopilotKit, useCopilotChatInternal } from "@copilotkit/react-core";
+    30→    30→import { TextMessage, Role } from "@copilotkit/runtime-client-gql";
+    31→    31→import { supabase, authedFetch, getSessionToken } from "@/lib/supabase";
+    32→    32→import type { Persona } from "@/types/persona";
+    33→    33→import { usePersonaAgent, type AgentContentType } from "@/hooks/usePersonaAgent";
+    34→    34→
+    35→    35→const MODELS = [
+    36→    36→  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini", hint: "fast + cheap" },
+    37→    37→  { id: "anthropic/claude-3-5-haiku", name: "Claude Haiku", hint: "best voice" },
+    38→    38→  { id: "google/gemini-flash-1.5", name: "Gemini Flash", hint: "long context" },
+    39→    39→  { id: "meta-llama/llama-3.1-8b-instruct", name: "Llama 3.1", hint: "open" },
+    40→    40→];
+    41→    41→
+    42→    42→const CONTENT_TYPES: { id: AgentContentType; label: string; example: string }[] = [
+    43→    43→  { id: "caption", label: "Caption", example: "a post about today's session" },
+    44→    44→  { id: "script", label: "Script", example: "a 30s reel script" },
+    45→    45→  { id: "story_arc", label: "Story arc", example: "a 5-part launch arc" },
+    46→    46→  { id: "image_prompt", label: "Image prompt", example: "a cover visual" },
+    47→    47→];
+    48→    48→
+    49→    49→/**
+    50→    50→ * Prompt starter templates — one-click prompts under the composer, keyed by
+    51→    51→ * the selected content type so the chips always match what's being generated.
+    52→    52→ * Each starter is a complete, sendable brief: it exercises the persona rules
+    53→    53→ * and (where noted) the agent tools (saveToDrafts / scheduleContent).
+    54→    54→ */
+    55→    55→const STARTERS: Record<AgentContentType, string[]> = {
+    56→    56→  caption: [
+    57→    57→    "Write 3 captions about slow mornings — never mention hustle culture, end each with a soft question. Save them to drafts.",
+    58→    58→    "Turn today's behind-the-scenes moment into one caption with a single specific sensory detail.",
+    59→    59→    "Write a caption that debunks one common myth in my niche — in my voice, under 120 words.",
+    60→    60→    "Generate 5 hook-first captions for this week, each under 150 words, and save every one to drafts.",
+    61→    61→  ],
+    62→    62→  script: [
+    63→    63→    "Write a 30s reel script — hook, 3 beats, CTA — about one lesson I learned this week.",
+    64→    64→    "Turn my most recent saved draft into a 45s talking-head script with b-roll notes.",
+    65→    65→    "Write a '3 mistakes everyone makes' reel script in my voice — punchy, no cringe intro.",
+    66→    66→  ],
+    67→    67→  story_arc: [
+    68→    68→    "Plan a 5-part launch story arc: tease, tension, reveal, proof, invite. One line per part.",
+    69→    69→    "Build a 3-part carousel arc that turns one follower objection into a buying belief.",
+    70→    70→    "Draft a week-long story arc introducing my philosophy — day 1 should be pure hook.",
+    71→    71→  ],
+    72→    72→  image_prompt: [
+    73→    73→    "Write a cover visual prompt for a slow-morning post: cream tones, natural light, minimal props.",
+    74→    74→    "Give me 3 image prompts for this week's theme — consistent palette, editorial style, no text in frame.",
+    75→    75→    "Describe a signature profile visual for me in a prompt: mood, lighting, color, composition.",
+    76→    76→  ],
+    77→    77→};
+    78→    78→
+    79→    79→const ACCENT = "#E76F51";
+    80→    80→const CREAM = "#FFFBF5";
+    81→    81→const CHARCOAL = "#2B2724";
+    82→    82→
+    83→    83→interface GoalRow {
+    84→    84→  id: string;
+    85→    85→  personaId: string;
+    86→    86→  title: string;
+    87→    87→  recurrence: string;
+    88→    88→  checkUrl: string;
+    89→    89→  status: string;
+    90→    90→  nextCheckAt?: string | null;
+    91→    91→  lastCheckedAt?: string | null;
+    92→    92→  failureCount?: number;
+    93→    93→  lastStateSample?: string | null;
+    94→    94→}
+    95→    95→
+    96→    96→interface AlertRow {
+    97→    97→  id: string;
+    98→    98→  goalId: string;
+    99→    99→  title: string;
+   100→   100→  body: string;
+   101→   101→  draftId?: string | null;
+   102→   102→  readAt?: string | null;
+   103→   103→  createdAt: string;
+   104→   104→}
+   105→   105→
+   106→   106→interface Notice {
+   107→   107→  id: number;
+   108→   108→  text: string;
+   109→   109→}
+   110→   110→
+   111→   111→function hostOf(url: string): string {
+   112→   112→  try {
+   113→   113→    return new URL(url).host.replace(/^www\./, "");
+   114→   114→  } catch {
+   115→   115→    return url;
+   116→   116→  }
+   117→   117→}
+   118→   118→
+   119→   119→function timeAgo(iso?: string | null): string {
+   120→   120→  if (!iso) return "never";
+   121→   121→  const diff = Date.now() - new Date(iso).getTime();
+   122→   122→  const mins = Math.floor(diff / 60000);
+   123→   123→  if (mins < 1) return "just now";
+   124→   124→  if (mins < 60) return `${mins}m ago`;
+   125→   125→  const hours = Math.floor(mins / 60);
+   126→   126→  if (hours < 24) return `${hours}h ago`;
+   127→   127→  return `${Math.floor(hours / 24)}d ago`;
+   128→   128→}
+   129→   129→
+   130→   130→/** Human label for a FUTURE timestamp — timeAgo says "just now" for those. */
+   131→   131→function timeUntil(iso?: string | null): string {
+   132→   132→  if (!iso) return "not scheduled";
+   133→   133→  const diff = new Date(iso).getTime() - Date.now();
+   134→   134→  if (diff <= 0) return "due now";
+   135→   135→  const mins = Math.floor(diff / 60000);
+   136→   136→  if (mins < 60) return `due in ${mins}m`;
+   137→   137→  const hours = Math.floor(mins / 60);
+   138→   138→  if (hours < 24) return `due in ${hours}h`;
+   139→   139→  return `due in ${Math.floor(hours / 24)}d`;
+   140→   140→}
+   141→   141→
+   142→   142→/**
+   143→   143→ * The composer tags every prompt `[Model:…] [Type:…] [Persona:…]` so the wire
+   144→   144→ * transcript shows exactly what the agent was asked — but users should never
+   145→   145→ * see the raw tags (or the persona UUID). Strip them for display only.
+   146→   146→ */
+   147→   147→function stripMeta(text: string): string {
+   148→   148→  return text
+   149→   149→    .replace(/\s*\[(?:Model|Type|Persona):[^\]]*\]/g, "")
+   150→   150→    .trim();
+   151→   151→}
+   152→   152→
+   153→   153→/** Collapse full UUIDs to 8 chars — tool results read better in small cards. */
+   154→   154→function shortUuids(text: string): string {
+   155→   155→  return text.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, (m) => `${m.slice(0, 8)}…`);
+   156→   156→}
+   157→   157→
+   158→   158→export default function AgentPage() {
+   159→   159→  const router = useRouter();
+   160→   160→  const [authReady, setAuthReady] = useState(false);
+   161→   161→  const [personas, setPersonas] = useState<Persona[]>([]);
+   162→   162→  const [selectedId, setSelectedId] = useState<string>("");
+   163→   163→
+   164→   164→  // Auth gate + persona load from /api/personas.
+   165→   165→  useEffect(() => {
+   166→   166→    let alive = true;
+   167→   167→    (async () => {
+   168→   168→      const { data } = await supabase.auth.getUser();
+   169→   169→      if (!alive) return;
+   170→   170→      if (!data.user) {
+   171→   171→        router.push("/login");
+   172→   172→        return;
+   173→   173→      }
+   174→   174→      setAuthReady(true);
+   175→   175→      try {
+   176→   176→        const res = await authedFetch("/api/personas");
+   177→   177→        const json = (await res.json()) as { personas?: Persona[] };
+   178→   178→        const list = Array.isArray(json.personas) ? json.personas : [];
+   179→   179→        if (!alive) return;
+   180→   180→        setPersonas(list);
+   181→   181→        if (list.length > 0) setSelectedId((prev) => prev || list[0].id);
+   182→   182→      } catch {
+   183→   183→        if (alive) setPersonas([]);
+   184→   184→      }
+   185→   185→    })();
+   186→   186→    return () => {
+   187→   187→      alive = false;
+   188→   188→    };
+   189→   189→  }, [router]);
+   190→   190→
+   191→   191→  const activePersona = useMemo(
+   192→   192→    () => personas.find((p) => p.id === selectedId) || null,
+   193→   193→    [personas, selectedId]
+   194→   194→  );
+   195→   195→
+   196→   196→  // Headers callback — evaluated per runtime request by CopilotKit; a plain
+   197→   197→  // closure over state (no ref, no render-time writes).
+   198→   198→  const buildHeaders = useCallback((): Record<string, string> => {
+   199→   199→    const token = getSessionToken();
+   200→   200→    return {
+   201→   201→      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+   202→   202→      ...(selectedId ? { "x-persona-id": selectedId } : {}),
+   203→   203→    };
+   204→   204→  }, [selectedId]);
+   205→   205→
+   206→   206→  if (!authReady) {
+   207→   207→    return (
+   208→   208→      <div className="min-h-screen flex items-center justify-center text-sm" style={{ background: CREAM, color: CHARCOAL }}>
+   209→   209→        Loading agent…
+   210→   210→      </div>
+   211→   211→    );
+   212→   212→  }
+   213→   213→
+   214→   214→  return (
+   215→   215→    <CopilotKit runtimeUrl="/api/copilotkit" headers={buildHeaders}>
+   216→   216→      <AgentWorkspace
+   217→   217→        personas={personas}
+   218→   218→        selectedId={selectedId}
+   219→   219→        onSelect={setSelectedId}
+   220→   220→        activePersona={activePersona}
+   221→   221→      />
+   222→   222→    </CopilotKit>
+   223→   223→  );
+   224→   224→}
+   225→   225→
+   226→   226→// ---------------------------------------------------------------------------
+   227→   227→
+   228→   228→function AgentWorkspace({
+   229→   229→  personas,
+   230→   230→  selectedId,
+   231→   231→  onSelect,
+   232→   232→  activePersona,
+   233→   233→}: {
+   234→   234→  personas: Persona[];
+   235→   235→  selectedId: string;
+   236→   236→  onSelect: (id: string) => void;
+   237→   237→  activePersona: Persona | null;
+   238→   238→}) {
+   239→   239→  const [type, setType] = useState<AgentContentType>("caption");
+   240→   240→  const [model, setModel] = useState(MODELS[1].id);
+   241→   241→  const [prompt, setPrompt] = useState("");
+   242→   242→  const [notices, setNotices] = useState<Notice[]>([]);
+   243→   243→
+   244→   244→  const pushNotice = useCallback((text: string) => {
+   245→   245→    const id = Date.now() + Math.random();
+   246→   246→    setNotices((prev) => [...prev.slice(-2), { id, text }]);
+   247→   247→    setTimeout(() => setNotices((prev) => prev.filter((n) => n.id !== id)), 5000);
+   248→   248→  }, []);
+   249→   249→
+   250→   250→  // Bump to make the GoalsPanel re-fetch (agent created a goal).
+   251→   251→  const [goalsRefresh, setGoalsRefresh] = useState(0);
+   252→   252→
+   253→   253→  // The same internal hook the stock CopilotChat UI uses — its `messages`
+   254→   254→  // array carries the AG-UI conversation (user, assistant, tool events).
+   255→   255→  const { messages: rawMessages, appendMessage, isLoading } = useCopilotChatInternal();
+   256→   256→  const visibleMessages: unknown[] = Array.isArray(rawMessages) ? rawMessages : [];
+   257→   257→
+   258→   258→  // Agent auto-save callbacks — surfaced as honest notices.
+   259→   259→  const callbacks = useMemo(
+   260→   260→    () => ({
+   261→   261→      onDraftSaved: (draftId: string, preview: string) =>
+   262→   262→        pushNotice(`Draft saved → /dashboard/drafts · “${preview}…”`),
+   263→   263→      onAssetSaved: (_assetId: string, fileName: string) => pushNotice(`Asset saved to vault → ${fileName}`),
+   264→   264→      onGoalCreated: (_goalId: string, title: string) => {
+   265→   265→        pushNotice(`Goal created → ${title}`);
+   266→   266→        setGoalsRefresh((n) => n + 1);
+   267→   267→      },
+   268→   268→      onScheduled: (draftId: string, publishAt: string) => pushNotice(`Draft ${draftId.slice(0, 8)} scheduled for ${publishAt}`),
+   269→   269→    }),
+   270→   270→    [pushNotice]
+   271→   271→  );
+   272→   272→  usePersonaAgent(activePersona, callbacks, { type, model });
+   273→   273→
+   274→   274→  const sendPrompt = async () => {
+   275→   275→    const text = prompt.trim();
+   276→   276→    if (!text || isLoading) return;
+   277→   277→    if (!selectedId) {
+   278→   278→      pushNotice("Select a persona first — the agent refuses to guess who it is.");
+   279→   279→      return;
+   280→   280→    }
+   281→   281→    setPrompt("");
+   282→   282→    // The wire format: model + type + persona ride inside the message so the
+   283→   283→    // transcript always shows exactly what the agent was asked to do.
+   284→   284→    // A typed TextMessage instance — the runtime client calls its type-guard
+   285→   285→    // methods downstream, so plain objects break the pipeline.
+   286→   286→    const message = new TextMessage({ role: Role.User, content: `[Model:${model}] [Type:${type}] [Persona:${selectedId}] ${text}` });
+   287→   287→    await appendMessage(message as unknown as Parameters<typeof appendMessage>[0]);
+   288→   288→  };
+   289→   289→
+   290→   290→  const lastMessages = visibleMessages.slice(-3);
+   291→   291→
+   292→   292→  return (
+   293→   293→    <div
+   294→   294→      className="min-h-screen flex flex-col xl:flex-row"
+   295→   295→      style={{ background: CREAM, color: CHARCOAL }}
+   296→   296→    >
+   297→   297→      {/* Scoped CopilotKit theme: cream / charcoal / coral */}
+   298→   298→      <style>{`
+   299→   299→        .agent-chat {
+   300→   300→          --copilot-kit-background-color: ${CREAM};
+   301→   301→          --copilot-kit-primary-color: ${ACCENT};
+   302→   302→          --copilot-kit-secondary-color: #F4E8DC;
+   303→   303→          --copilot-kit-contrast-color: ${CHARCOAL};
+   304→   304→          --copilot-kit-muted-color: #8A8177;
+   305→   305→          --copilot-kit-separator-color: #EDE3D6;
+   306→   306→          --copilot-kit-input-background-color: #FFFFFF;
+   307→   307→        }
+   308→   308→      `}</style>
+   309→   309→
+   310→   310→      {/* ---------------- LEFT: 320px control sidebar ---------------- */}
+   311→   311→      <aside className="w-full xl:w-[320px] xl:min-w-[320px] border-b xl:border-b-0 xl:border-r p-5 space-y-6" style={{ borderColor: "#EDE3D6" }}>
+   312→   312→        <div>
+   313→   313→          <Link href="/dashboard" className="text-xs underline-offset-2 hover:underline" style={{ color: "#8A8177" }}>
+   314→   314→            ← Dashboard
+   315→   315→          </Link>
+   316→   316→          <h1 className="mt-2 text-2xl leading-tight font-serif" style={{ color: CHARCOAL }}>
+   317→   317→            Agent
+   318→   318→          </h1>
+   319→   319→          <p className="text-xs mt-1" style={{ color: "#8A8177" }}>
+   320→   320→            Research → generate → schedule → vault. In character, always.
+   321→   321→          </p>
+   322→   322→        </div>
+   323→   323→
+   324→   324→        {/* Persona selector */}
+   325→   325→        <div>
+   326→   326→          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+   327→   327→            Persona
+   328→   328→          </label>
+   329→   329→          {personas.length === 0 ? (
+   330→   330→            <p className="text-xs leading-relaxed" style={{ color: "#8A8177" }}>
+   331→   331→              No personas yet.{" "}
+   332→   332→              <Link href="/dashboard/personas/new" className="underline" style={{ color: ACCENT }}>
+   333→   333→                Build one first
+   334→   334→              </Link>{" "}
+   335→   335→              — the agent refuses to guess who it is.
+   336→   336→            </p>
+   337→   337→          ) : (
+   338→   338→            <select
+   339→   339→              value={selectedId}
+   340→   340→              onChange={(e) => onSelect(e.target.value)}
+   341→   341→              className="w-full rounded-lg border px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2"
+   342→   342→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   343→   343→              aria-label="Active persona"
+   344→   344→            >
+   345→   345→              {personas.map((p) => (
+   346→   346→                <option key={p.id} value={p.id}>
+   347→   347→                  {p.name}
+   348→   348→                  {p.forbidden_topics?.length ? ` · ${p.forbidden_topics.length} forbidden` : ""}
+   349→   349→                </option>
+   350→   350→              ))}
+   351→   351→            </select>
+   352→   352→          )}
+   353→   353→        </div>
+   354→   354→
+   355→   355→        {/* Content type */}
+   356→   356→        <div>
+   357→   357→          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+   358→   358→            Content type
+   359→   359→          </label>
+   360→   360→          <div className="grid grid-cols-2 gap-2">
+   361→   361→            {CONTENT_TYPES.map((t) => {
+   362→   362→              const active = type === t.id;
+   363→   363→              return (
+   364→   364→                <button
+   365→   365→                  key={t.id}
+   366→   366→                  type="button"
+   367→   367→                  onClick={() => setType(t.id)}
+   368→   368→                  className="rounded-lg border px-3 py-2 text-left text-xs transition-colors"
+   369→   369→                  style={{
+   370→   370→                    borderColor: active ? ACCENT : "#EDE3D6",
+   371→   371→                    borderWidth: active ? 2 : 1,
+   372→   372→                    background: active ? "#FFF3EC" : "#FFFFFF",
+   373→   373→                    color: CHARCOAL,
+   374→   374→                  }}
+   375→   375→                  title={t.example}
+   376→   376→                >
+   377→   377→                  <span className="block font-medium">{t.label}</span>
+   378→   378→                  <span className="block text-[10px] mt-0.5" style={{ color: "#8A8177" }}>
+   379→   379→                    {t.example}
+   380→   380→                  </span>
+   381→   381→                </button>
+   382→   382→              );
+   383→   383→            })}
+   384→   384→          </div>
+   385→   385→        </div>
+   386→   386→
+   387→   387→        {/* Model pills */}
+   388→   388→        <div>
+   389→   389→          <label className="block text-[11px] uppercase tracking-wider mb-2 font-medium" style={{ color: "#8A8177" }}>
+   390→   390→            Model
+   391→   391→          </label>
+   392→   392→          <div className="flex flex-wrap gap-2">
+   393→   393→            {MODELS.map((m) => {
+   394→   394→              const active = model === m.id;
+   395→   395→              return (
+   396→   396→                <button
+   397→   397→                  key={m.id}
+   398→   398→                  type="button"
+   399→   399→                  onClick={() => setModel(m.id)}
+   400→   400→                  className="rounded-full border px-3 py-1.5 text-xs transition-colors"
+   401→   401→                  style={{
+   402→   402→                    borderColor: active ? ACCENT : "#EDE3D6",
+   403→   403→                    borderWidth: active ? 2 : 1,
+   404→   404→                    background: active ? "#FFF3EC" : "#FFFFFF",
+   405→   405→                    color: CHARCOAL,
+   406→   406→                  }}
+   407→   407→                  title={m.hint}
+   408→   408→                >
+   409→   409→                  {m.name}
+   410→   410→                </button>
+   411→   411→              );
+   412→   412→            })}
+   413→   413→          </div>
+   414→   414→          <p className="text-[10px] mt-2" style={{ color: "#8A8177" }}>
+   415→   415→            All AI runs through OpenRouter. Selected state shows the coral ring.
+   416→   416→          </p>
+   417→   417→        </div>
+   418→   418→
+   419→   419→        <p className="text-[10px] leading-relaxed" style={{ color: "#8A8177" }}>
+   420→   420→          Prefer the classic engine?{" "}
+   421→   421→          <Link href="/dashboard/studio" className="underline" style={{ color: ACCENT }}>
+   422→   422→            Studio
+   423→   423→          </Link>{" "}
+   424→   424→          has ranked variants, thread composer and voice DNA.
+   425→   425→        </p>
+   426→   426→      </aside>
+   427→   427→
+   428→   428→      {/* ---------------- CENTER: composer + CopilotChat ---------------- */}
+   429→   429→      <main className="flex-1 flex flex-col min-w-0 xl:h-screen">
+   430→   430→        <div className="p-4 border-b" style={{ borderColor: "#EDE3D6" }}>
+   431→   431→          <div className="flex flex-col sm:flex-row gap-2">
+   432→   432→            <textarea
+   433→   433→              value={prompt}
+   434→   434→              onChange={(e) => setPrompt(e.target.value)}
+   435→   435→              onKeyDown={(e) => {
+   436→   436→                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void sendPrompt();
+   437→   437→              }}
+   438→   438→              rows={2}
+   439→   439→              placeholder={
+   440→   440→                activePersona
+   441→   441→                  ? `e.g. Research 5 viral wellness hooks this week, write ${type}s for ${activePersona.name}, schedule them, save assets to vault`
+   442→   442→                  : "Research 5 viral hooks, generate a week of captions, schedule them…"
+   443→   443→              }
+   444→   444→              className="flex-1 rounded-xl border bg-white px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2"
+   445→   445→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   446→   446→              aria-label="Prompt for the agent"
+   447→   447→            />
+   448→   448→            <button
+   449→   449→              type="button"
+   450→   450→              onClick={() => void sendPrompt()}
+   451→   451→              disabled={isLoading || !prompt.trim()}
+   452→   452→              className="rounded-xl px-5 py-3 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+   453→   453→              style={{ background: ACCENT }}
+   454→   454→            >
+   455→   455→              {isLoading ? "Working…" : "Generate"}
+   456→   456→            </button>
+   457→   457→          </div>
+   458→   458→          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+   459→   459→            <span className="text-[10px] mr-0.5" style={{ color: "#8A8177" }}>
+   460→   460→              Templates
+   461→   461→            </span>
+   462→   462→            {STARTERS[type].map((s) => (
+   463→   463→              <button
+   464→   464→                key={s}
+   465→   465→                type="button"
+   466→   466→                onClick={() => setPrompt(s)}
+   467→   467→                title={s}
+   468→   468→                className="rounded-full border bg-white px-2.5 py-1 text-[11px] transition-colors hover:bg-[#FFF3EC] max-w-[240px] truncate"
+   469→   469→                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   470→   470→              >
+   471→   471→                {s.split(" ").slice(0, 4).join(" ").replace(/,$/, "")}…
+   472→   472→              </button>
+   473→   473→            ))}
+   474→   474→          </div>
+   475→   475→          <p className="text-[10px] mt-1.5" style={{ color: "#8A8177" }}>
+   476→   476→            Sends as [Model:{model}] [Type:{type}]
+   477→   477→            {selectedId ? ` [Persona:${selectedId.slice(0, 8)}…]` : ""} · ⌘/Ctrl+Enter
+   478→   478→          </p>
+   479→   479→        </div>
+   480→   480→
+   481→   481→        <CopilotChatPane
+   482→   482→          visibleMessages={visibleMessages}
+   483→   483→          isLoading={isLoading}
+   484→   484→          type={type}
+   485→   485→          model={model}
+   486→   486→          personaName={activePersona?.name || null}
+   487→   487→        />
+   488→   488→      </main>
+   489→   489→
+   490→   490→      {/* ---------------- RIGHT: 340px preview + goals ---------------- */}
+   491→   491→      <aside className="w-full xl:w-[340px] xl:min-w-[340px] border-t xl:border-t-0 xl:border-l flex flex-col" style={{ borderColor: "#EDE3D6" }}>
+   492→   492→        <div className="p-5 border-b" style={{ borderColor: "#EDE3D6" }}>
+   493→   493→          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+   494→   494→            Live preview
+   495→   495→          </h2>
+   496→   496→          <p className="text-[10px] mb-3" style={{ color: "#8A8177" }}>
+   497→   497→            Last 3 messages · everything the agent saves lands in /dashboard/drafts and /dashboard/vault automatically.
+   498→   498→          </p>
+   499→   499→          <div className="space-y-2 max-h-64 overflow-y-auto">
+   500→   500→            {lastMessages.length === 0 && (
+   501→   501→              <p className="text-xs" style={{ color: "#8A8177" }}>
+   502→   502→                Nothing yet — send the first prompt.
+   503→   503→              </p>
+   504→   504→            )}
+   505→   505→            {lastMessages.map((m, i) => {
+   506→   506→              const raw = m as unknown as { role?: string; content?: unknown; id?: string };
+   507→   507→              const role = raw.role;
+   508→   508→              const rawContent = typeof raw.content === "string" ? raw.content : "";
+   509→   509→              const isUser = role === "user";
+   510→   510→              // Display-only: drop the wire tags, shorten ids. The full text
+   511→   511→              // stays in the transcript (center pane keeps it raw too).
+   512→   512→              const content = isUser ? stripMeta(rawContent) : shortUuids(rawContent);
+   513→   513→              return (
+   514→   514→                <div
+   515→   515→                  key={raw.id || i}
+   516→   516→                  className="rounded-lg border px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words"
+   517→   517→                  style={{
+   518→   518→                    borderColor: isUser ? "#EDE3D6" : ACCENT,
+   519→   519→                    background: isUser ? "#FFFFFF" : "#FFF3EC",
+   520→   520→                    color: CHARCOAL,
+   521→   521→                  }}
+   522→   522→                >
+   523→   523→                  <span className="block text-[9px] uppercase tracking-wider mb-1" style={{ color: isUser ? "#8A8177" : ACCENT }}>
+   524→   524→                    {isUser ? "You" : "Agent"}
+   525→   525→                  </span>
+   526→   526→                  {content.slice(0, 600) || (isUser ? "" : "(working — tool call in progress)")}
+   527→   527→                </div>
+   528→   528→              );
+   529→   529→            })}
+   530→   530→          </div>
+   531→   531→          {notices.length > 0 && (
+   532→   532→            <div className="mt-3 space-y-1.5" aria-live="polite">
+   533→   533→              {notices.map((n) => (
+   534→   534→                <div key={n.id} className="text-[11px] rounded-md px-2.5 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
+   535→   535→                  ✓ {n.text}
+   536→   536→                </div>
+   537→   537→              ))}
+   538→   538→            </div>
+   539→   539→          )}
+   540→   540→        </div>
+   541→   541→
+   542→   542→        <GoalsPanel activePersona={activePersona} personas={personas} pushNotice={pushNotice} refreshSignal={goalsRefresh} />
+   543→   543→      </aside>
+   544→   544→    </div>
+   545→   545→  );
+   546→   546→}
+   547→   547→
+   548→   548→// ---------------------------------------------------------------------------
+   549→   549→// CopilotChatPane — headless rendering of the agent conversation.
+   550→   550→// Same stream as the stock <CopilotChat/> (useCopilotChat), styled to this
+   551→   551→// page: cream background, charcoal text, coral agent accents. Text messages,
+   552→   552→// tool-call chips (saveToDrafts, saveToVault, createGoal, scheduleContent…)
+   553→   553→// and tool results are all visible so auto-saves are never a black box.
+   554→   554→// ---------------------------------------------------------------------------
+   555→   555→
+   556→   556→function CopilotChatPane({
+   557→   557→  visibleMessages,
+   558→   558→  isLoading,
+   559→   559→  type,
+   560→   560→  model,
+   561→   561→  personaName,
+   562→   562→}: {
+   563→   563→  visibleMessages: unknown[];
+   564→   564→  isLoading: boolean;
+   565→   565→  type: AgentContentType;
+   566→   566→  model: string;
+   567→   567→  personaName: string | null;
+   568→   568→}) {
+   569→   569→  const scrollRef = useRef<HTMLDivElement | null>(null);
+   570→   570→
+   571→   571→  const items = useMemo(() => {
+   572→   572→    const source = Array.isArray(visibleMessages) ? visibleMessages : [];
+   573→   573→    return source
+   574→   574→      .map((m) => m as { id?: string; type?: string; role?: string; content?: unknown; name?: string; toolCalls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>; result?: unknown })
+   575→   575→      .filter((m) => {
+   576→   576→        // AG-UI shapes (role user/assistant/tool) and legacy class shapes.
+   577→   577→        if (m.type === "ActionExecutionMessage") return true;
+   578→   578→        if (m.type === "ResultMessage") return true;
+   579→   579→        if (m.role === "user" || m.role === "assistant" || m.role === "tool") {
+   580→   580→          const hasText = typeof m.content === "string" && m.content.trim().length > 0;
+   581→   581→          return hasText || (Array.isArray(m.toolCalls) && m.toolCalls.length > 0);
+   582→   582→        }
+   583→   583→        return false;
+   584→   584→      })
+   585→   585→      .slice(-60);
+   586→   586→  }, [visibleMessages]);
+   587→   587→
+   588→   588→  useEffect(() => {
+   589→   589→    const el = scrollRef.current;
+   590→   590→    if (el) el.scrollTop = el.scrollHeight;
+   591→   591→  }, [items.length, isLoading]);
+   592→   592→
+   593→   593→  return (
+   594→   594→    <div className="flex-1 flex flex-col min-h-[50vh] xl:min-h-0">
+   595→   595→      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-3">
+   596→   596→        <div className="rounded-xl border p-4 text-xs leading-relaxed" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+   597→   597→          <p className="font-serif text-sm mb-1" style={{ color: CHARCOAL }}>
+   598→   598→            Persona Agent
+   599→   599→          </p>
+   600→   600→          <p style={{ color: "#8A8177" }}>
+   601→   601→            {personaName
+   602→   602→              ? `Generating ${type} using ${model} for ${personaName}. Ask for research, a week of posts, scheduling or vault saves — the agent acts, not just suggests.`
+   603→   603→              : "Pick a persona on the left, then ask for research, posts, scheduling or vault saves."}
+   604→   604→          </p>
+   605→   605→        </div>
+   606→   606→
+   607→   607→        {items.map((m, i) => {
+   608→   608→          const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+   609→   609→          if (toolCalls.length > 0) {
+   610→   610→            return (
+   611→   611→              <div key={m.id || i} className="flex flex-col gap-1 items-start">
+   612→   612→                {toolCalls.map((tc, j) => (
+   613→   613→                  <div key={tc.id || j} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+   614→   614→                    🔧 {tc.function?.name || "tool"}…
+   615→   615→                  </div>
+   616→   616→                ))}
+   617→   617→              </div>
+   618→   618→            );
+   619→   619→          }
+   620→   620→          if (m.type === "ActionExecutionMessage") {
+   621→   621→            return (
+   622→   622→              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5 inline-block" style={{ background: "#FFF3EC", color: ACCENT }}>
+   623→   623→                🔧 {m.name}…
+   624→   624→              </div>
+   625→   625→            );
+   626→   626→          }
+   627→   627→          if (m.type === "ResultMessage" || m.role === "tool") {
+   628→   628→            const result = String(m.result ?? (typeof m.content === "string" ? m.content : "")).slice(0, 200);
+   629→   629→            return (
+   630→   630→              <div key={m.id || i} className="text-[11px] rounded-lg px-3 py-1.5" style={{ background: "#EDF5EE", color: "#2F6B37" }}>
+   631→   631→                ✓ {result}
+   632→   632→              </div>
+   633→   633→            );
+   634→   634→          }
+   635→   635→          const isUser = m.role === "user";
+   636→   636→          // Wire tags are for the runtime + audit; humans get the clean prompt.
+   637→   637→          const content = isUser ? stripMeta(typeof m.content === "string" ? m.content : "") : shortUuids(typeof m.content === "string" ? m.content : "");
+   638→   638→          return (
+   639→   639→            <div key={m.id || i} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+   640→   640→              <div
+   641→   641→                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${isUser ? "text-white" : ""}`}
+   642→   642→                style={{
+   643→   643→                  background: isUser ? ACCENT : "#FFFFFF",
+   644→   644→                  color: isUser ? "#FFFFFF" : CHARCOAL,
+   645→   645→                  border: isUser ? "none" : "1px solid #EDE3D6",
+   646→   646→                }}
+   647→   647→              >
+   648→   648→                {content}
+   649→   649→              </div>
+   650→   650→            </div>
+   651→   651→          );
+   652→   652→        })}
+   653→   653→
+   654→   654→        {isLoading && (
+   655→   655→          <div className="text-xs px-2" style={{ color: "#8A8177" }} aria-live="polite">
+   656→   656→            Working…
+   657→   657→          </div>
+   658→   658→        )}
+   659→   659→      </div>
+   660→   660→    </div>
+   661→   661→  );
+   662→   662→}
+   663→   663→
+   664→   664→// ---------------------------------------------------------------------------
+   665→   665→// Goals & Tracking — "Content Calendar Automation" (OpenMuse adaptation)
+   666→   666→// ---------------------------------------------------------------------------
+   667→   667→
+   668→   668→function GoalsPanel({
+   669→   669→  activePersona,
+   670→   670→  personas,
+   671→   671→  pushNotice,
+   672→   672→  refreshSignal,
+   673→   673→}: {
+   674→   674→  activePersona: Persona | null;
+   675→   675→  personas: Persona[];
+   676→   676→  pushNotice: (text: string) => void;
+   677→   677→  refreshSignal: number;
+   678→   678→}) {
+   679→   679→  const [goals, setGoals] = useState<GoalRow[]>([]);
+   680→   680→  const [alerts, setAlerts] = useState<AlertRow[]>([]);
+   681→   681→  const [open, setOpen] = useState(false);
+   682→   682→  const [goalTitle, setGoalTitle] = useState("");
+   683→   683→  const [recurrence, setRecurrence] = useState<"daily" | "weekly">("weekly");
+   684→   684→  const [checkUrl, setCheckUrl] = useState("https://www.tiktok.com/tag/wellness");
+   685→   685→  const [goalPersonaId, setGoalPersonaId] = useState("");
+   686→   686→  const [saving, setSaving] = useState(false);
+   687→   687→  const [checkingId, setCheckingId] = useState<string | null>(null);
+   688→   688→  const [togglingId, setTogglingId] = useState<string | null>(null);
+   689→   689→  const [refresh, setRefresh] = useState(0);
+   690→   690→
+   691→   691→  useEffect(() => {
+   692→   692→    setGoalPersonaId((prev) => prev || activePersona?.id || "");
+   693→   693→  }, [activePersona?.id]);
+   694→   694→
+   695→   695→  useEffect(() => {
+   696→   696→    let alive = true;
+   697→   697→    (async () => {
+   698→   698→      try {
+   699→   699→        const res = await authedFetch("/api/goals");
+   700→   700→        if (!res.ok) return;
+   701→   701→        const json = (await res.json()) as { goals?: GoalRow[]; alerts?: AlertRow[] };
+   702→   702→        if (!alive) return;
+   703→   703→        setGoals(Array.isArray(json.goals) ? json.goals : []);
+   704→   704→        setAlerts(Array.isArray(json.alerts) ? json.alerts : []);
+   705→   705→      } catch {
+   706→   706→        // Panel stays empty on failure — never blocks the page.
+   707→   707→      }
+   708→   708→    })();
+   709→   709→    return () => {
+   710→   710→      alive = false;
+   711→   711→    };
+   712→   712→  }, [refresh, refreshSignal]);
+   713→   713→
+   714→   714→  const createGoal = async () => {
+   715→   715→    if (saving) return;
+   716→   716→    setSaving(true);
+   717→   717→    try {
+   718→   718→      const res = await authedFetch("/api/goals", {
+   719→   719→        method: "POST",
+   720→   720→        headers: { "Content-Type": "application/json" },
+   721→   721→        body: JSON.stringify({
+   722→   722→          goalTitle: goalTitle.trim(),
+   723→   723→          recurrence,
+   724→   724→          checkUrl: checkUrl.trim(),
+   725→   725→          persona_id: goalPersonaId || activePersona?.id,
+   726→   726→        }),
+   727→   727→      });
+   728→   728→      const json = (await res.json()) as Record<string, unknown>;
+   729→   729→      if (!res.ok) throw new Error((json.error as string) || "Failed");
+   730→   730→      setGoalTitle("");
+   731→   731→      pushNotice(`Goal created → ${goalTitle.trim()}`);
+   732→   732→      setRefresh((n) => n + 1);
+   733→   733→    } catch (err) {
+   734→   734→      pushNotice(`Goal failed: ${err instanceof Error ? err.message : "error"}`);
+   735→   735→    } finally {
+   736→   736→      setSaving(false);
+   737→   737→    }
+   738→   738→  };
+   739→   739→
+   740→   740→  const runCheck = async (goalId: string) => {
+   741→   741→    setCheckingId(goalId);
+   742→   742→    try {
+   743→   743→      const res = await authedFetch("/api/goals/check", {
+   744→   744→        method: "POST",
+   745→   745→        headers: { "Content-Type": "application/json" },
+   746→   746→        body: JSON.stringify({ goalId }),
+   747→   747→      });
+   748→   748→      const json = (await res.json()) as {
+   749→   749→        results?: Array<{ outcome?: string; detail?: string }>;
+   750→   750→      };
+   751→   751→      const first = json.results?.[0];
+   752→   752→      if (!first) pushNotice("Check ran → goal not due yet (its schedule is respected).");
+   753→   753→      else if (first.outcome === "generated") pushNotice("Check ran → page changed → auto-draft created ✓");
+   754→   754→      else if (first.outcome === "changed") pushNotice("Check ran → page changed ✓ (alert raised)");
+   755→   755→      else if (first.outcome === "baseline") pushNotice("Baseline recorded — next change will trigger.");
+   756→   756→      else if (first.outcome === "unchanged") pushNotice("Check ran → nothing new.");
+   757→   757→      else pushNotice(`Check ran → ${first.outcome || "error"}${first.detail ? ` (${first.detail})` : ""}`);
+   758→   758→      setRefresh((n) => n + 1);
+   759→   759→    } catch {
+   760→   760→      pushNotice("Check failed to run.");
+   761→   761→    } finally {
+   762→   762→      setCheckingId(null);
+   763→   763→    }
+   764→   764→  };
+   765→   765→
+   766→   766→  const removeGoal = async (goalId: string) => {
+   767→   767→    try {
+   768→   768→      await authedFetch(`/api/goals?id=${encodeURIComponent(goalId)}`, { method: "DELETE" });
+   769→   769→      setRefresh((n) => n + 1);
+   770→   770→    } catch {
+   771→   771→      pushNotice("Could not remove the goal.");
+   772→   772→    }
+   773→   773→  };
+   774→   774→
+   775→   775→  // Pause = stop the recurring checks without losing history. Resume = run
+   776→   776→  // again (the API resets the failure slate and schedules the next check now).
+   777→   777→  const toggleGoal = async (goalId: string, next: "active" | "paused") => {
+   778→   778→    setTogglingId(goalId);
+   779→   779→    try {
+   780→   780→      const res = await authedFetch("/api/goals", {
+   781→   781→        method: "PATCH",
+   782→   782→        headers: { "Content-Type": "application/json" },
+   783→   783→        body: JSON.stringify({ id: goalId, status: next }),
+   784→   784→      });
+   785→   785→      if (!res.ok) {
+   786→   786→        const json = (await res.json().catch(() => ({}))) as { error?: string };
+   787→   787→        throw new Error(json.error || "Failed");
+   788→   788→      }
+   789→   789→      pushNotice(next === "paused" ? "Goal paused — checks stop until you resume it." : "Goal resumed — next check runs now.");
+   790→   790→      setRefresh((n) => n + 1);
+   791→   791→    } catch (err) {
+   792→   792→      pushNotice(err instanceof Error ? `Could not update goal: ${err.message}` : "Could not update goal.");
+   793→   793→    } finally {
+   794→   794→      setTogglingId(null);
+   795→   795→    }
+   796→   796→  };
+   797→   797→
+   798→   798→  const unreadCount = alerts.filter((a) => !a.readAt).length;
+   799→   799→
+   800→   800→  // Opened the panel with unread alerts? Give the user a beat to see them,
+   801→   801→  // then mark them read so the badge stays meaningful.
+   802→   802→  useEffect(() => {
+   803→   803→    if (!open || unreadCount === 0) return;
+   804→   804→    const t = setTimeout(async () => {
+   805→   805→      try {
+   806→   806→        await authedFetch("/api/goals/read", {
+   807→   807→          method: "POST",
+   808→   808→          headers: { "Content-Type": "application/json" },
+   809→   809→          body: JSON.stringify({}),
+   810→   810→        });
+   811→   811→        setRefresh((n) => n + 1);
+   812→   812→      } catch {
+   813→   813→        // badge stays — honest failure beats silent loss
+   814→   814→      }
+   815→   815→    }, 2500);
+   816→   816→    return () => clearTimeout(t);
+   817→   817→  }, [open, unreadCount]);
+   818→   818→
+   819→   819→  return (
+   820→   820→    <div className="p-5 overflow-y-auto">
+   821→   821→      <button
+   822→   822→        type="button"
+   823→   823→        onClick={() => setOpen((o) => !o)}
+   824→   824→        className="w-full flex items-center justify-between text-left"
+   825→   825→        aria-expanded={open}
+   826→   826→      >
+   827→   827→        <div>
+   828→   828→          <h2 className="font-serif text-lg" style={{ color: CHARCOAL }}>
+   829→   829→            Content Calendar Automation
+   830→   830→            {unreadCount > 0 && !open && (
+   831→   831→              <span
+   832→   832→                className="ml-2 inline-flex items-center justify-center rounded-full text-[10px] font-sans px-1.5 py-0.5 align-middle"
+   833→   833→                style={{ background: ACCENT, color: "#FFFFFF" }}
+   834→   834→                title={`${unreadCount} unread alert${unreadCount === 1 ? "" : "s"}`}
+   835→   835→              >
+   836→   836→                {unreadCount}
+   837→   837→              </span>
+   838→   838→            )}
+   839→   839→          </h2>
+   840→   840→          <p className="text-[10px]" style={{ color: "#8A8177" }}>
+   841→   841→            Goals &amp; Tracking — recurring page checks that auto-generate drafts
+   842→   842→          </p>
+   843→   843→        </div>
+   844→   844→        <span className="text-xs" style={{ color: ACCENT }}>
+   845→   845→          {open ? "▲" : "▼"}
+   846→   846→        </span>
+   847→   847→      </button>
+   848→   848→
+   849→   849→      {open && (
+   850→   850→        <div className="mt-4 space-y-3">
+   851→   851→          <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+   852→   852→            <input
+   853→   853→              value={goalTitle}
+   854→   854→              onChange={(e) => setGoalTitle(e.target.value)}
+   855→   855→              placeholder="Goal title — e.g. Weekly viral check for MIRA"
+   856→   856→              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
+   857→   857→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   858→   858→            />
+   859→   859→            <div className="flex gap-2">
+   860→   860→              <select
+   861→   861→                value={recurrence}
+   862→   862→                onChange={(e) => setRecurrence(e.target.value as "daily" | "weekly")}
+   863→   863→                className="rounded-lg border px-2 py-2 text-xs bg-white"
+   864→   864→                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   865→   865→                aria-label="Recurrence"
+   866→   866→              >
+   867→   867→                <option value="weekly">Weekly</option>
+   868→   868→                <option value="daily">Daily</option>
+   869→   869→              </select>
+   870→   870→              <select
+   871→   871→                value={goalPersonaId}
+   872→   872→                onChange={(e) => setGoalPersonaId(e.target.value)}
+   873→   873→                className="flex-1 rounded-lg border px-2 py-2 text-xs bg-white"
+   874→   874→                style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   875→   875→                aria-label="Goal persona"
+   876→   876→              >
+   877→   877→                <option value="">Persona…</option>
+   878→   878→                {personas.map((p) => (
+   879→   879→                  <option key={p.id} value={p.id}>
+   880→   880→                    {p.name}
+   881→   881→                    {p.id === activePersona?.id ? " (active)" : ""}
+   882→   882→                  </option>
+   883→   883→                ))}
+   884→   884→              </select>
+   885→   885→            </div>
+   886→   886→            <input
+   887→   887→              value={checkUrl}
+   888→   888→              onChange={(e) => setCheckUrl(e.target.value)}
+   889→   889→              placeholder="checkUrl — e.g. https://www.tiktok.com/tag/wellness"
+   890→   890→              className="w-full rounded-lg border px-3 py-2 text-xs bg-white focus:outline-none"
+   891→   891→              style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   892→   892→            />
+   893→   893→            <button
+   894→   894→              type="button"
+   895→   895→              onClick={() => void createGoal()}
+   896→   896→              disabled={saving || !goalTitle.trim() || !checkUrl.trim() || !goalPersonaId}
+   897→   897→              className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+   898→   898→              style={{ background: ACCENT }}
+   899→   899→            >
+   900→   900→              {saving ? "Creating…" : "Create goal"}
+   901→   901→            </button>
+   902→   902→            <p className="text-[10px]" style={{ color: "#8A8177" }}>
+   903→   903→              The worker reads the page (browser worker when configured), dedupes alerts per change, and auto-writes one
+   904→   904→              in-character caption per detected change.
+   905→   905→            </p>
+   906→   906→          </div>
+   907→   907→
+   908→   908→          {goals.length > 0 && (
+   909→   909→            <div className="space-y-2">
+   910→   910→              {goals.map((g) => {
+   911→   911→                const goalAlerts = alerts.filter((a) => a.goalId === g.id);
+   912→   912→                return (
+   913→   913→                <div key={g.id} className="rounded-xl border p-3" style={{ borderColor: "#EDE3D6", background: "#FFFFFF" }}>
+   914→   914→                  <div className="flex items-start justify-between gap-2">
+   915→   915→                    <div className="min-w-0">
+   916→   916→                      <p className="text-xs font-medium truncate" style={{ color: CHARCOAL }}>
+   917→   917→                        {g.title}
+   918→   918→                      </p>
+   919→   919→                      <p className="text-[10px] mt-0.5 truncate" style={{ color: "#8A8177" }} title={g.checkUrl}>
+   920→   920→                        {g.recurrence} · {hostOf(g.checkUrl) || "invalid url"} · checked {timeAgo(g.lastCheckedAt)}
+   921→   921→                        {g.failureCount ? ` · ${g.failureCount} failures` : ""}
+   922→   922→                      </p>
+   923→   923→                      <p className="text-[10px] mt-0.5" style={{ color: g.status === "active" ? "#2F6B37" : "#B3261E" }}>
+   924→   924→                        {g.status} · {timeUntil(g.nextCheckAt)}
+   925→   925→                      </p>
+   926→   926→                      {g.lastStateSample && (
+   927→   927→                        <p className="text-[10px] mt-1 leading-snug" style={{ color: "#8A8177" }}>
+   928→   928→                          Last snapshot: “{g.lastStateSample.slice(0, 80)}{g.lastStateSample.length > 80 ? "..." : ""}”
+   929→   929→                        </p>
+   930→   930→                      )}
+   931→   931→                    </div>
+   932→   932→                    <div className="flex flex-col gap-1 shrink-0">
+   933→   933→                      <button
+   934→   934→                        type="button"
+   935→   935→                        onClick={() => void runCheck(g.id)}
+   936→   936→                        disabled={checkingId === g.id || g.status !== "active"}
+   937→   937→                        className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
+   938→   938→                        style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   939→   939→                        title={g.status !== "active" ? "Resume the goal to run checks" : "Check now"}
+   940→   940→                      >
+   941→   941→                        {checkingId === g.id ? "…" : "Run check"}
+   942→   942→                      </button>
+   943→   943→                      <button
+   944→   944→                        type="button"
+   945→   945→                        onClick={() => void toggleGoal(g.id, g.status === "active" ? "paused" : "active")}
+   946→   946→                        disabled={togglingId === g.id}
+   947→   947→                        className="text-[10px] rounded-md border px-2 py-1 disabled:opacity-40"
+   948→   948→                        style={{ borderColor: "#EDE3D6", color: CHARCOAL }}
+   949→   949→                      >
+   950→   950→                        {togglingId === g.id ? "…" : g.status === "active" ? "Pause" : "Resume"}
+   951→   951→                      </button>
+   952→   952→                      <button
+   953→   953→                        type="button"
+   954→   954→                        onClick={() => void removeGoal(g.id)}
+   955→   955→                        className="text-[10px] rounded-md px-2 py-1"
+   956→   956→                        style={{ color: "#B3261E" }}
+   957→   957→                      >
+   958→   958→                        Remove
+   959→   959→                      </button>
+   960→   960→                    </div>
+   961→   961→                  </div>
+   962→   962→                  {goalAlerts.length > 0 && (
+   963→   963→                    <div className="mt-2 pt-2 border-t space-y-1" style={{ borderColor: "#F4E8DC" }}>
+   964→   964→                      {goalAlerts.slice(0, 3).map((a) => (
+   965→   965→                        <div key={a.id} className="text-[10px] leading-snug" style={{ color: "#8A8177" }}>
+   966→   966→                          <span style={{ color: ACCENT }}>⚡ {timeAgo(a.createdAt)}</span> — {a.body}
+   967→   967→                          {a.draftId && (
+   968→   968→                            <Link
+   969→   969→                              href={`/dashboard/drafts?q=${encodeURIComponent(g.title.slice(0, 30))}`}
+   970→   970→                              className="underline ml-1"
+   971→   971→                              style={{ color: ACCENT }}
+   972→   972→                            >
+   973→   973→                              open the auto-draft →
+   974→   974→                            </Link>
+   975→   975→                          )}
+   976→   976→                        </div>
+   977→   977→                      ))}
+   978→   978→                    </div>
+   979→   979→                  )}
+   980→   980→                </div>
+   981→   981→                );
+   982→   982→              })}
+   983→   983→            </div>
+   984→   984→          )}
+   985→   985→
+   986→   986→          {/* ---- Goal history: the full alert timeline across all goals ---- */}
+   987→   987→          {alerts.length > 0 && (
+   988→   988→            <div className="space-y-1.5">
+   989→   989→              <p className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "#8A8177" }}>
+   990→   990→                Goal history — {alerts.length} alert{alerts.length === 1 ? "" : "s"}, newest first
+   991→   991→              </p>
+   992→   992→              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+   993→   993→                {alerts.slice(0, 15).map((a) => {
+   994→   994→                  const goal = goals.find((g) => g.id === a.goalId);
+   995→   995→                  const unread = !a.readAt;
+   996→   996→                  return (
+   997→   997→                    <div
+   998→   998→                      key={a.id}
+   999→   999→                      className="rounded-lg px-2.5 py-1.5 text-[11px]"
+  1000→  1000→                      style={{
+  1001→  1001→                        background: "#FFF3EC",
+  1002→  1002→                        borderLeft: unread ? `3px solid ${ACCENT}` : "3px solid transparent",
+  1003→  1003→                        opacity: unread ? 1 : 0.72,
+  1004→  1004→                      }}
+  1005→  1005→                    >
+  1006→  1006→                      <div className="flex items-baseline justify-between gap-2">
+  1007→  1007→                        <span className="font-medium truncate" style={{ color: CHARCOAL }}>
+  1008→  1008→                          {unread && <span style={{ color: ACCENT }}>● </span>}{a.title}
+  1009→  1009→                        </span>
+  1010→  1010→                        <span className="shrink-0 text-[9px]" style={{ color: "#8A8177" }}>
+  1011→  1011→                          {timeAgo(a.createdAt)}
+  1012→  1012→                        </span>
+  1013→  1013→                      </div>
+  1014→  1014→                      <span className="block" style={{ color: "#8A8177" }}>
+  1015→  1015→                        {a.body}
+  1016→  1016→                      </span>
+  1017→  1017→                      <span className="block mt-0.5 text-[9px] uppercase tracking-wider" style={{ color: "#B08968" }}>
+  1018→  1018→                        {goal ? `${goal.recurrence} · ${hostOf(goal.checkUrl)}` : "goal removed"}
+  1019→  1019→                      </span>
+  1020→  1020→                      {a.draftId && (
+  1021→  1021→                        <Link
+  1022→  1022→                          href="/dashboard/drafts"
+  1023→  1023→                          className="underline block mt-0.5"
+  1024→  1024→                          style={{ color: ACCENT }}
+  1025→  1025→                        >
+  1026→  1026→                          Open the auto-draft →
+  1027→  1027→                        </Link>
+  1028→  1028→                      )}
+  1029→  1029→                    </div>
+  1030→  1030→                  );
+  1031→  1031→                })}
+  1032→  1032→              </div>
+  1033→  1033→            </div>
+  1034→  1034→          )}
+  1035→  1035→
+  1036→  1036→          {open && goals.length === 0 && alerts.length === 0 && (
+  1037→  1037→            <p className="text-[11px]" style={{ color: "#8A8177" }}>
+  1038→  1038→              No goals yet. Create one above — the first check runs immediately to record a baseline,
+  1039→  1039→              then the schedule takes over. Every detected change lands here with the draft it produced.
+  1040→  1040→            </p>
+  1041→  1041→          )}
+  1042→  1042→        </div>
+  1043→  1043→      )}
+  1044→  1044→    </div>
+  1045→  1045→  );
+  1046→  1046→}
+  1047→  1047→
