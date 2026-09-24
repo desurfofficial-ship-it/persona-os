@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, authedFetch } from "@/lib/supabase";
+import { nextSevenDays } from "@/lib/calendar";
 import type { Persona } from "@/types/persona";
 
 interface Draft {
@@ -13,6 +14,7 @@ interface Draft {
   created_at: string;
   posted?: boolean;
   performance?: string | null;
+  planned_for?: string | null;
   tags?: unknown;
   personas?: { name: string };
 }
@@ -31,6 +33,7 @@ export default function DraftsPage() {
   const [search, setSearch] = useState("");
   const [filterPersona, setFilterPersona] = useState("all");
   const [filterPosted, setFilterPosted] = useState("all");
+  const [filterPlanned, setFilterPlanned] = useState("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [improvingId, setImprovingId] = useState<string | null>(null);
   const [improvedContent, setImprovedContent] = useState<Record<string, string>>({});
@@ -75,7 +78,13 @@ export default function DraftsPage() {
       (filterPosted === "posted" && d.posted) ||
       (filterPosted === "unposted" && !d.posted);
 
-    return matchesSearch && matchesPersona && matchesPosted;
+    const hasPlan = Boolean(d.planned_for);
+    const matchesPlanned =
+      filterPlanned === "all" ||
+      (filterPlanned === "planned" && hasPlan) ||
+      (filterPlanned === "unplanned" && !hasPlan);
+
+    return matchesSearch && matchesPersona && matchesPosted && matchesPlanned;
   });
 
   const toggleSelect = (id: string) => {
@@ -177,6 +186,28 @@ export default function DraftsPage() {
             }
           }
         }
+      }
+    }
+  };
+
+
+  const setPlannedFor = async (draft: Draft, key: string | null) => {
+    const iso = key ? new Date(`${key}T12:00:00`).toISOString() : null;
+    setDrafts((prev) =>
+      prev.map((d) => (d.id === draft.id ? { ...d, planned_for: iso } : d))
+    );
+    const { error } = await supabase
+      .from("content_drafts")
+      .update({ planned_for: iso })
+      .eq("id", draft.id);
+    if (error) {
+      setDrafts((prev) =>
+        prev.map((d) => (d.id === draft.id ? { ...d, planned_for: draft.planned_for } : d))
+      );
+      if (error.message?.includes("planned_for")) {
+        alert(
+          "Run this in Supabase SQL once:\nalter table content_drafts add column if not exists planned_for timestamptz;"
+        );
       }
     }
   };
@@ -363,6 +394,15 @@ export default function DraftsPage() {
             <option value="posted">Posted</option>
             <option value="unposted">Not Posted</option>
           </select>
+            <select
+              value={filterPlanned}
+              onChange={(e) => setFilterPlanned(e.target.value)}
+              className="px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-sm"
+            >
+              <option value="all">All plans</option>
+              <option value="planned">Planned</option>
+              <option value="unplanned">Unplanned</option>
+            </select>
         </div>
 
         {filtered.length === 0 ? (
@@ -419,6 +459,16 @@ export default function DraftsPage() {
                         {draft.performance === "ok" && (
                           <span className="text-xs px-1.5 py-0.5 bg-zinc-700 text-zinc-300 rounded">
                             OK
+                          </span>
+                        )}
+                        {draft.planned_for && !draft.posted && (
+                          <span className="text-xs px-1.5 py-0.5 bg-amber-900/40 text-amber-200 rounded">
+                            Planned{" "}
+                            {new Date(draft.planned_for).toLocaleDateString("en-US", {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                            })}
                           </span>
                         )}
                       </div>
@@ -519,6 +569,28 @@ export default function DraftsPage() {
                       + gold voice
                     </span>
                   )}
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-zinc-500">Plan for</span>
+                  <select
+                    value={
+                      draft.planned_for
+                        ? new Date(draft.planned_for).toISOString().slice(0, 10)
+                        : ""
+                    }
+                    onChange={(e) =>
+                      setPlannedFor(draft, e.target.value ? e.target.value : null)
+                    }
+                    className="text-xs bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-300"
+                  >
+                    <option value="">Not planned</option>
+                    {nextSevenDays().map((d) => (
+                      <option key={d.key} value={d.key}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {improvedContent[draft.id] && (
