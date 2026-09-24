@@ -155,6 +155,19 @@ OUTPUT FORMAT:
 - Plain text only -- no markdown headers.
 `;
 
+
+/** Eden / Dan Koe packaging insight: most posts die in the packaging, not the idea. */
+export const PACKAGING_CRAFT = `
+PACKAGING CRAFT (steal the structure, not the words):
+- Most posts fail in packaging: same idea + weak first line = death in the feed.
+- When given a WINNER post: extract the STRUCTURE (hook family, tension shape, payoff timing), never copy phrases.
+- Produce a NEW angle with a DIFFERENT hook family than the winner.
+- Angle menu (pick one): opposite take | next-step | cost/mistake | identity callout | specific number | list tease | confession micro-story.
+- Keep the underlying insight territory; change the entry door.
+- First line must survive the platform fold alone.
+- Short form: say the essence once. Do not re-summarize the same point three ways (AI slop tell).
+`;
+
 /** Platform-tuned length and pacing notes injected into type tasks. */
 export const PLATFORM_SCRIPT_NOTES = `
 PLATFORM PACING (apply when platform is known):

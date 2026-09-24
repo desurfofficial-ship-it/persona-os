@@ -18,7 +18,7 @@
 import ZAI from "z-ai-web-dev-sdk";
 import type { PlatformId } from "./platforms";
 import { PLATFORMS } from "./platforms";
-import { HOOK_FAMILIES, CAPTION_CRAFT, SCRIPT_CRAFT, IMAGE_PROMPT_CRAFT, SERIES_CRAFT } from "./viralPlaybook";
+import { HOOK_FAMILIES, CAPTION_CRAFT, SCRIPT_CRAFT, IMAGE_PROMPT_CRAFT, SERIES_CRAFT, PACKAGING_CRAFT } from "./viralPlaybook";
 import {
   extractVoiceFingerprint,
   renderFingerprintBlock,
@@ -306,6 +306,14 @@ const CAPTION_STRATEGIES: VariantStrategy[] = [
     directive:
       "STRUCTURE: open by filtering the right audience ('If you [specific behavior/trait]…'). Then one sharp insight or framework. Close with a reply-prompt that only the right people answer. Concentrates quality engagement.",
   },
+
+  {
+    id: "packaging-remix",
+    label: "Packaging remix",
+    temperature: 0.82,
+    directive:
+      "STRUCTURE: take the topic and force a packaging-first rewrite. Lead with a fold-proof first line using a hook family the persona has not overused. Body: one concrete proof beat only. Close with one soft CTA. Most posts die in packaging — make the entry door the product.",
+  },
 ];
 
 const SCRIPT_STRATEGIES: VariantStrategy[] = [
@@ -520,16 +528,20 @@ function moreLikeBlock(ml: { original: string; avoid?: string[] }): string {
     .join("\n");
   return `
 
-MORE LIKE THIS — the user picked the post below as one that WORKS. Write a NEW post with the same underlying idea and energy, but NOT a copy:
+MORE LIKE THIS — packaging pass (Eden-style): the user marked the post below as a WINNER. Steal STRUCTURE, not words.
+
+${PACKAGING_CRAFT}
 
 WINNER POST:
 ${ml.original.replace(/\s+/g, " ").slice(0, 600)}
 
 VARIATION RULES:
-- Different opening words and a different hook architecture than the winner.
-- Same topic territory, NEW angle: next step, opposite take, deeper layer, a specific story, or a surprising consequence.
-- It must stand alone — a reader who never saw the winner still gets the full value.
-- Do NOT reuse any sentence or phrase from the winner${avoid ? ` or from these variations that already exist:\n${avoid}` : ""}.`;
+- Extract the winner's hook family and tension shape, then switch to a DIFFERENT family.
+- Same insight territory; new entry door (opposite / next-step / cost / identity callout / specific number / confession).
+- First line must work alone before the fold.
+- Standalone value — a cold reader never needs the winner.
+- Do NOT reuse any sentence or distinctive phrase from the winner${avoid ? ` or from these already-tried variations:\n${avoid}` : ""}.
+- Say the essence once. No triple re-summary.`;
 }
 
 function platformBlock(platform: PlatformId, type: GenType): string {

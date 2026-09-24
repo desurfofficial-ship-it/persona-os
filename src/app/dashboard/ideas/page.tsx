@@ -105,6 +105,8 @@ For each idea provide:
 - Suggested format (caption / short video / carousel / thread)
 
 Make the ideas specific, timely-feeling, and true to the persona's voice and lifestyle pillars. Avoid generic advice.
+For each idea, also suggest ONE packaging angle in parentheses, e.g. (contrarian hook) / (specific number) / (mistake warning) / (confession) / (list tease).
+Ideas should be distinct entry doors into the same lifestyle world — not the same tip restated.
 ${workedContent.length > 0 ? "Prioritize angles similar to what has already WORKED for this persona." : ""}
 ${floppedContent.length > 0 ? "Do not suggest topics similar to what FLOPPED." : ""}`,
           model: "meta-llama/llama-3.3-70b-instruct",
