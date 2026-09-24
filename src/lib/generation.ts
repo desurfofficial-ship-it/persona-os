@@ -469,6 +469,7 @@ QUALITY BAR (non-negotiable — fail this and the draft is garbage):
 - CTA BAN: never "visit my website", "link in bio", "download my checklist/guide", "sign up for my newsletter", "book a consultation", "DM me for the guide", "comment GUIDE".
 - ENGAGEMENT BAIT BAN: no "what do you think?", "comment below", "follow for more", "tag someone who".
 - LIFESTYLE SLOP BAN: soft life, main character energy, "woke up like this" as flex, empty aesthetic essays with no object/time/cost.
+- Ban hollow "art of X" / "the art of" openers unless tied to a concrete object, time, or cost.
 - Do not echo the gold samples' exact openers. Same energy, new entry door. Different first line every time.
 - Prefer no CTA. If one exists, soft and human only (save / try once / reply with a number).
 `;
