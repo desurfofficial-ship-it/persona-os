@@ -443,13 +443,21 @@ export function strategiesFor(type: GenType): VariantStrategy[] {
 }
 
 const ANTI_SLOP = `
-QUALITY BAR (non-negotiable):
-- NEVER wrap the content in meta commentary. No "Here's your...", no "Sure!", no "Option 1:", no "Hope this helps". Output ONLY the finished content itself.
-- NEVER use: game-changer, delve, unlock the power, level up, take it to the next level, revolutionize, seamlessly, in the realm of, navigating the landscape, a testament to, paradigm shift, synergy, elevate your, buckle up, let's dive in, hustle hard, crushing it, at the end of the day, journey (as metaphor), elevate, "not gonna lie", "let that sink in", "and that's on period".
-- No emoji unless the Voice DNA says the person uses emoji.
-- No invented statistics, no fake quotes, no URLs, no "link in bio" unless the persona truly uses that phrase.
-- Concrete > abstract: specific moments, numbers, names of things they'd actually say.
-- Viral ≠ generic: specificity and persona voice beat template energy every time.`;
+QUALITY BAR (non-negotiable — fail this and the draft is garbage):
+- NEVER wrap content in meta commentary. No "Here's your...", no "Sure!", no "Option 1:", no "Hope this helps". Output ONLY the finished content.
+- NEVER use: game-changer, delve, unlock the power, level up, next level, revolutionize, seamlessly, in the realm of, navigating the landscape, a testament to, paradigm shift, synergy, elevate your, buckle up, let's dive in, hustle hard, crushing it, at the end of the day, journey (as metaphor), "not gonna lie", "let that sink in", robust, seamless, comprehensive, holistic, pivotal, cutting-edge, groundbreaking, transformative, meticulously, plethora, myriad, foster, harness, "aligns with", "plays a crucial role", "is essential for", "ensuring that", "highlights the".
+- Ban the TED-talk frame: "It's not just X — it's Y", "That's not X. That's Y", "not only… but also", "less a hammer, more a scalpel", "rather than simply".
+- Ban essay glue: Furthermore, Moreover, In conclusion, "Here's the thing", "Let me be clear", "The truth is", "And that matters", "That's the part everyone misses".
+- No emoji unless Voice DNA shows this person uses emoji.
+- No invented statistics, fake quotes, URLs, or "link in bio" unless the persona truly uses that phrase.
+- Concrete > abstract: specific moments, objects, numbers, names of things they'd actually say.
+- HUMAN CADENCE (Dan Koe / anti-slop):
+  - Say the essence first. If short-form, stop there. Do not re-summarize the same point three ways.
+  - Burstiness: mix short punches with one longer line. Flat metronome sentences read as AI.
+  - One idea. One ask. Prefer lived detail over motivational abstraction.
+  - Write like a person typing on their phone, not a brand desk or a helpful assistant.
+- Viral ≠ generic: specificity and persona voice beat template energy every time.
+`;
 
 function personaBlock(persona: PersonaInput): string {
   return `PERSONA NAME: ${persona.name}

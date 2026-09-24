@@ -109,7 +109,14 @@ RULES:
 - One flowing paragraph a Midjourney/Flux user can paste as-is.
 - End every prompt with an explicit AVOID: list.
 - Leave negative space when the post needs text overlay room.
-- For consistency across a campaign: same identity tokens, same lighting vocabulary, same palette, same lens language.`;
+- For consistency across a campaign: same identity tokens, same lighting vocabulary, same palette, same lens language.
+
+IDENTITY LOCK (reference-faithful, personal-brand series):
+- Lead with: "Person with features faithful to the reference / persona visual style" when a face is involved.
+- Preserve: facial identity, skin tone, apparent age, body proportions — never "beautify" into a different person.
+- Prefer found-memory / documentary / editorial pause over staged glamour.
+- Phone-camera or film grain OK when it matches persona; natural imperfections beat plastic perfection.
+- AVOID: fantasy neon, carnival costume energy, plastic/waxy skin, stock-photo smile, generic dance-floor tropes, AI artifacts, changed facial features.`
 
 
 

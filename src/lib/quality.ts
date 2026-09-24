@@ -114,6 +114,42 @@ export const CLICHE_RULES: ClicheRule[] = [
   { pattern: /\bso the other day\b/gi, note: "so the other day" },
   { pattern: /\bwithout further ado\b/gi, note: "without further ado" },
   { pattern: /\bin today'?s video\b/gi, note: "in today's video" },
+
+  // 2026 AI-tell vocabulary (Pangram / Graphite / Forbes tells research)
+  { pattern: /\bensuring that\b/gi, note: "ensuring that" },
+  { pattern: /\bensures that\b/gi, note: "ensures that" },
+  { pattern: /\bhighlights the\b/gi, note: "highlights the" },
+  { pattern: /\bplays a (crucial|critical|important|key) role\b/gi, note: "plays a crucial role" },
+  { pattern: /\bis essential for\b/gi, note: "is essential for" },
+  { pattern: /\brobust\b/gi, note: "robust" },
+  { pattern: /\bseamless\b/gi, note: "seamless" },
+  { pattern: /\bcomprehensive\b/gi, note: "comprehensive" },
+  { pattern: /\bholistic\b/gi, note: "holistic" },
+  { pattern: /\bmultifaceted\b/gi, note: "multifaceted" },
+  { pattern: /\bpivotal\b/gi, note: "pivotal" },
+  { pattern: /\bcutting-?edge\b/gi, note: "cutting-edge" },
+  { pattern: /\bgroundbreaking\b/gi, note: "groundbreaking" },
+  { pattern: /\btransformative\b/gi, note: "transformative" },
+  { pattern: /\bunderscores?\b/gi, note: "underscores" },
+  { pattern: /\bshowcas(e|es|ing)\b/gi, note: "showcase" },
+  { pattern: /\bmeticulously\b/gi, note: "meticulously" },
+  { pattern: /\bintricate\b/gi, note: "intricate" },
+  { pattern: /\bplethora\b/gi, note: "plethora" },
+  { pattern: /\bmyriad\b/gi, note: "myriad" },
+  { pattern: /\bfoster(ing)?\b/gi, note: "foster" },
+  { pattern: /\bharness(ing)?\b/gi, note: "harness" },
+  { pattern: /\baligns (well )?with\b/gi, note: "aligns with" },
+  { pattern: /\bin the landscape of\b/gi, note: "in the landscape of" },
+  { pattern: /\bever-?(evolving|changing)\b/gi, note: "ever-evolving" },
+  { pattern: /\bhere'?s the thing\b/gi, note: "here's the thing" },
+  { pattern: /\blet me be clear\b/gi, note: "let me be clear" },
+  { pattern: /\bthe truth is[,:]\b/gi, note: "the truth is" },
+  { pattern: /\band that matters\.?$/gim, note: "and that matters" },
+  { pattern: /\bthat'?s the (part|thing) (everyone|most people) miss/gi, note: "that's the part everyone misses" },
+  { pattern: /\bwhich is exactly the point\b/gi, note: "which is exactly the point" },
+  { pattern: /\bin conclusion[,:]/gi, note: "in conclusion" },
+  { pattern: /\bfurthermore[,:]/gi, note: "furthermore" },
+  { pattern: /\bmoreover[,:]/gi, note: "moreover" },
 ];
 
 export interface ClicheScan {
@@ -225,6 +261,54 @@ export function platformCheck(text: string, platform: PlatformId): PlatformFit {
   };
 }
 
+
+/* ------------------------ structural AI cadence (2026) --------------------- */
+
+/** Patterns that read as machine cadence even without banned words. */
+const STRUCTURAL_SLOP: { pattern: RegExp; note: string }[] = [
+  // "It's not just X — it's Y" / "This isn't about X. It's about Y."
+  {
+    pattern: /\b(?:it'?s|this is) not (?:just |only |merely |simply )?.{3,60}?\b(?:it'?s|it is) (?:about |a )/gi,
+    note: "not-just-X-its-Y frame",
+  },
+  {
+    pattern: /\bthat'?s not .{5,40}\.\s*that'?s /gi,
+    note: "that's-not-X-that's-Y frame",
+  },
+  {
+    pattern: /\brather than (?:simply |merely |just |relying )/gi,
+    note: "rather-than hedge",
+  },
+  {
+    pattern: /\bless (?:like )?a .{3,30},?\s*more (?:like )?a /gi,
+    note: "less-a-X-more-a-Y metaphor",
+  },
+  {
+    pattern: /\bnot only .{5,40}\bbut also\b/gi,
+    note: "not-only-but-also",
+  },
+];
+
+export function detectStructuralSlop(text: string): string[] {
+  const hits: string[] = [];
+  for (const s of STRUCTURAL_SLOP) {
+    if (s.pattern.test(text)) hits.push(s.note);
+    s.pattern.lastIndex = 0;
+  }
+  // Em-dash density in short posts: >2 em/en dashes in <180 chars is a cluster signal
+  const dashCount = (text.match(/[—–]/g) || []).length;
+  if (text.length < 220 && dashCount >= 3) hits.push("em-dash density");
+  // Symmetric beige bullets: 4+ lines starting the same way
+  const lines = text.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const bulletish = lines.filter((l) => /^[-•*✅🚀💡]/.test(l) || /^\d+[\.)]/.test(l));
+  if (bulletish.length >= 4) {
+    const starts = bulletish.map((l) => l.replace(/^[-•*\d.)\s]+/, "").slice(0, 12).toLowerCase());
+    const uniq = new Set(starts);
+    if (uniq.size <= 2) hits.push("beige bullet cluster");
+  }
+  return hits;
+}
+
 /* ------------------------------ composite gate ----------------------------- */
 
 export interface QualityReport {
@@ -297,9 +381,11 @@ export function qualityGate(
       }
     : platformCheck(text, opts.platform);
 
+  const structural = detectStructuralSlop(text);
   const flags: string[] = [];
   for (const t of aiTells) flags.push(`ai-tell:${t}`);
   for (const c of scan.removed) flags.push(`cliche:${c}`);
+  for (const s of structural) flags.push(`slop:${s}`);
   for (const f of forbidden) flags.push(`forbidden:${f}`);
   if (!fit.hashtagsOkay) flags.push(`hashtags:${fit.hashtagCount}>max`);
   if (!fit.fits && !skipCharLimit) flags.push(`over-limit:${fit.overBy}`);
