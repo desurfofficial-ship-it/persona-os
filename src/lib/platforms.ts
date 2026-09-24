@@ -2,9 +2,8 @@
  * Persona OS — Engine v2
  * Platform specs: hard limits, fold positions, and native formatting rules.
  *
- * Every generated draft is checked against these specs before it reaches
- * the user, so "does this fit where I'm posting?" is answered before the
- * user ever has to ask.
+ * Fold numbers and craft notes reflect 2025–2026 feed behavior research:
+ * first-line survival, hashtag dilution, and platform-native tone.
  */
 
 export type PlatformId = "x" | "linkedin" | "instagram" | "threads";
@@ -35,12 +34,13 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     limit: 280,
     fold: 280,
     promptHint:
-      "X rewards one sharp idea per post. Front-load the hook in the first 70 characters. Short lines. No hashtag spam — at most 1, and only if it earns its place. Links kill reach: never invent URLs.",
+      "X rewards density and opinion. One sharp idea. Front-load the hook in the first ~70 characters. Punchy lines. At most 1 hashtag if it earns its place. Links often hurt reach — never invent URLs. Threads (1/ 2/) only when the idea truly needs space.",
     formatRules: [
-      "Hook in the first line — no warm-up sentences",
-      "Line breaks between each idea; one idea per line",
-      "If the content exceeds 280 characters, structure it as a numbered thread (1/, 2/, …) with each post under 280 characters",
-      "End with a punchline or a clear takeaway, not a summary",
+      "Hook in the first line — no warm-up",
+      "One idea per line; line breaks between beats",
+      "If over 280 chars, numbered thread (1/, 2/, …) each under 280",
+      "End on a takeaway or sharp close, not a summary",
+      "Contrarian, specific-number, and curiosity-gap hooks perform best",
     ],
     hashtags: { max: 1, placement: "inline" },
     aspectRatios: ["16:9", "1:1"],
@@ -52,12 +52,12 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     limit: 3000,
     fold: 210,
     promptHint:
-      "LinkedIn truncates after ~210 characters, so the first two lines decide everything. Use short paragraphs (1-2 lines) separated by blank lines. No external links in the first paragraph. End with a question or invitation to comment. Max 3 hashtags, at the very end.",
+      "LinkedIn truncates around ~210 characters — the first 1–2 lines decide the click. Short paragraphs (1–2 lines) separated by blank lines. Professional but human; no press-release voice. No links in the first paragraph. End with one comment-inviting question. Max 3 hashtags at the very end.",
     formatRules: [
-      "First 2 lines must work as a standalone hook (that is all anyone sees before '…see more')",
-      "Blank line between every 1-2 sentence paragraph — whitespace is the formatting",
-      "Professional but human; no corporate press-release voice",
-      "End with one question or invitation that invites comments",
+      "First 2 lines = standalone hook (everything before 'see more')",
+      "Blank line between every 1–2 sentence paragraph",
+      "Prefer frameworks, specific results, and lessons over vague inspiration",
+      "End with one question that invites a real comment",
       "3 hashtags maximum, last line only",
     ],
     hashtags: { max: 3, placement: "end" },
@@ -70,14 +70,14 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     limit: 2200,
     fold: 125,
     promptHint:
-      "Instagram captions live next to an image, so the first line must make the image and the words click together. Emoji are punctuation here. Line breaks often. Hashtags go at the end, 3-8 of them, small and relevant.",
+      "Instagram truncates captions around ~125 characters. First line must work with the image. Short lines, natural line breaks. Emoji as sparse punctuation if on-brand. 3–5 relevant hashtags at the end (not 30). Carousel energy: clear, saveable idea.",
     formatRules: [
-      "First line must connect to the accompanying image",
-      "Use emoji as natural punctuation (not decoration spam)",
-      "Short lines with breaks; scannable in 3 seconds",
-      "3-8 relevant hashtags on the last line",
+      "First line pairs with the image and survives the fold",
+      "Hook → body → one CTA (save / comment a word / try this)",
+      "Scannable in 3 seconds; short lines",
+      "3–5 relevant hashtags on the last line only",
     ],
-    hashtags: { max: 8, placement: "end" },
+    hashtags: { max: 5, placement: "end" },
     aspectRatios: ["4:5", "1:1", "9:16"],
     composeUrl: "https://www.instagram.com/",
   },
@@ -87,10 +87,10 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     limit: 500,
     fold: 100,
     promptHint:
-      "Threads is casual and conversational — more like talking than publishing. One thought per post. Emoji welcome but not required. Hashtags barely matter: at most 1.",
+      "Threads is conversational — talking, not publishing. One thought. Low formality. At most 1 hashtag. First ~100 characters matter most.",
     formatRules: [
-      "Conversational, first-person, low-formality",
-      "One clear thought; under 500 characters",
+      "Conversational first-person",
+      "One clear thought under 500 characters",
       "No hashtag blocks; at most 1 if any",
     ],
     hashtags: { max: 1, placement: "inline" },
@@ -133,7 +133,7 @@ export function splitThread(text: string, limit: number): string[] {
   const clean = text.trim();
   if (effectiveLength(clean) <= limit) return [clean];
 
-  const room = limit - 5; // leave space for "1/ " numbering
+  const room = limit - 5;
   const chunks: string[] = [];
   let current = "";
 
@@ -152,11 +152,9 @@ export function splitThread(text: string, limit: number): string[] {
       pushCurrent();
       current = p;
     } else {
-      // Piece itself over the limit: try sentences, then hard word-chunking.
       pushCurrent();
       let pieces: string[] =
         p.match(/[^.!?]+[.!?]+["')\]]?|[^.!?]+$/g) || [p];
-      // Safety net: if the split lost text (regex edge cases), chunk by words.
       const rejoined = pieces.join(" ").length;
       if (rejoined < p.length - 10) pieces = chunkByWords(p, room);
       for (const s of pieces) {
