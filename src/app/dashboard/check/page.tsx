@@ -39,6 +39,7 @@ function CheckContent() {
   const [result, setResult] = useState<CheckResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -75,14 +76,20 @@ function CheckContent() {
     setResult(null);
 
     try {
-      // Voice samples: the persona's real drafts, so the checker can
-      // measure voice match, not just guess from adjectives.
+      // Prefer curated gold voice samples; fall back to recent drafts.
+      const gold = Array.isArray(selectedPersona.voice_samples)
+        ? selectedPersona.voice_samples
+            .filter((s: { enabled?: boolean; text?: string }) => s && s.enabled !== false && typeof s.text === "string" && s.text.length > 20)
+            .map((s: { text: string }) => s.text)
+        : [];
       const { data: drafts } = await supabase
         .from("content_drafts")
         .select("content")
         .eq("persona_id", selectedPersona.id)
         .order("created_at", { ascending: false })
         .limit(30);
+      const draftTexts = (drafts || []).map((d: { content: string }) => d.content).filter(Boolean);
+      const voiceSamples = gold.length ? gold : draftTexts;
 
       const res = await authedFetch("/api/check", {
         method: "POST",
@@ -90,7 +97,7 @@ function CheckContent() {
         body: JSON.stringify({
           persona: selectedPersona,
           text,
-          voiceSamples: (drafts || []).map((d: { content: string }) => d.content),
+          voiceSamples,
         }),
       });
 
@@ -103,6 +110,34 @@ function CheckContent() {
     } finally {
       setLoading(false);
     }
+  };
+
+
+  const applyRewrite = (rewrite: string) => {
+    setText(rewrite);
+    setSavedNotice("Rewrite loaded into the editor — re-check when ready.");
+    setResult(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const saveAsDraft = async (content: string, label = "Checked rewrite") => {
+    if (!selectedPersona || !content.trim()) return;
+    setSavedNotice(null);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+    const { error: err } = await supabase.from("content_drafts").insert({
+      persona_id: selectedPersona.id,
+      user_id: user.id,
+      type: "caption",
+      content: content.trim(),
+    });
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    setSavedNotice(`${label} saved to Drafts.`);
   };
 
   return (
@@ -124,6 +159,12 @@ function CheckContent() {
           </a>
           .
         </p>
+
+        {savedNotice && (
+          <div className="mb-4 p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-lg text-sm text-emerald-200">
+            {savedNotice}
+          </div>
+        )}
 
         <div className="space-y-6">
           <div>
@@ -239,9 +280,32 @@ function CheckContent() {
                     {result.rewrites.map((r, i) => (
                       <div key={i} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
                         <p className="text-xs text-red-400/80 line-through mb-2">{r.original}</p>
-                        <pre className="whitespace-pre-wrap text-sm text-emerald-200 leading-relaxed">
+                        <pre className="whitespace-pre-wrap text-sm text-emerald-200 leading-relaxed mb-3">
                           {r.rewrite}
                         </pre>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => applyRewrite(r.rewrite)}
+                            className="text-xs px-2.5 py-1 rounded border border-emerald-700/60 text-emerald-300 hover:bg-emerald-950/40"
+                          >
+                            Use in editor
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard.writeText(r.rewrite)}
+                            className="text-xs px-2.5 py-1 rounded border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                          >
+                            Copy
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => saveAsDraft(r.rewrite, "Rewrite")}
+                            className="text-xs px-2.5 py-1 rounded border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                          >
+                            Save draft
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -251,9 +315,25 @@ function CheckContent() {
               {/* Clean bill of health */}
               {result.breaks.length === 0 && result.verdict === "Safe to post" && (
                 <div className="bg-zinc-900 border border-emerald-800/50 rounded-xl p-5">
-                  <p className="text-sm text-emerald-300">
+                  <p className="text-sm text-emerald-300 mb-3">
                     No character breaks found. This reads like {selectedPersona?.name} wrote it.
                   </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => saveAsDraft(text, "Safe post")}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-emerald-700/60 text-emerald-300 hover:bg-emerald-950/40"
+                    >
+                      Save to drafts
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(text)}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                    >
+                      Copy
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
