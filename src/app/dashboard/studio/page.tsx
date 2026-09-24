@@ -725,6 +725,9 @@ const buildBody = (extra: Record<string, unknown> = {}) => ({
           <a href="/dashboard" className="text-sm text-zinc-400 hover:text-white">
             ← Dashboard
           </a>
+          <a href="/dashboard/posts" className="text-sm text-zinc-400 hover:text-white ml-3">
+            Posts
+          </a>
           <div className="flex items-center gap-3">
             <a
               href="/dashboard/generate"

@@ -367,6 +367,9 @@ export default function DashboardPage() {
             <a href="/dashboard/connect" className="text-zinc-400 hover:text-white">
               Connect
             </a>
+            <a href="/dashboard/posts" className="text-zinc-400 hover:text-white">
+              Posts
+            </a>
             <a href="/dashboard/drafts" className="text-zinc-400 hover:text-white">
               Drafts
             </a>
@@ -384,6 +387,7 @@ export default function DashboardPage() {
               {moreOpen && (
                 <div className="absolute right-0 top-full mt-2 w-44 bg-zinc-900 border border-zinc-700 rounded-xl shadow-xl py-2 z-50">
                   {[
+                    ["Posts", "/dashboard/posts"],
                     ["Series", "/dashboard/series"],
                     ["Ideas", "/dashboard/ideas"],
                     ["Check", "/dashboard/check"],
