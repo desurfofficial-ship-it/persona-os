@@ -74,6 +74,18 @@ export function parseSeriesPosts(raw: string): SeriesPost[] {
   return posts.length ? posts : [{ day: 1, label: "Full series", content: text }];
 }
 
+
+function scheduleDates(count: number, start: Date = new Date()): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const d = new Date(start);
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() + i);
+    out.push(d.toISOString());
+  }
+  return out;
+}
+
 function SeriesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -91,6 +103,10 @@ function SeriesContent() {
   const [error, setError] = useState<string | null>(null);
   const [copiedDay, setCopiedDay] = useState<number | null>(null);
   const [savedDays, setSavedDays] = useState<Set<number>>(new Set());
+  const [imagePrompts, setImagePrompts] = useState<Record<number, string>>({});
+  const [loadingImageDay, setLoadingImageDay] = useState<number | null>(null);
+  const [scheduled, setScheduled] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const [postedContent, setPostedContent] = useState<string[]>([]);
   const [workedContent, setWorkedContent] = useState<string[]>([]);
 
@@ -243,19 +259,83 @@ function SeriesContent() {
     setTimeout(() => setCopiedDay(null), 1500);
   };
 
-  const savePostDraft = async (post: SeriesPost) => {
+  const savePostDraft = async (post: SeriesPost, plannedFor?: string | null) => {
     if (!selectedPersona) return;
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return;
-    await supabase.from("content_drafts").insert({
+    const row: Record<string, unknown> = {
       persona_id: selectedPersona.id,
       user_id: user.id,
       type: "caption",
       content: post.content,
-    });
+    };
+    if (plannedFor) row.planned_for = plannedFor;
+    await supabase.from("content_drafts").insert(row);
     setSavedDays((prev) => new Set(prev).add(post.day));
+  };
+
+  const scheduleSeries = async () => {
+    if (!selectedPersona || !posts.length || scheduling) return;
+    setScheduling(true);
+    setError(null);
+    try {
+      const dates = scheduleDates(posts.length);
+      for (let i = 0; i < posts.length; i++) {
+        await savePostDraft(posts[i], dates[i]);
+      }
+      setScheduled(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not schedule series");
+    } finally {
+      setScheduling(false);
+    }
+  };
+
+  const generateImageForDay = async (post: SeriesPost) => {
+    if (!selectedPersona || loadingImageDay !== null) return;
+    setLoadingImageDay(post.day);
+    setError(null);
+    try {
+      const res = await authedFetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona: selectedPersona,
+          type: "image_prompt",
+          topic: `Visual for this series post (day ${post.day}): ${post.content.slice(0, 400)}`,
+          platform,
+          variants: 1,
+          polish: true,
+          goldSamples: goldSamples.length ? goldSamples : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Image prompt failed");
+      const variant = Array.isArray(data.variants) ? data.variants[0] : null;
+      const content =
+        (variant && typeof variant.content === "string" && variant.content) ||
+        (typeof data.content === "string" && data.content) ||
+        "";
+      if (!content.trim()) throw new Error("Empty image prompt");
+      setImagePrompts((prev) => ({ ...prev, [post.day]: content }));
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from("content_drafts").insert({
+          persona_id: selectedPersona.id,
+          user_id: user.id,
+          type: "image_prompt",
+          content,
+        });
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Image prompt failed");
+    } finally {
+      setLoadingImageDay(null);
+    }
   };
 
   if (personas.length === 0) {
@@ -387,13 +467,32 @@ function SeriesContent() {
                   <p className="text-xs text-zinc-500 mt-0.5">Structure: {hookType}</p>
                 )}
               </div>
-              <button
-                onClick={() => navigator.clipboard.writeText(rawResult)}
-                className="text-xs text-zinc-400 hover:text-white"
-              >
-                Copy all
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => navigator.clipboard.writeText(rawResult)}
+                  className="text-xs text-zinc-400 hover:text-white px-2 py-1"
+                >
+                  Copy all
+                </button>
+                <button
+                  onClick={scheduleSeries}
+                  disabled={scheduling || scheduled}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-emerald-700/60 text-emerald-400 hover:bg-emerald-950/40 disabled:opacity-50"
+                  title="Save each post as a draft planned across the next days"
+                >
+                  {scheduled
+                    ? "Scheduled ✓"
+                    : scheduling
+                      ? "Scheduling…"
+                      : `Schedule over ${posts.length} days`}
+                </button>
+              </div>
             </div>
+            {scheduled && (
+              <p className="text-xs text-emerald-500/90">
+                Saved as drafts with plan dates starting today. Check Dashboard calendar / due list.
+              </p>
+            )}
 
             {posts.map((post) => (
               <div
@@ -404,7 +503,7 @@ function SeriesContent() {
                   <span className="text-xs uppercase tracking-wide text-emerald-400/90">
                     {post.label}
                   </span>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button
                       onClick={() => copyPost(post)}
                       className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800"
@@ -417,11 +516,38 @@ function SeriesContent() {
                     >
                       {savedDays.has(post.day) ? "Saved ✓" : "Save draft"}
                     </button>
+                    <button
+                      onClick={() => generateImageForDay(post)}
+                      disabled={loadingImageDay !== null}
+                      className="text-xs px-2 py-1 border border-zinc-700 rounded hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      {loadingImageDay === post.day
+                        ? "Image…"
+                        : imagePrompts[post.day]
+                          ? "Regen image"
+                          : "Image prompt"}
+                    </button>
                   </div>
                 </div>
                 <pre className="whitespace-pre-wrap text-sm text-zinc-200 leading-relaxed">
                   {post.content}
                 </pre>
+                {imagePrompts[post.day] && (
+                  <div className="mt-4 pt-4 border-t border-zinc-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-zinc-500">Matching image prompt</p>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(imagePrompts[post.day])}
+                        className="text-xs text-zinc-400 hover:text-white"
+                      >
+                        Copy prompt
+                      </button>
+                    </div>
+                    <pre className="whitespace-pre-wrap text-xs text-zinc-400 leading-relaxed">
+                      {imagePrompts[post.day]}
+                    </pre>
+                  </div>
+                )}
               </div>
             ))}
           </div>
