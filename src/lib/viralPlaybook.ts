@@ -153,6 +153,12 @@ OUTPUT FORMAT:
 - Label clearly: POST 1: / POST 2: / ...
 - Under each: fold-proof first line, 2-4 short body beats, one CTA.
 - Plain text only -- no markdown headers.
+
+DAY PACKAGING:
+- POST 1 opens the loop or names the tension — strongest first line of the series.
+- Middle posts escalate or deepen; each can soft-reference the arc once without depending on it.
+- Final post pays off the promise BEFORE the CTA. No new unresolved loops.
+- Vary CTA types across the series (save / comment a word / try this today / reply with a number).
 `;
 
 

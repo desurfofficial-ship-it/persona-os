@@ -610,17 +610,21 @@ ${strategy.directive}
 - Deliver the hook promise in PAYOFF before CTA. One CTA only.
 Output ONLY the script.`;
     case "story_arc":
-      return `Create a content series of 3-5 posts${about}.
+      return `Create a cohesive multi-post content SERIES${about}.
 
 ${HOOK_FAMILIES}
 
 ${SERIES_CRAFT}
 
 ${strategy.directive}
-- For EACH post: fold-proof first line, 2-4 short body beats, one CTA only.
-- Label exactly: POST 1: / POST 2: / ... (plain text, no markdown headers).
-- Every post must work alone for a cold reader; together they form one intentional arc.
-- Different hook family on every post. No repeated openers from the gold set or already-posted list.
+
+HARD RULES:
+- Output exactly the number of posts requested in the topic (default 4 if unclear). Labels: POST 1: / POST 2: / POST 3: … plain text only.
+- Each post is a complete standalone caption ready to publish (fold-proof first line, 2–4 short body beats, one CTA).
+- Different HOOK FAMILY on every post — no repeated openers.
+- Progressive arc: each post advances the story; never restate the same tip with new adjectives.
+- Cold reader test: someone who only sees POST 3 still gets full value.
+- No markdown headers, no meta commentary, no "Day 1 overview" filler.
 - Output ONLY the series.`;
     case "image_prompt":
       return `Write ONE image-generation prompt for a photo that belongs in ${persona.name}'s world${about}.

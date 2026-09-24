@@ -899,6 +899,17 @@ const buildBody = (extra: Record<string, unknown> = {}) => ({
                   {t.replace("_", " ")}
                 </button>
               ))}
+
+            {type === "story_arc" && (
+              <p className="text-xs text-zinc-500 mt-2">
+                For full arc structures (setup/payoff, confession, list deep-dives), use the{" "}
+                <a href={`/dashboard/series?persona=${selectedId}`} className="text-emerald-400 underline">
+                  Series planner
+                </a>
+                .
+              </p>
+            )}
+
             </div>
           </div>
 
