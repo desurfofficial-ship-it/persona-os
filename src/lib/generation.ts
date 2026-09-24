@@ -262,21 +262,21 @@ const CAPTION_STRATEGIES: VariantStrategy[] = [
     label: "Specific claim",
     temperature: 0.75,
     directive:
-      "STRUCTURE: open with a specific number/result/timeline claim (not vague hype). One tight body beat that proves it. Close with a single question or one-word reply CTA. First line must survive the platform fold alone.",
+      "STRUCTURE: open with a specific number/result/timeline claim (not vague hype). One tight body beat that proves it. Close with a single question or one-word reply CTA. First line must survive the platform fold alone. Specificity > hype.",
   },
   {
     id: "contrarian",
     label: "Bold take",
     temperature: 0.78,
     directive:
-      "STRUCTURE: lead with a contrarian or 'everyone's wrong' claim the persona can defend. Short body that shows the alternative. No hedging. First line = the whole argument in miniature.",
+      "STRUCTURE: lead with a contrarian or 'everyone's wrong' claim the persona can defend. Short body that shows the alternative. No hedging. First line = the whole argument in miniature. Disagreement friction stops scrolls.",
   },
   {
     id: "story",
     label: "Story hook",
     temperature: 0.88,
     directive:
-      "STRUCTURE: confession or before/after micro-story (2–3 lines max), then one insight. Concrete details (time, place, object) beat adjectives. End on the lesson, not a summary.",
+      "STRUCTURE: confession or before/after micro-story (2–3 lines max), then one insight. Concrete details (time, place, object) beat adjectives. Write the feeling not just the event. End on the lesson, not a summary.",
   },
   {
     id: "list-framework",
@@ -297,7 +297,14 @@ const CAPTION_STRATEGIES: VariantStrategy[] = [
     label: "Mistake warning",
     temperature: 0.72,
     directive:
-      "STRUCTURE: 'Stop doing X' or cost-of-mistake opener, then the better move in plain language. Loss aversion, not shame. One practical CTA.",
+      "STRUCTURE: 'Stop doing X' or cost-of-mistake opener, then the better move in plain language. Loss aversion, not shame. One practical CTA. Fear/cost register outperforms vague aspiration.",
+  },
+  {
+    id: "identity-call",
+    label: "Identity callout",
+    temperature: 0.74,
+    directive:
+      "STRUCTURE: open by filtering the right audience ('If you [specific behavior/trait]…'). Then one sharp insight or framework. Close with a reply-prompt that only the right people answer. Concentrates quality engagement.",
   },
 ];
 
@@ -307,28 +314,42 @@ const SCRIPT_STRATEGIES: VariantStrategy[] = [
     label: "Pattern interrupt",
     temperature: 0.85,
     directive:
-      "STRUCTURE: 0–3s pattern-interrupt hook (spoken ≤14 words + [on-screen text]). Then tension → 3 value beats with [visual] cues → reward the promise → one CTA. Micro-loop mid-script ('but the third…'). Mute-friendly.",
+      "STRUCTURE: 0–1.5s visual/audio pattern interrupt + spoken hook ≤12 words + [on-screen text]. Then tension → 3 value beats with [visual] cues every 2–3s → reward the promise → one CTA. Micro-loop mid-script. Mute-friendly. No 'hey guys'.",
   },
   {
     id: "direct-value",
     label: "Direct value",
     temperature: 0.65,
     directive:
-      "STRUCTURE: promise the outcome in line 1, deliver 3 tight how-to beats with [visual] cues, end on takeaway + one CTA. Spoken contractions. No channel intro.",
+      "STRUCTURE: specific outcome promise in first 3s, deliver 3 tight how-to beats with [visual] demo cues, end on takeaway + one CTA. Spoken contractions. Numbers > adjectives. Target 15–30s for TikTok/Reels energy.",
   },
   {
     id: "open-loop",
     label: "Open loop",
     temperature: 0.8,
     directive:
-      "STRUCTURE: open a loop in the first 3 seconds, plant micro-payoffs every 5–10s, resolve the loop in the final 5 seconds BEFORE the CTA. Inline [visual] every beat.",
+      "STRUCTURE: open a curiosity loop in the first 3 seconds, plant micro-payoffs every 5–10s so viewers cannot leave early, resolve the loop in the final 5 seconds BEFORE the CTA. Inline [visual] every beat. Mute text carries the story.",
   },
   {
     id: "problem-solution",
     label: "Problem → fix",
     temperature: 0.7,
     directive:
-      "STRUCTURE: name a specific problem (0–3s), agitate the cost once (3–8s), spend the rest on the fix with [visual] demo cues, one CTA. One problem only.",
+      "STRUCTURE: name a specific problem (0–3s), agitate the cost once (3–8s), spend the rest on the fix with [visual] demo cues, deliver payoff, one CTA. One problem only. Loss-aversion register.",
+  },
+  {
+    id: "contrarian-script",
+    label: "Contrarian take",
+    temperature: 0.82,
+    directive:
+      "STRUCTURE: open with a bold inverted-benefit or 'everyone's wrong' claim (0–3s). Defend it with 2–3 proof beats + [visual] evidence. Resolve tension before CTA. Disagreement friction is the retention lever.",
+  },
+  {
+    id: "list-tease",
+    label: "List tease",
+    temperature: 0.68,
+    directive:
+      "STRUCTURE: listicle preamble in first 3s ('3 signs…' / 'only 2 rules…'). Deliver items as micro-beats with [visual] punch on each. Completion bias keeps them to the end. One CTA after last item.",
   },
 ];
 
@@ -355,21 +376,35 @@ const IMAGE_STRATEGIES: VariantStrategy[] = [
     label: "Editorial brand",
     temperature: 0.7,
     directive:
-      "STRUCTURE: SCBLM-style prompt — Subject, Composition (shot/lens/negative space), Brand/visual style from persona, Lighting (direction+quality), Mood/palette. End with AVOID: list. One paste-ready paragraph.",
+      "STRUCTURE: Identity lock first (persona visual style tokens), then shot/lens, subject pose/expression, scene, directional light + quality, palette/mood, realism language, composition (negative space if text overlay needed). End with AVOID: text, watermarks, logos, extra fingers, waxy skin, stock smile. One paste-ready paragraph.",
   },
   {
     id: "candid",
     label: "Candid documentary",
     temperature: 0.85,
     directive:
-      "STRUCTURE: candid in-the-moment shot — imperfect framing OK. Fleeting action, ambient light, phone-camera realism, emotion on faces. Match persona visual style. AVOID stock smile, text, logos, extra fingers.",
+      "STRUCTURE: candid in-the-moment — imperfect framing OK, fleeting action, ambient/available light, phone-camera or documentary realism, emotion on faces. Identity lock from persona. AVOID stock smile, text, logos, extra fingers, plastic skin.",
   },
   {
     id: "product-scene",
     label: "Scene / still life",
     temperature: 0.65,
     directive:
-      "STRUCTURE: environment-first still — props that belong in their world, soft directional light, shallow depth of field, room for text overlay. Palette locked to visual style. AVOID clutter and watermarks.",
+      "STRUCTURE: environment-first still — props that belong in their world only, soft directional light, shallow DOF, room for text overlay, palette locked to visual style. Identity tokens if person appears. AVOID clutter, watermarks, busy backgrounds.",
+  },
+  {
+    id: "portrait-lock",
+    label: "Portrait consistency",
+    temperature: 0.6,
+    directive:
+      "STRUCTURE: tight identity-first portrait for series consistency. Exact face/hair/wardrobe tokens from persona visual style, consistent lighting vocabulary (same direction + quality every time), same lens language, only change expression/pose slightly. End AVOID: deformed hands, extra fingers, waxy skin, text, logos.",
+  },
+  {
+    id: "lifestyle-action",
+    label: "Lifestyle action",
+    temperature: 0.78,
+    directive:
+      "STRUCTURE: mid-shot or three-quarter of persona doing a lifestyle pillar action. Motion cues, environmental storytelling, golden-hour or soft window light preferred, natural skin texture. Match visual style. Leave negative space if caption overlay likely. AVOID: staged stock poses, text, watermarks.",
   },
 ];
 
@@ -498,13 +533,16 @@ ${strategy.directive}
 ${persona.content_rules?.length ? `- Obey every content rule.` : ""}
 Output ONLY the finished caption.`;
     case "script":
-      return `Write a short spoken video script (target 30–45 seconds, ~75–110 words)${about}.
+      return `Write a short spoken video script (target 15–45 seconds depending on platform; default ~30s / 75–100 words)${about}.
 
 ${SCRIPT_CRAFT}
 
 ${strategy.directive}
-- Format labels: HOOK: / BEAT 1: / BEAT 2: / BEAT 3: / PAYOFF: / CTA: with [visual] cues on each beat.
-- Spoken language only. No "hey guys", no channel intro.
+- Format labels exactly: HOOK: / BEAT 1: / BEAT 2: / BEAT 3: / PAYOFF: / CTA:
+- Every beat includes a [visual] cue (cut, overlay text, demo, B-roll, pattern interrupt).
+- HOOK spoken ≤12–14 words + on-screen text that works muted.
+- Spoken language only. Contractions. No "hey guys", no channel intro, no "so the other day".
+- Deliver the hook promise in PAYOFF before CTA. One CTA only.
 Output ONLY the script.`;
     case "story_arc":
       return `Create a content series of 3–5 posts${about}.
@@ -522,8 +560,10 @@ ${strategy.directive}
 ${IMAGE_PROMPT_CRAFT}
 
 ${strategy.directive}
-- Consistency lock: reuse visual-style language; only change scene/action.
-${persona.visual_style ? `- Their visual style (must honor): ${persona.visual_style}` : "- Infer a coherent visual style from backstory if none is set."}
+- Consistency lock: reuse exact visual-style language from persona; only change scene/action/pose.
+- Lead with identity tokens, then shot, subject, scene, light, mood, realism, composition.
+- Prefer editorial/candid photography language. One flowing paragraph.
+${persona.visual_style ? `- Their visual style (must honor verbatim where possible): ${persona.visual_style}` : "- Infer a coherent visual style from backstory if none is set and keep it locked."}
 Output ONLY the paste-ready prompt paragraph ending with AVOID: …`;
   }
 }
