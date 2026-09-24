@@ -18,7 +18,7 @@
 import ZAI from "z-ai-web-dev-sdk";
 import type { PlatformId } from "./platforms";
 import { PLATFORMS } from "./platforms";
-import { HOOK_FAMILIES, CAPTION_CRAFT, SCRIPT_CRAFT, IMAGE_PROMPT_CRAFT } from "./viralPlaybook";
+import { HOOK_FAMILIES, CAPTION_CRAFT, SCRIPT_CRAFT, IMAGE_PROMPT_CRAFT, SERIES_CRAFT } from "./viralPlaybook";
 import {
   extractVoiceFingerprint,
   renderFingerprintBlock,
@@ -356,17 +356,38 @@ const SCRIPT_STRATEGIES: VariantStrategy[] = [
 const SERIES_STRATEGIES: VariantStrategy[] = [
   {
     id: "arc",
-    label: "Setup → tension → payoff",
-    temperature: 0.7,
+    label: "Setup -> tension -> payoff",
+    temperature: 0.72,
     directive:
-      "STRUCTURE: real arc — post 1 sets tension with a fold-proof hook, middle posts escalate, final post pays off and loops to post 1. Each post names what it builds on. Each post has its own CTA.",
+      "STRUCTURE: 4-post arc. POST 1 plants tension with a fold-proof hook. POST 2 escalates cost or stakes. POST 3 delivers the turn/insight. POST 4 pays off the original promise and loops to post 1. Each post names what it builds on in one short clause. Different hook family every post. One CTA each.",
   },
   {
     id: "segments",
     label: "Standalone cluster",
     temperature: 0.55,
     directive:
-      "STRUCTURE: 3–5 standalone posts on one theme; each complete alone; ordered as an escalating series. Every post opens with a different hook family.",
+      "STRUCTURE: 3-5 standalone posts on one theme; each complete alone; ordered as an escalating series. Every post opens with a different hook family. Final post is the sharpest takeaway, not a summary.",
+  },
+  {
+    id: "myth-proof-frame",
+    label: "Myth -> proof -> framework",
+    temperature: 0.68,
+    directive:
+      "STRUCTURE: POST 1 names a common belief the persona can honestly challenge. POST 2 shows why it fails with one concrete story or number (no invented stats). POST 3-4 hand a simple 2-3 step framework. Different hooks each post. One CTA each.",
+  },
+  {
+    id: "before-turn-after",
+    label: "Before -> turn -> after",
+    temperature: 0.8,
+    directive:
+      "STRUCTURE: confession arc. POST 1 = who they were (specific, not vague). POST 2 = the turning moment (one scene, one object, one decision). POST 3 = what they do differently now (one habit). Optional POST 4 = cost of going back. Vulnerability without trauma-dump. Different hooks. One CTA each.",
+  },
+  {
+    id: "list-deep-dives",
+    label: "List tease -> deep dives",
+    temperature: 0.62,
+    directive:
+      "STRUCTURE: POST 1 promises N items (3 or 4 max) with a fold-proof list tease. Each following post is ONE item with its own full hook + proof + micro-CTA. Final post ranks them or says 'use this one first'. No two posts share opening structure.",
   },
 ];
 
@@ -568,15 +589,18 @@ ${strategy.directive}
 - Deliver the hook promise in PAYOFF before CTA. One CTA only.
 Output ONLY the script.`;
     case "story_arc":
-      return `Create a content series of 3–5 posts${about}.
+      return `Create a content series of 3-5 posts${about}.
 
 ${HOOK_FAMILIES}
 
+${SERIES_CRAFT}
+
 ${strategy.directive}
-- For EACH post: fold-proof hook line, 2–3 sentence body, one CTA.
-- Number them (POST 1:, POST 2:, …) and show how each builds on the previous.
-- Vary hook families across the series.
-- Output plain structured text — no markdown headers.`;
+- For EACH post: fold-proof first line, 2-4 short body beats, one CTA only.
+- Label exactly: POST 1: / POST 2: / ... (plain text, no markdown headers).
+- Every post must work alone for a cold reader; together they form one intentional arc.
+- Different hook family on every post. No repeated openers from the gold set or already-posted list.
+- Output ONLY the series.`;
     case "image_prompt":
       return `Write ONE image-generation prompt for a photo that belongs in ${persona.name}'s world${about}.
 

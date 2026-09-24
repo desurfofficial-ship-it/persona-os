@@ -111,6 +111,43 @@ RULES:
 - Leave negative space when the post needs text overlay room.
 - For consistency across a campaign: same identity tokens, same lighting vocabulary, same palette, same lens language.`;
 
+
+
+/** Multi-post series / story-arc craft (content calendars, carousels of ideas, week-long threads). */
+export const SERIES_CRAFT = `
+SERIES / STORY-ARC CRAFT (3-5 posts that feel planned, not random):
+
+GOAL:
+- Each post must work ALONE in the feed.
+- Together they should feel like one intentional arc a follower can binge.
+
+STRUCTURE OPTIONS (pick ONE for the whole series):
+1. SETUP -> TENSION -> PAYOFF -- post 1 plants a problem or claim, middle escalates stakes or cost, final post delivers the turn and loops back to post 1's promise.
+2. MYTH -> PROOF -> FRAMEWORK -- post 1 names a common belief, post 2 shows why it fails with a concrete story/number, final posts hand a simple 2-3 step frame.
+3. BEFORE -> TURN -> AFTER -- confession arc: who they were, the specific moment that changed, what they do differently now (one habit, not a life lecture).
+4. LIST TEASE -> ITEM DEEP-DIVES -- post 1 promises N items; each following post is one item with its own fold-proof hook; final post ranks or gives the "use this first" rule.
+5. PROBLEM -> COST -> FIX -> CTA -- classic retention arc split across posts; never dump the whole fix in post 1.
+
+HOOK RULES ACROSS THE SERIES:
+- Every post opens with a DIFFERENT hook family (specific number, contrarian, mistake, curiosity, identity callout, list tease).
+- No two posts share the same first-line structure.
+- First line of each post must survive the platform fold alone.
+
+CONTINUITY WITHOUT SPOILERS:
+- Middle posts may soft-reference "yesterday" / "part 2" once -- never depend on it.
+- A cold reader who only sees post 3 still gets a complete idea + one CTA.
+- Final post pays off the series promise BEFORE its CTA.
+
+CTA RULES:
+- One CTA per post, varied: save / comment a word / try this today / reply with your number.
+- Do not stack "like + comment + share + follow" on any single post.
+
+OUTPUT FORMAT:
+- Label clearly: POST 1: / POST 2: / ...
+- Under each: fold-proof first line, 2-4 short body beats, one CTA.
+- Plain text only -- no markdown headers.
+`;
+
 /** Platform-tuned length and pacing notes injected into type tasks. */
 export const PLATFORM_SCRIPT_NOTES = `
 PLATFORM PACING (apply when platform is known):

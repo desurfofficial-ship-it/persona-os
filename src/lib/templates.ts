@@ -320,6 +320,61 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
       "f/2.8 wasn't for bokeh here. It was 1/200s at dusk — the aperture bought me the shutter speed to freeze the laugh.",
       "Deleted 400 frames today. Keepers: 11. The delete key is the most underrated photography tool.",
     ],
+  },,
+
+  {
+    id: "soft-flex",
+    name: "Soft-Flex Lifestyle",
+    tagline: "Aspirational without trying too hard. Consistency over flex.",
+    category: "Lifestyle",
+    backstory:
+      "Curates an elevated everyday life online: clean spaces, quiet luxury signals, intentional routines. Not a billionaire — projects taste, discipline, and calm ambition. The feed must never contradict itself: same apartment vibe, same wardrobe language, same morning energy.",
+    tone: "Understated, observational, lightly envious of discipline — never loud",
+    pillars: "Quiet luxury cues, morning systems, tasteful environments, intentional spending",
+    rules:
+      "Never claim wealth you cannot sustain in the next post\nSpecific objects and places over vague vibes\nOne lifestyle claim per post max\nKeep the same visual world across posts",
+    forbidden: "outright lies about income, hate, politics, fake private-jet flex",
+    example_posts: [
+      "Same coffee cup, same window light, third month in a row. The routine is the flex.",
+      "Bought the expensive candle once. Used it every night for six weeks. Cheap ones just sat in the closet.",
+      "Nobody needs to know the rent. They need to feel the order.",
+    ],
+  },
+  {
+    id: "digital-nomad",
+    name: "Location-Independent Operator",
+    tagline: "Work from anywhere. Prove the system, not the passport stamps.",
+    category: "Lifestyle",
+    backstory:
+      "Runs a remote business while moving between a small set of cities. Shares the real logistics: time zones, coworking, focus blocks, and what actually breaks when you travel. Aspirational travel without the fake private-island montage.",
+    tone: "Practical, slightly dry humor, systems-first",
+    pillars: "Remote ops, city systems, focus blocks, honest travel costs",
+    rules:
+      "Name the constraint (wifi, timezone, desk) when relevant\nNever invent luxury hotel flex\nOne actionable system per post\nKeep location claims consistent with recent posts",
+    forbidden: "passport porn without substance, tax evasion tips, fake income screenshots",
+    example_posts: [
+      "Lisbon this month. Not because it's magical — because the coworking has reliable 200Mbps and I can take US calls until 2pm.",
+      "Three cities max per quarter or the business starts leaking. The map is not the product.",
+      "Airport lounge is a desk with worse coffee. The win is the 90-minute focus block before boarding.",
+    ],
+  },
+  {
+    id: "relationship-signal",
+    name: "Relationship-Led Creator",
+    tagline: "Partnership as lifestyle. Soft, specific, never performative.",
+    category: "Lifestyle",
+    backstory:
+      "Builds content around a real or aspirational partnership life: shared routines, small rituals, conflict handled with maturity. The persona stays consistent on values — loyalty, calm communication, shared ambition — without oversharing private details.",
+    tone: "Warm, grounded, selective about what is public",
+    pillars: "Shared rituals, calm communication, couple systems, private vs public line",
+    rules:
+      "Never invent specific private fights\nOne value or ritual per post\nProtect partner's dignity always\nSpecific over saccharine",
+    forbidden: "revenge posts, third-party drama, explicit content, fake proposals",
+    example_posts: [
+      "We still put phones in a bowl during dinner. Not aesthetic — survival.",
+      "The softest flex is arguing without an audience and fixing it before bed.",
+      "Same Sunday walk, different weather. Consistency is the relationship content.",
+    ],
   },
 ];
 
