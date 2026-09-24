@@ -236,38 +236,108 @@ export interface QualityReport {
   blockReason: string | null;
 }
 
-/** Full deterministic quality pass on a raw model output. */
+export interface QualityGateResult {
+  /** Cleaned text ready to show the user. */
+  cleaned: string;
+  /** Original raw after only meta-strip (before cliché scrub). */
+  original: string;
+  /** True when cleaned differs from original. */
+  changed: boolean;
+  blocked: boolean;
+  blockReason: string | null;
+  flags: string[];
+  report: QualityReport;
+  repetition: RepetitionRisk;
+  fit: PlatformFit;
+}
+
+type GenTypeLite = "caption" | "script" | "story_arc" | "image_prompt";
+
+/**
+ * Full deterministic quality pass on a raw model output.
+ * Signature matches generation.ts runVariant usage.
+ */
 export function qualityGate(
   raw: string,
-  opts: { personaName: string; forbidden?: string[]; platform: PlatformId; posted?: { content?: string }[] }
-): { text: string; report: QualityReport; repetition: RepetitionRisk; fit: PlatformFit } {
-  let text = stripMetaWrapping(raw);
+  opts: {
+    platform: PlatformId;
+    type?: GenTypeLite;
+    persona?: { name?: string; forbidden_topics?: string[] };
+    fingerprint?: unknown;
+    forbidden?: string[];
+    posted?: { content?: string }[];
+  }
+): QualityGateResult {
+  const original = stripMetaWrapping(raw);
+  let text = original;
   const scan = scrubCliches(text);
   text = scan.text;
+
   const aiTells = detectAiTells(text);
-  const forbidden = detectForbidden(text, opts.forbidden || []);
+  const forbiddenList =
+    opts.forbidden ||
+    opts.persona?.forbidden_topics ||
+    [];
+  const forbidden = detectForbidden(text, forbiddenList);
   const repetition = repetitionRisk(text, opts.posted || []);
-  const fit = platformCheck(text, opts.platform);
+
+  // Scripts and image prompts are not constrained by caption character limits.
+  const skipCharLimit =
+    opts.type === "script" ||
+    opts.type === "image_prompt" ||
+    opts.type === "story_arc";
+  const fit = skipCharLimit
+    ? {
+        fits: true,
+        overBy: 0,
+        length: effectiveLength(text),
+        limit: PLATFORMS[opts.platform].limit,
+        hashtagCount: countHashtags(text),
+        hashtagsOkay: true,
+      }
+    : platformCheck(text, opts.platform);
+
+  const flags: string[] = [];
+  for (const t of aiTells) flags.push(`ai-tell:${t}`);
+  for (const c of scan.removed) flags.push(`cliche:${c}`);
+  for (const f of forbidden) flags.push(`forbidden:${f}`);
+  if (!fit.hashtagsOkay) flags.push(`hashtags:${fit.hashtagCount}>max`);
+  if (!fit.fits && !skipCharLimit) flags.push(`over-limit:${fit.overBy}`);
+  if (repetition.score >= 35) flags.push(`repetition:${repetition.score}`);
 
   const blocked =
-    aiTells.some((t) => t.includes("AI") || t.includes("assistant") || t.includes("refusal")) ||
+    aiTells.some(
+      (t) =>
+        t.includes("AI") ||
+        t.includes("assistant") ||
+        t.includes("refusal")
+    ) ||
     forbidden.length > 0 ||
     text.length < 20;
 
+  const blockReason = forbidden.length
+    ? `Touches forbidden topic: ${forbidden[0]}`
+    : aiTells.some(
+        (t) => t.includes("AI") || t.includes("assistant")
+      )
+      ? "Model leaked assistant language"
+      : text.length < 20
+        ? "Output too short to use"
+        : null;
+
   return {
-    text,
+    cleaned: text,
+    original,
+    changed: text !== original,
+    blocked,
+    blockReason,
+    flags,
     report: {
       aiTells,
       clichesRemoved: scan.removed,
       forbidden,
       blocked,
-      blockReason: forbidden.length
-        ? `Touches forbidden topic: ${forbidden[0]}`
-        : aiTells.some((t) => t.includes("AI") || t.includes("assistant"))
-          ? "Model leaked assistant language"
-          : text.length < 20
-            ? "Output too short to use"
-            : null,
+      blockReason,
     },
     repetition,
     fit,

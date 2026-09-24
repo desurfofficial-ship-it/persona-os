@@ -7,7 +7,7 @@
  * text and open the feed/composer directly.
  */
 
-export type Platform = "twitter" | "linkedin" | "instagram" | "threads";
+export type Platform = "twitter" | "linkedin" | "instagram" | "threads" | "tiktok" | "youtube_shorts";
 
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -41,6 +41,10 @@ function composeUrlFor(platform: Platform): string {
       return "https://www.instagram.com/";
     case "threads":
       return "https://www.threads.net/";
+    case "tiktok":
+      return "https://www.tiktok.com/upload";
+    case "youtube_shorts":
+      return "https://studio.youtube.com/";
   }
 }
 
@@ -70,4 +74,6 @@ export const PLATFORM_LABEL: Record<Platform, string> = {
   linkedin: "LinkedIn",
   instagram: "Instagram",
   threads: "Threads",
+  tiktok: "TikTok",
+  youtube_shorts: "YouTube Shorts",
 };

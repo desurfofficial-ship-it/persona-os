@@ -3,10 +3,16 @@
  * Platform specs: hard limits, fold positions, and native formatting rules.
  *
  * Fold numbers and craft notes reflect 2025–2026 feed behavior research:
- * first-line survival, hashtag dilution, and platform-native tone.
+ * first-line survival, hashtag dilution, short-form retention, and platform-native tone.
  */
 
-export type PlatformId = "x" | "linkedin" | "instagram" | "threads";
+export type PlatformId =
+  | "x"
+  | "linkedin"
+  | "instagram"
+  | "threads"
+  | "tiktok"
+  | "youtube_shorts";
 
 export interface PlatformSpec {
   id: PlatformId;
@@ -25,6 +31,8 @@ export interface PlatformSpec {
   aspectRatios: string[];
   /** URL for copy-and-open. */
   composeUrl: string;
+  /** Preferred content types this platform rewards most. */
+  bestFor?: ("caption" | "script" | "story_arc" | "image_prompt")[];
 }
 
 export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
@@ -45,6 +53,7 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     hashtags: { max: 1, placement: "inline" },
     aspectRatios: ["16:9", "1:1"],
     composeUrl: "https://twitter.com/intent/tweet",
+    bestFor: ["caption", "story_arc"],
   },
   linkedin: {
     id: "linkedin",
@@ -63,6 +72,7 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     hashtags: { max: 3, placement: "end" },
     aspectRatios: ["1:1", "4:5"],
     composeUrl: "https://www.linkedin.com/feed/?shareActive=true",
+    bestFor: ["caption", "story_arc"],
   },
   instagram: {
     id: "instagram",
@@ -70,16 +80,18 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     limit: 2200,
     fold: 125,
     promptHint:
-      "Instagram truncates captions around ~125 characters. First line must work with the image. Short lines, natural line breaks. Emoji as sparse punctuation if on-brand. 3–5 relevant hashtags at the end (not 30). Carousel energy: clear, saveable idea.",
+      "Instagram truncates captions around ~125 characters. First line must work with the image/Reel. Short lines, natural line breaks. Emoji as sparse punctuation if on-brand. 3–5 relevant hashtags at the end (not 30). Carousel/Reel energy: clear, saveable idea. Reels captions should support mute viewing.",
     formatRules: [
-      "First line pairs with the image and survives the fold",
+      "First line pairs with the image/video and survives the fold",
       "Hook → body → one CTA (save / comment a word / try this)",
       "Scannable in 3 seconds; short lines",
       "3–5 relevant hashtags on the last line only",
+      "For Reels: caption reinforces the on-screen hook; do not restate the entire script",
     ],
     hashtags: { max: 5, placement: "end" },
     aspectRatios: ["4:5", "1:1", "9:16"],
     composeUrl: "https://www.instagram.com/",
+    bestFor: ["caption", "script", "image_prompt"],
   },
   threads: {
     id: "threads",
@@ -96,12 +108,54 @@ export const PLATFORMS: Record<PlatformId, PlatformSpec> = {
     hashtags: { max: 1, placement: "inline" },
     aspectRatios: ["1:1", "4:5"],
     composeUrl: "https://www.threads.net/",
+    bestFor: ["caption"],
+  },
+  tiktok: {
+    id: "tiktok",
+    name: "TikTok",
+    limit: 4000,
+    fold: 100,
+    promptHint:
+      "TikTok is video-first. Caption is SEO + context, not the main content. Keep captions short (150–300 ideal for reach) unless the video needs search keywords. First line must reinforce the spoken/on-screen hook. 3–5 mixed broad + niche hashtags at the end. Raw, friend-blurting energy beats polished brand voice. Optimal video length 15–30s; completion rate is king.",
+    formatRules: [
+      "Caption supports the video — do not re-narrate the entire script",
+      "First ~100 characters reinforce the hook and work as search context",
+      "3–5 hashtags at the end (mix of broad + niche); never lead with them",
+      "For scripts: 15–30s target, visual pattern interrupt in first 0.5–1.5s, mute-friendly on-screen text",
+      "One clear CTA (comment a word / try this / duet this)",
+    ],
+    hashtags: { max: 5, placement: "end" },
+    aspectRatios: ["9:16"],
+    composeUrl: "https://www.tiktok.com/upload",
+    bestFor: ["script", "caption"],
+  },
+  youtube_shorts: {
+    id: "youtube_shorts",
+    name: "YouTube Shorts",
+    limit: 100,
+    fold: 100,
+    promptHint:
+      "YouTube Shorts title is the primary text surface (hard ~100 char title). Description can be longer but title decides click + search. Authority + specific outcome hooks work well. Optimal length 30–45s; full watch-through is the ranking signal. Title should read like a search result: clear promise, specific number or method when possible.",
+    formatRules: [
+      "Title ≤100 characters — this is the main text product",
+      "Lead with specific claim, method, or curiosity gap — no fluff openers",
+      "Prefer information-density and authority framing over pure entertainment hooks",
+      "For scripts: 30–45s target, deliver value early, strong payoff before CTA",
+      "3–5 hashtags can live in description; title stays clean",
+    ],
+    hashtags: { max: 5, placement: "end" },
+    aspectRatios: ["9:16"],
+    composeUrl: "https://studio.youtube.com/",
+    bestFor: ["script", "caption"],
   },
 };
 
-export const PLATFORM_IDS = Object.keys(PLATFORMS) as PlatformId[];
+/** Quick lookup helper. */
+export function getPlatform(id: PlatformId): PlatformSpec {
+  return PLATFORMS[id];
+}
 
-/** Detect hashtags in text. */
+/** Count hashtags the way platforms roughly do. */
 export function countHashtags(text: string): number {
   return (text.match(/#[\p{L}\p{N}_]+/gu) || []).length;
 }
@@ -182,7 +236,9 @@ export function splitThread(text: string, limit: number): string[] {
   if (chunks.length > 1) {
     return chunks.map((c, i) => {
       const tag = `${i + 1}/${chunks.length}`;
-      return effectiveLength(c) + effectiveLength(tag) + 2 <= limit ? `${tag} ${c}` : c;
+      return effectiveLength(c) + effectiveLength(tag) + 2 <= limit
+        ? `${tag} ${c}`
+        : c;
     });
   }
   return chunks.length ? chunks : [clean];

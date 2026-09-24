@@ -445,8 +445,10 @@ function postedBlock(posted: { content?: string }[] | undefined): string {
   const list = posted
     .slice(0, 12)
     .map((p, i) => {
-      const excerpt = String(p.content || "").replace(/\s+/g, " ").slice(0, 220);
-      return `${i + 1}. ${excerpt}`;
+      const raw = String(p.content || "").replace(/\s+/g, " ").trim();
+      const firstLine = raw.split(/[.!?\n]/)[0]?.slice(0, 120) || raw.slice(0, 120);
+      const excerpt = raw.slice(0, 220);
+      return `${i + 1}. HOOK-ISH: "${firstLine}" | FULL: ${excerpt}`;
     })
     .join("\n");
   return `
@@ -454,10 +456,17 @@ function postedBlock(posted: { content?: string }[] | undefined): string {
 ALREADY POSTED BY THIS PERSON (newest first):
 ${list}
 
-FRESHNESS RULES:
-- Do NOT reuse the topics, hooks, claims, or angles above.
-- If the requested topic is close to a posted item, take a clearly different angle: new insight, opposite take, next step, or deeper layer.
-- The output must feel like the NEXT post, not a rerun.`;
+FRESHNESS RULES (non-negotiable):
+- Do NOT reuse the topics, first-line hooks, claims, numbers, or angles above.
+- Forbidden: same opening structure, same specific claim, same list items, same story beat.
+- If the requested topic is close to a posted item, force a DIFFERENT angle from this menu:
+  (a) opposite / contrarian take
+  (b) next step after what they already posted
+  (c) cost / mistake version of the same idea
+  (d) deeper specific layer (one concrete detail they have not used)
+  (e) audience callout ("if you still…") instead of first-person claim
+- The output must feel like the NEXT post in their feed — a reader who follows them should not think "they already said this."
+- Prefer a different HOOK FAMILY than the recent posts above.`;
 }
 
 function assetBlock(asset: GenerateRequest["assetContext"]): string {
@@ -496,9 +505,23 @@ VARIATION RULES:
 
 function platformBlock(platform: PlatformId, type: GenType): string {
   const spec = PLATFORMS[platform];
-  const rules = type === "image_prompt" ? "" : `\nPLATFORM FORMATTING (${spec.name}):\n` + spec.formatRules.map((r) => `- ${r}`).join("\n");
+  const rules =
+    type === "image_prompt"
+      ? ""
+      : `\nPLATFORM FORMATTING (${spec.name}):\n` +
+        spec.formatRules.map((r) => `- ${r}`).join("\n");
+  const scriptNote =
+    type === "script"
+      ? platform === "tiktok"
+        ? "\nSCRIPT LENGTH TARGET: 15–30 seconds spoken (~40–80 words). Visual interrupt in first 1.5s. Completion rate is the ranking signal."
+        : platform === "youtube_shorts"
+          ? "\nSCRIPT LENGTH TARGET: 30–45 seconds spoken (~75–110 words). Authority + specific outcome early. Full watch-through is the ranking signal."
+          : platform === "instagram"
+            ? "\nSCRIPT LENGTH TARGET: 7–30 seconds for Reels (~25–80 words). Caption + on-screen text must work muted."
+            : "\nSCRIPT LENGTH TARGET: 15–45 seconds spoken. Match the platform's retention curve."
+      : "";
   return `\n\nTARGET PLATFORM: ${spec.name} (limit ${spec.limit} characters, first ${spec.fold} visible before truncation)
-${spec.promptHint}${rules}`;
+${spec.promptHint}${rules}${scriptNote}`;
 }
 
 function typeTask(
@@ -577,8 +600,14 @@ export function renderExemplarBlock(samples: string[]): string {
   if (!gold) return "";
   return `
 
-GOLD EXAMPLE POSTS (match this style, rhythm, and energy closely — do not copy verbatim):
-${gold}`;
+GOLD EXAMPLE POSTS (these are the voice target — match style, rhythm, energy, sentence length, and punctuation habits closely — NEVER copy verbatim):
+${gold}
+
+VOICE MATCH RULES:
+- Mirror average sentence length and line breaks from the gold set.
+- Reuse their signature cadence (short punches vs longer flows) but invent NEW content.
+- If gold posts use sparse emoji / no emoji / questions at the end, match that pattern.
+- Do not invent a "better" polished brand voice — stay inside their real register.`;
 }
 
 export function fingerprintFrom(samples: string[]): VoiceFingerprint {
@@ -690,7 +719,7 @@ export async function runVariant(args: {
   const voiceMatch = voiceMatchScore(content, fingerprint);
   const fitLimit = PLATFORMS[platform].limit;
   const length = [...content].length;
-  const fits = type === "image_prompt" || length <= fitLimit;
+  const fits = type === "image_prompt" || type === "script" || type === "story_arc" || length <= fitLimit;
 
   return {
     content,

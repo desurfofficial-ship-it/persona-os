@@ -15,7 +15,7 @@ import { userFromRequest } from "@/lib/local-session";
 import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 const VALID_TYPES: GenType[] = ["caption", "script", "story_arc", "image_prompt"];
-const VALID_PLATFORMS: PlatformId[] = ["x", "linkedin", "instagram", "threads"];
+const VALID_PLATFORMS: PlatformId[] = ["x", "linkedin", "instagram", "threads", "tiktok", "youtube_shorts"];
 
 export async function POST(req: NextRequest) {
   const authUserId = userFromRequest(req);

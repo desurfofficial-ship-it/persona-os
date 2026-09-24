@@ -40,8 +40,10 @@ type ContentType = "caption" | "script" | "story_arc" | "image_prompt";
 const PLATFORM_TABS: { id: PlatformId; label: string; hint: string }[] = [
   { id: "x", label: "X", hint: "280 chars, thread-aware" },
   { id: "linkedin", label: "LinkedIn", hint: "first 210 chars decide it" },
-  { id: "instagram", label: "Instagram", hint: "caption + hashtags" },
+  { id: "instagram", label: "Instagram", hint: "caption + Reels" },
   { id: "threads", label: "Threads", hint: "casual, 500 chars" },
+  { id: "tiktok", label: "TikTok", hint: "15–30s scripts + SEO captions" },
+  { id: "youtube_shorts", label: "Shorts", hint: "30–45s + title ≤100" },
 ];
 
 interface AssetCtx {
@@ -397,7 +399,7 @@ function GenerateContent() {
     setLoadingPlatforms(true);
     setError(null);
     try {
-      const jobs: PlatformId[] = ["x", "linkedin", "instagram", "threads"];
+      const jobs: PlatformId[] = ["x", "linkedin", "instagram", "threads", "tiktok", "youtube_shorts"];
       const settled = await Promise.allSettled(
         jobs.map((p) => postGenerate(buildBody({ platform: p, variants: 1 })))
       );
@@ -647,6 +649,8 @@ function GenerateContent() {
     linkedin: "linkedin",
     instagram: "instagram",
     threads: "threads",
+    tiktok: "tiktok",
+    youtube_shorts: "youtube_shorts",
   };
 
   const generateButton = (
@@ -973,7 +977,7 @@ function GenerateContent() {
               {loadingPlatforms ? (
                 <span className="inline-flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-zinc-500 border-t-white rounded-full animate-spin" />
-                  Writing for all 4 platforms…
+                  Writing for all platforms…
                 </span>
               ) : (
                 "⇄ All platforms"
