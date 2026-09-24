@@ -91,6 +91,7 @@ function GenerateContent() {
   const [highPolish, setHighPolish] = useState(true);
   // "3 more of this one": grouped follow-up variants per result card
   const [moreResults, setMoreResults] = useState<Record<number, VariantResult[]>>({});
+  const [goldSavedIdx, setGoldSavedIdx] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState<number | null>(null);
   // One idea -> every platform
   const [platformResults, setPlatformResults] = useState<{ platform: PlatformId; variant: VariantResult }[]>([]);
@@ -311,7 +312,50 @@ function GenerateContent() {
     }
   };
 
-  const buildBody = (extra: Record<string, unknown> = {}) => ({
+  
+  const handleSaveToGold = async (index: number) => {
+    if (!selectedPersona) return;
+    const content = results[index]?.content?.trim();
+    if (!content || content.length < 20) return;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const existing = Array.isArray(selectedPersona.voice_samples)
+      ? selectedPersona.voice_samples
+      : [];
+    // Dedupe by near-exact text
+    if (existing.some((s) => (s.text || "").trim() === content)) {
+      setGoldSavedIdx(index);
+      return;
+    }
+    const sample = {
+      id: `gold-${Date.now()}`,
+      text: content.slice(0, 2000),
+      source: "curated" as const,
+      enabled: true,
+      addedAt: new Date().toISOString(),
+    };
+    const next = [...existing, sample].slice(-40);
+    const { error } = await supabase
+      .from("personas")
+      .update({ voice_samples: next })
+      .eq("id", selectedPersona.id)
+      .eq("user_id", user.id);
+    if (error) {
+      setError(error.message || "Could not save to gold set");
+      return;
+    }
+    setPersonas((prev) =>
+      prev.map((p) =>
+        p.id === selectedPersona.id ? { ...p, voice_samples: next } : p
+      )
+    );
+    setGoldSavedIdx(index);
+  };
+
+const buildBody = (extra: Record<string, unknown> = {}) => ({
     persona: selectedPersona,
     type,
     topic,
@@ -1057,6 +1101,20 @@ function GenerateContent() {
                     {variant.repetition.score}% similar to a posted post
                   </span>
                 )}
+                {variant.packaging && (
+                  <span
+                    className={
+                      variant.packaging.score >= 75
+                        ? "text-emerald-400"
+                        : variant.packaging.score >= 55
+                          ? "text-zinc-400"
+                          : "text-amber-400"
+                    }
+                    title={(variant.packaging.notes || []).join(" · ") || "First-line packaging strength"}
+                  >
+                    Packaging {variant.packaging.score}%
+                  </span>
+                )}
               </div>
 
               {variant.flags.length > 0 && (
@@ -1114,6 +1172,13 @@ function GenerateContent() {
                   className="text-xs px-3 py-2 min-h-[38px] bg-white text-black rounded-lg font-medium hover:bg-zinc-200 disabled:opacity-50"
                 >
                   {loadingMore === idx ? "Writing 3 more…" : "⊕ 3 more of this one"}
+                </button>
+                <button
+                  onClick={() => handleSaveToGold(idx)}
+                  className="min-h-[46px] px-4 border border-emerald-800/60 rounded-lg text-sm text-emerald-400 hover:bg-emerald-950/40"
+                  title="Add this draft to the persona gold voice set so future posts match this energy"
+                >
+                  {goldSavedIdx === idx ? "Saved to gold ✓" : "Save to gold voice"}
                 </button>
                 <button
                   onClick={() => handleRegenerate(idx)}

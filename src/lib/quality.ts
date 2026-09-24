@@ -309,6 +309,112 @@ export function detectStructuralSlop(text: string): string[] {
   return hits;
 }
 
+
+/* ------------------------------ packaging score ---------------------------- */
+
+/**
+ * Eden insight: most posts die in packaging (first line / fold), not the idea.
+ * Deterministic 0–100 score for captions. Scripts/story use a lighter pass.
+ */
+export function packagingScore(
+  text: string,
+  opts?: { platformFold?: number; type?: string }
+): { score: number; notes: string[] } {
+  const notes: string[] = [];
+  let score = 70;
+  const fold = opts?.platformFold ?? 125;
+  const type = opts?.type || "caption";
+  const trimmed = text.trim();
+  if (!trimmed) return { score: 0, notes: ["empty"] };
+
+  const firstLine =
+    trimmed.split(/\n/).map((l) => l.trim()).find(Boolean) || trimmed;
+  const firstLen = [...firstLine].length;
+
+  // Fold survival: first line should land a punch inside the fold
+  if (type === "caption" || type === "story_arc") {
+    if (firstLen <= fold && firstLen >= 12) {
+      score += 8;
+    } else if (firstLen > fold) {
+      score -= 12;
+      notes.push("first line past fold");
+    } else if (firstLen < 8) {
+      score -= 8;
+      notes.push("first line too thin");
+    }
+  }
+
+  // Specificity signals (numbers, concrete nouns vs pure abstraction)
+  if (/\d/.test(firstLine)) {
+    score += 6;
+    notes.push("specific number in hook");
+  }
+  if (/\b(i|i'm|i've|my)\b/i.test(firstLine)) {
+    score += 3;
+  }
+
+  // Weak packaging openers
+  if (/^(so |well |hey |hi |hello |today |just |really )/i.test(firstLine)) {
+    score -= 15;
+    notes.push("weak warm-up opener");
+  }
+  if (/^(in today'?s|in a world|as we all)/i.test(firstLine)) {
+    score -= 18;
+    notes.push("generic essay opener");
+  }
+
+  // Structural slop hurts packaging
+  const slop = detectStructuralSlop(trimmed);
+  score -= Math.min(20, slop.length * 6);
+  for (const s of slop) notes.push(`slop:${s}`);
+
+  // Burstiness: sentence length variance (flat = AI metronome)
+  const sentences = trimmed.split(/[.!?]+/).map((s) => s.trim()).filter((s) => s.length > 3);
+  if (sentences.length >= 3) {
+    const lens = sentences.map((s) => s.split(/\s+/).length);
+    const avg = lens.reduce((a, b) => a + b, 0) / lens.length;
+    const variance =
+      lens.reduce((a, b) => a + (b - avg) ** 2, 0) / lens.length;
+    if (variance < 4) {
+      score -= 8;
+      notes.push("flat sentence rhythm");
+    } else if (variance > 12) {
+      score += 4;
+    }
+  }
+
+  // Triple re-summary heuristic: same content words repeating across sentences
+  if (sentences.length >= 4) {
+    const bags = sentences.map(
+      (s) =>
+        new Set(
+          s
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, " ")
+            .split(/\s+/)
+            .filter((w) => w.length > 4)
+        )
+    );
+    let highOverlap = 0;
+    for (let i = 0; i < bags.length - 1; i++) {
+      const a = bags[i];
+      const b = bags[i + 1];
+      if (!a.size || !b.size) continue;
+      let inter = 0;
+      for (const t of a) if (b.has(t)) inter++;
+      if (inter / Math.min(a.size, b.size) > 0.45) highOverlap++;
+    }
+    if (highOverlap >= 2) {
+      score -= 12;
+      notes.push("re-summarizes same point");
+    }
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return { score, notes };
+}
+
+
 /* ------------------------------ composite gate ----------------------------- */
 
 export interface QualityReport {

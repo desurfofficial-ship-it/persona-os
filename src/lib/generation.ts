@@ -26,7 +26,7 @@ import {
   voiceMatchNote,
   type VoiceFingerprint,
 } from "./voice";
-import { qualityGate, stripMetaWrapping, type QualityReport } from "./quality";
+import { qualityGate, stripMetaWrapping, packagingScore, type QualityReport } from "./quality";
 
 export type GenType = "caption" | "script" | "story_arc" | "image_prompt";
 
@@ -68,6 +68,7 @@ export interface VariantResult {
   flags: string[];
   repetition: { score: number; against: string | null };
   fit: { fits: boolean; overBy: number; length: number; limit: number };
+  packaging: { score: number; notes: string[] };
   blocked: boolean;
   blockReason: string | null;
   polished?: boolean;
@@ -777,6 +778,10 @@ export async function runVariant(args: {
     flags: gate.flags,
     repetition: { score: 0, against: null },
     fit: { fits, overBy: fits ? 0 : length - fitLimit, length, limit: fitLimit },
+    packaging: packagingScore(content, {
+      platformFold: PLATFORMS[platform].fold,
+      type,
+    }),
     blocked: gate.blocked,
     blockReason: gate.blockReason,
     polished: !!polish,
@@ -789,6 +794,7 @@ export function rankVariants(variants: VariantResult[]): VariantResult[] {
     if (v.blocked) score -= 50;
     if (!v.fit.fits) score -= 15;
     if (v.flags.length) score -= v.flags.length * 2;
+    if (v.packaging?.score != null) score += (v.packaging.score - 60) * 0.15;
     return { v, score };
   });
   scored.sort((a, b) => b.score - a.score);
