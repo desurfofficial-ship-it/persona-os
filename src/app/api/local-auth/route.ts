@@ -80,7 +80,19 @@ export async function POST(req: NextRequest) {
     const user = await db.localUser.create({
       data: { email, password: hashPassword(password) },
     });
-    return NextResponse.json({ token: signToken(user.id), user: publicUser(user) });
+    try {
+      const token = signToken(user.id);
+      return NextResponse.json({ token, user: publicUser(user) });
+    } catch (e) {
+      console.error("signup token:", e);
+      return NextResponse.json(
+        {
+          error:
+            "Account created but session could not be created. Set LOCAL_SESSION_SECRET (≥16 chars) in .env.local and restart, then sign in.",
+        },
+        { status: 500 }
+      );
+    }
   }
 
   // ---- sign in --------------------------------------------------------------
@@ -96,7 +108,19 @@ export async function POST(req: NextRequest) {
         .update({ where: { id: user.id }, data: { password: hashPassword(password) } })
         .catch(() => {}); // best-effort; verification already succeeded
     }
-    return NextResponse.json({ token: signToken(user.id), user: publicUser(user) });
+    try {
+      const token = signToken(user.id);
+      return NextResponse.json({ token, user: publicUser(user) });
+    } catch (e) {
+      console.error("signin token:", e);
+      return NextResponse.json(
+        {
+          error:
+            "Password ok but session could not be created. Set LOCAL_SESSION_SECRET (≥16 chars) in .env.local and restart the server.",
+        },
+        { status: 500 }
+      );
+    }
   }
 
   return NextResponse.json({ error: `Unknown action "${action}"` }, { status: 400 });

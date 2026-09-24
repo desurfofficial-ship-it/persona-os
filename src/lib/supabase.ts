@@ -280,7 +280,18 @@ const auth = {
         body: JSON.stringify({ action: "signup", ...credentials }),
       });
       const json = await res.json();
-      if (json.error) return { data: null, error: { message: json.error as string, status: 400 } };
+      if (json.error) return { data: null, error: { message: json.error as string, status: res.status || 400 } };
+      if (!json.token) {
+        return {
+          data: null,
+          error: {
+            message:
+              (json.error as string) ||
+              "No session token returned. Set LOCAL_SESSION_SECRET in .env.local and restart.",
+            status: 500,
+          },
+        };
+      }
       if (typeof window !== "undefined") window.localStorage.setItem(TOKEN_KEY, json.token as string);
       return { data: { session: { token: json.token }, user: json.user as MockUser }, error: null };
     } catch (err: unknown) {
@@ -296,7 +307,18 @@ const auth = {
         body: JSON.stringify({ action: "signin", ...credentials }),
       });
       const json = await res.json();
-      if (json.error) return { data: null, error: { message: json.error as string, status: 400 } };
+      if (json.error) return { data: null, error: { message: json.error as string, status: res.status || 400 } };
+      if (!json.token) {
+        return {
+          data: null,
+          error: {
+            message:
+              (json.error as string) ||
+              "No session token returned. Set LOCAL_SESSION_SECRET in .env.local and restart.",
+            status: 500,
+          },
+        };
+      }
       if (typeof window !== "undefined") window.localStorage.setItem(TOKEN_KEY, json.token as string);
       return { data: { session: { token: json.token }, user: json.user as MockUser }, error: null };
     } catch (err: unknown) {
