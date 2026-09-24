@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const platform: PlatformId = VALID_PLATFORMS.includes(body.platform)
       ? body.platform
       : "x";
-    const variants = legacy ? 1 : Math.max(1, Math.min(3, Number(body.variants) || 3));
+    const variants = legacy ? 1 : Math.max(1, Math.min(8, Number(body.variants) || 3));
 
     const voiceSamples = Array.isArray(body.voiceSamples)
       ? (body.voiceSamples as string[]).filter((s: unknown) => typeof s === "string" && s.length > 20)

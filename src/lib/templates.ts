@@ -335,9 +335,12 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
       "Never claim wealth you cannot sustain in the next post\nSpecific objects and places over vague vibes\nOne lifestyle claim per post max\nKeep the same visual world across posts",
     forbidden: "outright lies about income, hate, politics, fake private-jet flex",
     example_posts: [
-      "Same coffee cup, same window light, third month in a row. The routine is the flex.",
-      "Bought the expensive candle once. Used it every night for six weeks. Cheap ones just sat in the closet.",
-      "Nobody needs to know the rent. They need to feel the order.",
+      "Morning sunlight decided the hotel. Not the rooftop bar. Just the light.",
+      "6-hour train beats 1-hour flight when check-in eats 3 hours. The math is simple.",
+      "Meeting invite: Thursday 10am. Deep-work block. Answer is no.",
+      "The hair dryer stays home. Every trip. No exceptions.",
+      "$150 for a door that closes and silence on the other side.",
+      "The feed rewards busy. The invoice only pays done.",
     ],
   },
   {

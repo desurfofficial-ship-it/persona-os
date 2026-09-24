@@ -8,7 +8,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, authedFetch } from "@/lib/supabase";
+import { extractGenerateContent } from "@/lib/generateResponse";
 import {
   copyAndOpen,
   copyToClipboard,
@@ -50,6 +51,9 @@ export default function PostsPage() {
   const [tab, setTab] = useState<"ready" | "posted">("ready");
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [generatingBatch, setGeneratingBatch] = useState(false);
+  const [batchTopic, setBatchTopic] = useState("");
+  const [batchCount, setBatchCount] = useState(4);
 
   useEffect(() => {
     const load = async () => {
@@ -203,6 +207,92 @@ export default function PostsPage() {
     flash(ok ? "Copied" : "Copy failed — select text manually");
   };
 
+
+  const generateBatch = async () => {
+    if (generatingBatch) return;
+    const persona =
+      filterPersona !== "all"
+        ? personas.find((p) => p.id === filterPersona)
+        : personas[0];
+    if (!persona) {
+      flash("Create a persona first");
+      return;
+    }
+    setGeneratingBatch(true);
+    setNotice(null);
+    try {
+      const gold = Array.isArray(persona.voice_samples)
+        ? persona.voice_samples
+            .filter((s: { enabled?: boolean; text?: string }) => s && s.enabled !== false && typeof s.text === "string" && s.text.length > 20)
+            .map((s: { text: string }) => s.text)
+        : [];
+      const postedCtx = drafts
+        .filter((d) => d.posted && d.persona_id === persona.id)
+        .slice(0, 10)
+        .map((d) => ({ content: d.content }));
+
+      const res = await authedFetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          persona,
+          type: "caption",
+          topic:
+            batchTopic.trim() ||
+            "Write a short standalone post from this persona's world. Specific. Fold-proof first line. No CTA spam.",
+          platform: "x",
+          variants: Math.min(8, Math.max(2, batchCount)),
+          polish: true,
+          goldSamples: gold.length ? gold : undefined,
+          postedContext: postedCtx,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Generate failed");
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      const variants: { content?: string }[] = Array.isArray(data.variants)
+        ? data.variants
+        : [];
+      const texts = variants
+        .map((v) => (typeof v.content === "string" ? v.content.trim() : ""))
+        .filter((c) => c.length > 10);
+      if (!texts.length) {
+        const one = extractGenerateContent(data);
+        if (one) texts.push(one);
+      }
+      if (!texts.length) throw new Error("Empty batch");
+
+      const rows = texts.map((content) => ({
+        persona_id: persona.id,
+        user_id: user.id,
+        type: "caption",
+        content,
+      }));
+      const { data: inserted, error } = await supabase
+        .from("content_drafts")
+        .insert(rows)
+        .select("id, persona_id, type, content, created_at, posted, performance, planned_for");
+      if (error) throw error;
+
+      const withName = (inserted || []).map((d) => ({
+        ...d,
+        personas: { name: persona.name },
+      }));
+      setDrafts((prev) => [...withName, ...prev]);
+      setTab("ready");
+      flash(`Added ${withName.length} posts to Ready`);
+    } catch (err: unknown) {
+      setNotice(err instanceof Error ? err.message : "Batch generate failed");
+    } finally {
+      setGeneratingBatch(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-zinc-400">
@@ -268,6 +358,46 @@ export default function PostsPage() {
               </option>
             ))}
           </select>
+        </div>
+
+
+        <div className="mb-6 p-4 bg-zinc-900 border border-zinc-800 rounded-xl space-y-3">
+          <p className="text-sm font-medium text-zinc-200">Generate posts</p>
+          <p className="text-xs text-zinc-500">
+            Ranked variants, anti-slop on. Lands in Ready — you still post yourself.
+          </p>
+          <input
+            value={batchTopic}
+            onChange={(e) => setBatchTopic(e.target.value)}
+            placeholder="Topic (optional) e.g. quiet luxury travel logistics"
+            className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded-lg text-sm"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={batchCount}
+              onChange={(e) => setBatchCount(Number(e.target.value))}
+              className="text-sm px-3 py-2 bg-zinc-950 border border-zinc-700 rounded-lg"
+            >
+              {[2, 3, 4, 5, 6, 8].map((n) => (
+                <option key={n} value={n}>
+                  {n} posts
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={generateBatch}
+              disabled={generatingBatch || personas.length === 0}
+              className="text-sm px-4 py-2 bg-white text-black rounded-lg font-medium disabled:opacity-50"
+            >
+              {generatingBatch ? "Generating…" : "Generate"}
+            </button>
+            {filterPersona === "all" && personas[0] && (
+              <span className="text-[10px] text-zinc-500">
+                Uses {personas[0].name} (pick a persona above to switch)
+              </span>
+            )}
+          </div>
         </div>
 
         {list.length === 0 ? (

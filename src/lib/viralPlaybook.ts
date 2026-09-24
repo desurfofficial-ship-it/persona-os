@@ -43,9 +43,10 @@ STYLE:
 - Second-person or collective "you/we" for shareable lines; first-person for confession.
 - Hashtags: only if platform allows; never lead with them; quality > quantity (3–5 max where allowed).
 - If Voice DNA shows emoji use, allow sparse emoji as punctuation — never decoration spam.
-- End with ONE ask: a specific question, "save this", or a one-word reply prompt.
-- Write the feeling, not just the event. "Nobody warns you how quiet it gets after you quit" beats "Quit my job today".
-- Cut the last adjective. Plain > clever.`;
+- CTA is optional. Prefer none. If used: ONE soft ask only ("save this", one-word reply). Never link-in-bio / newsletter / consultation.
+- Write the feeling through a concrete detail, not abstract motivation.
+- Cut the last adjective. Plain > clever.
+- Never engagement-bait ("what do you think?", "tag someone").`;
 
 export const SCRIPT_CRAFT = `
 SHORT-FORM SCRIPT CRAFT (TikTok / Reels / Shorts — 2026 retention research):
