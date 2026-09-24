@@ -46,6 +46,7 @@ Do **not** commit `.env.local` or anything under `db/`.
 | `/dashboard/series` | Multi-day plans |
 | `/dashboard/ideas` | Topic lists |
 | `/dashboard/check` | Consistency |
+| `/dashboard/posts` | Ready queue, batch generate, Copy & open, scheduler export |
 | `/dashboard/drafts` | Posted + performance + export |
 | `/dashboard/vault` | Assets |
 | `/dashboard/connect` | Optional social handle |
@@ -68,3 +69,13 @@ npx prisma db push   # sync SQLite schema
 ---
 
 Built for results. Iterating daily.
+
+## Scheduler export
+
+From **Posts**, export the Ready (or Posted) queue as:
+
+- **JSON** — `{ posts: [{ text, scheduled_at, platforms, persona }] }` for agents / Shoutrrr-style tools
+- **CSV** — `scheduled_at,text,persona,type,id`
+- **Week plan** — plain text copy
+
+Persona OS stays the voice + anti-slop layer. External tools (or official X API later) handle publish.

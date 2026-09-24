@@ -17,6 +17,12 @@ import {
   type Platform,
 } from "@/lib/share";
 import type { Persona } from "@/types/persona";
+import {
+  toSchedulerPayload,
+  toSchedulerCsv,
+  toWeekPlanText,
+  downloadText,
+} from "@/lib/schedulerExport";
 
 interface Draft {
   id: string;
@@ -293,6 +299,68 @@ export default function PostsPage() {
     }
   };
 
+
+  const exportRows = () => {
+    const source = tab === "ready" ? ready : posted;
+    return source.map((d) => ({
+      id: d.id,
+      content: d.content,
+      type: d.type,
+      planned_for: d.planned_for,
+      created_at: d.created_at,
+      persona_name: (d.personas as { name?: string } | null)?.name,
+    }));
+  };
+
+  const exportSchedulerJson = () => {
+    const rows = exportRows();
+    if (!rows.length) {
+      flash("Nothing to export");
+      return;
+    }
+    const payload = toSchedulerPayload(rows, ["x", "linkedin", "threads"]);
+    downloadText(
+      `persona-os-queue-${new Date().toISOString().slice(0, 10)}.json`,
+      JSON.stringify(payload, null, 2),
+      "application/json"
+    );
+    flash(`Exported ${rows.length} posts (JSON)`);
+  };
+
+  const exportSchedulerCsv = () => {
+    const rows = exportRows();
+    if (!rows.length) {
+      flash("Nothing to export");
+      return;
+    }
+    downloadText(
+      `persona-os-queue-${new Date().toISOString().slice(0, 10)}.csv`,
+      toSchedulerCsv(rows),
+      "text/csv;charset=utf-8"
+    );
+    flash(`Exported ${rows.length} posts (CSV)`);
+  };
+
+  const exportWeekPlan = async () => {
+    const rows = exportRows();
+    if (!rows.length) {
+      flash("Nothing to export");
+      return;
+    }
+    const text = toWeekPlanText(rows);
+    try {
+      await navigator.clipboard.writeText(text);
+      flash("Week plan copied");
+    } catch {
+      downloadText(
+        `persona-os-week-plan-${new Date().toISOString().slice(0, 10)}.txt`,
+        text,
+        "text/plain"
+      );
+      flash("Week plan downloaded");
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-zinc-400">
@@ -359,6 +427,35 @@ export default function PostsPage() {
             ))}
           </select>
         </div>
+
+        <div className="flex flex-wrap gap-2 mb-6">
+          <button
+            type="button"
+            onClick={exportSchedulerJson}
+            className="text-xs px-3 py-1.5 border border-zinc-600 rounded-lg text-zinc-300 hover:bg-zinc-800"
+            title="JSON for Shoutrrr / custom schedulers / agents"
+          >
+            Export JSON
+          </button>
+          <button
+            type="button"
+            onClick={exportSchedulerCsv}
+            className="text-xs px-3 py-1.5 border border-zinc-600 rounded-lg text-zinc-300 hover:bg-zinc-800"
+          >
+            Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={exportWeekPlan}
+            className="text-xs px-3 py-1.5 border border-zinc-600 rounded-lg text-zinc-300 hover:bg-zinc-800"
+          >
+            Copy week plan
+          </button>
+        </div>
+        <p className="text-[11px] text-zinc-600 -mt-4 mb-6">
+          Export the current tab (Ready or Posted) for Shoutrrr, Typefully, xqueue, or any scheduler.
+          We generate; they publish.
+        </p>
 
 
         <div className="mb-6 p-4 bg-zinc-900 border border-zinc-800 rounded-xl space-y-3">
