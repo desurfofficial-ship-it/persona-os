@@ -100,6 +100,20 @@ export const CLICHE_RULES: ClicheRule[] = [
   { pattern: /\btapestry\b/gi, note: "tapestry" },
   { pattern: /\bmy (two cents|2 cents)\b/gi, note: "two cents" },
   { pattern: /\bthoughts\?\s*(👇|below)/i, note: "thoughts? 👇" },
+  { pattern: /\blet that sink in\b/gi, note: "let that sink in" },
+  { pattern: /\band that'?s on period\b/gi, note: "and that's on period" },
+  { pattern: /\bnot gonna lie\b/gi, note: "not gonna lie" },
+  { pattern: /\bin this economy\b/gi, note: "in this economy" },
+  { pattern: /\bthe algorithm\b/gi, note: "the algorithm (meta)" },
+  { pattern: /\bcontent is king\b/gi, note: "content is king" },
+  { pattern: /\bstop scrolling\b/gi, note: "stop scrolling (meta)" },
+  { pattern: /\byou won'?t believe\b/gi, note: "you won't believe" },
+  { pattern: /\bthis changed (my|everything)\b/gi, note: "this changed everything" },
+  { pattern: /\bgame changer\b/gi, note: "game changer" },
+  { pattern: /\bhey guys[,!]?\s*/gi, note: "hey guys opener" },
+  { pattern: /\bso the other day\b/gi, note: "so the other day" },
+  { pattern: /\bwithout further ado\b/gi, note: "without further ado" },
+  { pattern: /\bin today'?s video\b/gi, note: "in today's video" },
 ];
 
 export interface ClicheScan {
