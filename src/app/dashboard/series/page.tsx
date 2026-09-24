@@ -107,6 +107,8 @@ function SeriesContent() {
   const [loadingImageDay, setLoadingImageDay] = useState<number | null>(null);
   const [scheduled, setScheduled] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [loadingAllImages, setLoadingAllImages] = useState(false);
+  const [exported, setExported] = useState(false);
   const [postedContent, setPostedContent] = useState<string[]>([]);
   const [workedContent, setWorkedContent] = useState<string[]>([]);
 
@@ -338,6 +340,107 @@ function SeriesContent() {
     }
   };
 
+  const generateAllImages = async () => {
+    if (!selectedPersona || !posts.length || loadingAllImages || loadingImageDay !== null) return;
+    setLoadingAllImages(true);
+    setError(null);
+    try {
+      for (const post of posts) {
+        if (imagePrompts[post.day]) continue;
+        setLoadingImageDay(post.day);
+        const res = await authedFetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            persona: selectedPersona,
+            type: "image_prompt",
+            topic: `Visual for this series post (day ${post.day}): ${post.content.slice(0, 400)}`,
+            platform,
+            variants: 1,
+            polish: true,
+            goldSamples: goldSamples.length ? goldSamples : undefined,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Image prompt failed for day ${post.day}`);
+        const variant = Array.isArray(data.variants) ? data.variants[0] : null;
+        const content =
+          (variant && typeof variant.content === "string" && variant.content) ||
+          (typeof data.content === "string" && data.content) ||
+          "";
+        if (!content.trim()) throw new Error(`Empty image prompt for day ${post.day}`);
+        setImagePrompts((prev) => ({ ...prev, [post.day]: content }));
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from("content_drafts").insert({
+            persona_id: selectedPersona.id,
+            user_id: user.id,
+            type: "image_prompt",
+            content,
+          });
+        }
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Bulk image prompts failed");
+    } finally {
+      setLoadingImageDay(null);
+      setLoadingAllImages(false);
+    }
+  };
+
+  const exportWeekPlan = async () => {
+    if (!posts.length) return;
+    const dates = scheduleDates(posts.length);
+    const lines: string[] = [
+      `# Series week plan — ${selectedPersona?.name || "persona"}`,
+      theme ? `Theme: ${theme}` : null,
+      hookType ? `Arc: ${hookType}` : null,
+      `Platform: ${PLATFORMS[platform].name}`,
+      "",
+    ].filter((x): x is string => Boolean(x));
+
+    for (let i = 0; i < posts.length; i++) {
+      const post = posts[i];
+      const d = new Date(dates[i]);
+      const dateLabel = d.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      });
+      lines.push(`## ${post.label} — ${dateLabel}`);
+      lines.push("");
+      lines.push(post.content);
+      lines.push("");
+      if (imagePrompts[post.day]) {
+        lines.push("### Image prompt");
+        lines.push(imagePrompts[post.day]);
+        lines.push("");
+      }
+      lines.push("---");
+      lines.push("");
+    }
+
+    const text = lines.join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setExported(true);
+      setTimeout(() => setExported(false), 2000);
+    } catch {
+      // Fallback download
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `series-week-plan-${Date.now()}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExported(true);
+      setTimeout(() => setExported(false), 2000);
+    }
+  };
+
   if (personas.length === 0) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6">
@@ -485,6 +588,25 @@ function SeriesContent() {
                     : scheduling
                       ? "Scheduling…"
                       : `Schedule over ${posts.length} days`}
+                </button>
+                <button
+                  onClick={generateAllImages}
+                  disabled={loadingAllImages || loadingImageDay !== null}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-zinc-600 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                  title="Generate a matching image prompt for every day"
+                >
+                  {loadingAllImages
+                    ? `Images day ${loadingImageDay ?? "…"}…`
+                    : Object.keys(imagePrompts).length >= posts.length
+                      ? "All images ✓"
+                      : "All image prompts"}
+                </button>
+                <button
+                  onClick={exportWeekPlan}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-zinc-600 text-zinc-300 hover:bg-zinc-800"
+                  title="Copy a full week plan (posts + image prompts) to clipboard"
+                >
+                  {exported ? "Plan copied ✓" : "Export week plan"}
                 </button>
               </div>
             </div>
