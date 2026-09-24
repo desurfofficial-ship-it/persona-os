@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, authedFetch } from "@/lib/supabase";
 import { nextSevenDays } from "@/lib/calendar";
+import { extractGenerateContent } from "@/lib/generateResponse";
 import type { Persona } from "@/types/persona";
 
 interface Draft {
@@ -244,16 +245,20 @@ export default function DraftsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           persona,
-          type: draft.type,
+          type: draft.type === "story_arc" ? "caption" : draft.type,
           topic: `Improve and tighten this existing ${draft.type}. Keep the same core message but make it stronger, more in character, and higher quality:\n\n${draft.content}`,
           model: "meta-llama/llama-3.3-70b-instruct",
+          variants: 1,
+          polish: true,
         }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Improve failed");
 
-      setImprovedContent((prev) => ({ ...prev, [draft.id]: data.content }));
+      const improved = extractGenerateContent(data);
+      if (!improved) throw new Error("Empty improve result");
+      setImprovedContent((prev) => ({ ...prev, [draft.id]: improved }));
 
       const {
         data: { user },
@@ -263,7 +268,7 @@ export default function DraftsPage() {
           persona_id: draft.persona_id,
           user_id: user.id,
           type: draft.type,
-          content: data.content,
+          content: improved,
         });
       }
     } catch (err: any) {

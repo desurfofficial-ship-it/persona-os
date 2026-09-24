@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase, authedFetch } from "@/lib/supabase";
+import { extractGenerateContent } from "@/lib/generateResponse";
 import type { Persona } from "@/types/persona";
 
 function IdeasContent() {
@@ -110,6 +111,7 @@ Ideas should be distinct entry doors into the same lifestyle world — not the s
 ${workedContent.length > 0 ? "Prioritize angles similar to what has already WORKED for this persona." : ""}
 ${floppedContent.length > 0 ? "Do not suggest topics similar to what FLOPPED." : ""}`,
           model: "meta-llama/llama-3.3-70b-instruct",
+          variants: 1,
           avoidContent,
           workedContent,
           floppedContent,
@@ -127,7 +129,9 @@ ${floppedContent.length > 0 ? "Do not suggest topics similar to what FLOPPED." :
         throw new Error(msg);
       }
 
-      setResult(data.content);
+      const content = extractGenerateContent(data);
+      if (!content) throw new Error("Empty ideas result");
+      setResult(content);
 
       const {
         data: { user },
@@ -137,7 +141,7 @@ ${floppedContent.length > 0 ? "Do not suggest topics similar to what FLOPPED." :
           persona_id: selectedPersona.id,
           user_id: user.id,
           type: "story_arc",
-          content: data.content,
+          content,
         });
       }
     } catch (err: any) {

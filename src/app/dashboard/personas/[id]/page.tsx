@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase, authedFetch } from "@/lib/supabase";
+import { extractGenerateContent } from "@/lib/generateResponse";
 import type { Persona } from "@/types/persona";
 
 interface Draft {
@@ -159,11 +160,15 @@ export default function PersonaDetailPage() {
           topic:
             "Write one short sample post that perfectly demonstrates this persona's voice and energy.",
           model: "meta-llama/llama-3.3-70b-instruct",
+          variants: 1,
+          polish: true,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
-      setSample(data.content);
+      const sampleText = extractGenerateContent(data);
+      if (!sampleText) throw new Error("Empty sample");
+      setSample(sampleText);
     } catch (err: any) {
       alert(err.message);
     } finally {

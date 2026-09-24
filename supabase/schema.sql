@@ -125,3 +125,17 @@ drop trigger if exists on_personas_updated on public.personas;
 create trigger on_personas_updated
   before update on public.personas
   for each row execute procedure public.handle_updated_at();
+
+
+-- Scheduling + performance loop (safe to re-run)
+alter table public.content_drafts add column if not exists planned_for timestamptz;
+alter table public.content_drafts add column if not exists performance text;
+alter table public.content_drafts add column if not exists tags text[] default '{}';
+alter table public.content_drafts add column if not exists topic text;
+alter table public.content_drafts add column if not exists auto_fill boolean default false;
+
+-- Gold voice samples on personas
+alter table public.personas add column if not exists voice_samples jsonb default '[]'::jsonb;
+
+create index if not exists content_drafts_planned_for_idx on public.content_drafts (user_id, planned_for);
+create index if not exists content_drafts_performance_idx on public.content_drafts (persona_id, performance);

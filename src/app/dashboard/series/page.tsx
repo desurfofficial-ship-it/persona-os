@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase, authedFetch } from "@/lib/supabase";
 import type { Persona } from "@/types/persona";
 import { PLATFORMS, type PlatformId } from "@/lib/platforms";
+import { extractGenerateContent } from "@/lib/generateResponse";
 
 const ARC_TYPES = [
   {
@@ -226,16 +227,12 @@ function SeriesContent() {
         throw new Error(msg);
       }
 
-      const variant = Array.isArray(data.variants) ? data.variants[0] : null;
-      const content =
-        (variant && typeof variant.content === "string" && variant.content) ||
-        (typeof data.content === "string" && data.content) ||
-        "";
-
+      const content = extractGenerateContent(data);
       if (!content.trim()) throw new Error("Empty series returned — try again.");
+      const variant = Array.isArray(data.variants) ? data.variants[0] : null;
 
       setRawResult(content);
-      setHookType(variant?.hookType || arc.label);
+      setHookType((variant && variant.hookType) || arc.label);
 
       const {
         data: { user },
