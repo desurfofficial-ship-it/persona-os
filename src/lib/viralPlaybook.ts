@@ -159,6 +159,12 @@ DAY PACKAGING:
 - Middle posts escalate or deepen; each can soft-reference the arc once without depending on it.
 - Final post pays off the promise BEFORE the CTA. No new unresolved loops.
 - Vary CTA types across the series (save / comment a word / try this today / reply with a number).
+
+CTA BAN LIST (never):
+- visit my website / link in bio / download my checklist / sign up for my newsletter
+- book a consultation / DM me for the guide / comment GUIDE
+- fake productivity % claims ("increased productivity by 40%")
+- "in today's world", "here's the thing", "let that sink in"
 `;
 
 

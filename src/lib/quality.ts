@@ -74,6 +74,12 @@ export interface ClicheRule {
 
 export const CLICHE_RULES: ClicheRule[] = [
   { pattern: /\bgame-?changer\b/gi, note: "game-changer" },
+  { pattern: /\bvisit my website\b/gi, note: "visit my website CTA" },
+  { pattern: /\blink in bio\b/gi, note: "link in bio CTA" },
+  { pattern: /\bdownload my (checklist|guide|freebie)\b/gi, note: "download my checklist CTA" },
+  { pattern: /\bsign up for my newsletter\b/gi, note: "newsletter CTA" },
+  { pattern: /\bbook a consultation\b/gi, note: "book a consultation CTA" },
+  { pattern: /\bincreased (my )?productivity by \d+%/gi, note: "fake productivity %" },
   { pattern: /\bdelv(e|ing)\b/gi, note: "delve" },
   { pattern: /\bin today'?s (fast-?paced|digital|modern|ever-?changing) world\b/gi, note: "in today's world opener" },
   { pattern: /\bunlock(ing)? (the )?(power|full potential|secrets?) of\b/gi, note: "unlock the power" },
