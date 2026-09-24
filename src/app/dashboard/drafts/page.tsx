@@ -141,6 +141,43 @@ export default function DraftsPage() {
       if (error.message?.includes("performance")) {
         alert("Run this in Supabase SQL once:\nalter table content_drafts add column if not exists performance text;");
       }
+      return;
+    }
+
+    // Worked → promote into persona gold voice set (one-tap training)
+    if (next === "worked" && draft.content?.trim().length > 20) {
+      const persona = personas.find((p) => p.id === draft.persona_id);
+      if (persona) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          const existing = Array.isArray(persona.voice_samples) ? persona.voice_samples : [];
+          const text = draft.content.trim().slice(0, 2000);
+          if (!existing.some((s) => (s.text || "").trim() === text)) {
+            const sample = {
+              id: `worked-${draft.id}`,
+              text,
+              source: "curated" as const,
+              enabled: true,
+              addedAt: new Date().toISOString(),
+            };
+            const nextSamples = [...existing, sample].slice(-40);
+            const { error: pe } = await supabase
+              .from("personas")
+              .update({ voice_samples: nextSamples })
+              .eq("id", persona.id)
+              .eq("user_id", user.id);
+            if (!pe) {
+              setPersonas((prev) =>
+                prev.map((p) =>
+                  p.id === persona.id ? { ...p, voice_samples: nextSamples } : p
+                )
+              );
+            }
+          }
+        }
+      }
     }
   };
 
@@ -477,6 +514,11 @@ export default function DraftsPage() {
                   >
                     Flopped
                   </button>
+                  {draft.performance === "worked" && (
+                    <span className="text-[10px] text-emerald-500/80 ml-1">
+                      + gold voice
+                    </span>
+                  )}
                 </div>
 
                 {improvedContent[draft.id] && (

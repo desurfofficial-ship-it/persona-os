@@ -1125,6 +1125,23 @@ const buildBody = (extra: Record<string, unknown> = {}) => ({
                 </div>
               )}
 
+              
+              {variant.packaging && variant.packaging.score < 55 && (
+                <p className="text-[11px] text-amber-500/90 mb-3">
+                  Packaging tip: {(variant.packaging.notes && variant.packaging.notes[0])
+                    ? variant.packaging.notes[0].replace("slop:", "").replace(/-/g, " ")
+                    : "sharpen the first line — it has to work alone before the fold"}. Try{" "}
+                  <button
+                    type="button"
+                    className="underline hover:text-amber-300"
+                    onClick={() => handleMoreLike(idx)}
+                  >
+                    3 packaging remixes
+                  </button>
+                  .
+                </p>
+              )}
+
               <pre className="whitespace-pre-wrap text-zinc-200 text-sm leading-relaxed mb-1">
                 {rewritingIndex === idx ? "Working…" : variant.content}
               </pre>
