@@ -312,11 +312,7 @@ function SeriesContent() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Image prompt failed");
-      const variant = Array.isArray(data.variants) ? data.variants[0] : null;
-      const content =
-        (variant && typeof variant.content === "string" && variant.content) ||
-        (typeof data.content === "string" && data.content) ||
-        "";
+      const content = extractGenerateContent(data);
       if (!content.trim()) throw new Error("Empty image prompt");
       setImagePrompts((prev) => ({ ...prev, [post.day]: content }));
       const {
@@ -360,11 +356,7 @@ function SeriesContent() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `Image prompt failed for day ${post.day}`);
-        const variant = Array.isArray(data.variants) ? data.variants[0] : null;
-        const content =
-          (variant && typeof variant.content === "string" && variant.content) ||
-          (typeof data.content === "string" && data.content) ||
-          "";
+        const content = extractGenerateContent(data);
         if (!content.trim()) throw new Error(`Empty image prompt for day ${post.day}`);
         setImagePrompts((prev) => ({ ...prev, [post.day]: content }));
         const {

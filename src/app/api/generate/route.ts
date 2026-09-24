@@ -152,12 +152,13 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       engine: "v2",
+      // Always include content (best usable variant) so older clients keep working.
+      content: best?.content ?? "",
       variants: legacy ? [best] : ranked,
       fingerprint: fingerprintMeta,
       provider,
       degraded: failed > 0,
       failed,
-      ...(legacy ? { content: best.content } : {}),
       ...(usable.length === 0
         ? { warning: "All variants failed the quality gate — shown with reasons" }
         : {}),
