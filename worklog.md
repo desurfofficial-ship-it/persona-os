@@ -597,3 +597,15 @@ Stage Summary:
 - OPEN ITEM from task 24 CLOSED: AI generation fully operational (generate/analyze/strengthen/copilotkit paths all have their key now).
 - Security note: this key was shared in chat (3rd+ exposure) — remind user to rotate it once the preview milestone is done; it is NOT in the repo (verified).
 - Pending push: 1 local commit (this worklog entry) — will ride along with the next PAT-authorized push.
+
+---
+Task ID: 26-push-record-t25
+Agent: Super Z (main agent)
+Task: User re-supplied the task-24 PAT; deliver the two task-25 commits to GitHub.
+
+Work Log:
+- Pushed f2c4b1b..2130a25 main -> main via one-time PAT URL (output sed-masked): 4b74f64 (round-3 UI E2E proof screenshots, message reworded from gateway UUID commit) + 2130a25 (worklog task 25). Tracking ref synced; origin/main..HEAD = 0.
+- Note: the PAT is the SAME one issued for task 24 (was to be revoked after use) and has now appeared in chat TWICE — rotation reminder re-issued to the user.
+
+Stage Summary:
+- Task-25 deliverables are LIVE on origin/main: AI key restore record + E2E proof screenshots. Repo fully synced; zero secret residue (key + PAT verified absent from tree and history in their respective scans).
