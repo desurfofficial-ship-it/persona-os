@@ -561,3 +561,21 @@ Stage Summary:
 - Signup/signin is now unbreakable by environment loss and unforgeable from source knowledge. The user's exact error class is closed at the root.
 - Critical coordination fact for the user: TWO development tracks are writing to this repo (mine: security hardening; theirs: product features). Both are now merged and green on one tree. Suggest the user clarify whether the parallel track is theirs (another agent session) to avoid future collisions.
 - OPEN ITEM: OPENROUTER_API_KEY lost with the wiped .env.local — AI generation returns key-missing errors until the user provides a fresh key (rotation was overdue anyway).
+
+---
+Task ID: 24-sandbox-recovery-reverify
+Agent: Super Z (main agent)
+Task: User supplied a fresh PAT. Session-continuity audit + full environment recovery after a SECOND sandbox reset; re-verify "no bugs" per standing order.
+
+Work Log:
+- Audit: origin/main = 9032772 — task 23 (auth hotfix + parallel-track merge) was already completed, verified, and PUSHED in the prior segment. Local repo had: 1 unpushed junk commit 5e83ac2 (UUID message, 2 E2E proof PNGs) -> dropped, PNGs kept on disk untracked; mode-only noise (644->755 from sandbox restore) on 8 files -> reverted to index.
+- Second sandbox reset detected (Sep 25 20:49): .env.local wiped AGAIN (no LOCAL_SESSION_SECRET, OpenRouter key already lost with the first wipe) and db/custom.db recreated EMPTY (0 users, 0 personas, 0 limiter rows).
+- Recovery: .env.local re-created with fresh LOCAL_SESSION_SECRET (gitignored, verified check-ignore); demo user re-seeded via the REAL signup API (scrypt path) + persona via seed-demo.ts.
+- Found + fixed a TEST-TOOLING bug (product code correct): the persistent limiter makes battery setup calls 429 when the window is pre-loaded by preceding traffic — redteam-round3 CRASHED at section [6] (delUser!.id after 429'd signup; sections 1-5 all passed first). Patched auth/obtainUser/signin helpers in all 3 batteries to wait out the window once (Retry-After, capped 75s) and retry; deliberate 429-test sections (raw fetch/jsonFetch) untouched. Commit 051ed73.
+- E2E live proof on restarted dev server: signup 200+token (112 chars) -> token valid on session get + authed /api/personas -> probe account signup/authed/delete-account full wipe ok -> demo signin 200.
+- Regression: round3 32/32 PASS (incl. previously-crashed [6] full-wipe + all 5 self-heal checks), round2 25/25 PASS, agent 20/20 PASS (sleep-70 gaps). tsc exit 0, eslint exit 0. Probe users + upload dirs cleaned after runs (only demo@persona-os.app remains).
+
+Stage Summary:
+- The reported signup error class stays closed at the root (self-healing secret, env var now also set); environment fully recovered from the second sandbox reset; verification suite now deterministic regardless of pre-existing limiter load.
+- OPEN ITEM (user action needed): OPENROUTER_API_KEY lost with the wiped .env.local — AI generation returns key-missing errors until a fresh key is supplied.
+- PAT handling: the PAT supplied this session was used ONLY to push the two commits below; shared once in chat -> revoke after confirming. Prior PATs (#1 x4+, #2 x1) were already requested revoked.
