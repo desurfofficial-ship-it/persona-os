@@ -12,37 +12,99 @@
  * Survives server restarts without a session table.
  *
  * Production deployments should use Supabase Auth (or similar) instead of
- * these helpers. If LOCAL_SESSION_SECRET is missing or still the default
- * outside development, token verification fails closed.
+ * these helpers. The signing secret self-heals: env var, then the generated
+ * db/session-secret file, then a fresh random secret — the public default is
+ * never used to sign.
  */
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 
+/**
+ * Historical default — NEVER used to sign anything anymore. It exists only so
+ * we can REJECT deployments that still have it configured (it is public in the
+ * repo, so a token signed with it is forgeable by anyone).
+ */
 const DEFAULT_SECRET = "persona-os-preview-secret-do-not-use-in-prod";
 
-function getSecret(): string {
+/**
+ * Self-healing session secret (round-3 hotfix):
+ *
+ *   1. LOCAL_SESSION_SECRET env var (>= 16 chars, not the public default)
+ *   2. previously generated secret persisted at db/session-secret (0600)
+ *   3. generate a fresh 32-byte random secret and persist it
+ *
+ * This removes the old failure mode where a missing .env.local made auth
+ * fail closed (users could not sign in) or — worse — fall back to a
+ * guessable default secret in development, which allowed session forgery.
+ * The generated file lives under db/ which is gitignored, and the secret
+ * survives restarts so existing sessions stay valid.
+ */
+const SECRET_FILE = path.join(process.cwd(), "db", "session-secret");
+
+let cachedSecret: string | null = null;
+
+function readPersistedSecret(): string | null {
+  try {
+    const fromDisk = fs.readFileSync(SECRET_FILE, "utf8").trim();
+    return fromDisk.length >= 32 ? fromDisk : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSecret(secret: string): boolean {
+  try {
+    fs.mkdirSync(path.dirname(SECRET_FILE), { recursive: true });
+    fs.writeFileSync(SECRET_FILE, `${secret}\n`, { mode: 0o600 });
+    return true;
+  } catch (e) {
+    console.warn(
+      "[persona-os] Could not persist the generated session secret to disk:",
+      e instanceof Error ? e.message : e
+    );
+    return false;
+  }
+}
+
+/** Resolve (and if needed create) the HMAC secret used to sign session tokens. */
+export function ensureSessionSecret(): string {
+  if (cachedSecret) return cachedSecret;
+
   const fromEnv = process.env.LOCAL_SESSION_SECRET?.trim();
   if (fromEnv && fromEnv !== DEFAULT_SECRET && fromEnv.length >= 16) {
-    return fromEnv;
+    cachedSecret = fromEnv;
+    return cachedSecret;
+  }
+  if (fromEnv === DEFAULT_SECRET) {
+    console.error(
+      "[persona-os] LOCAL_SESSION_SECRET is still the PUBLIC default — refusing to sign with it."
+    );
   }
 
-  // Allow default only in explicit development / when NODE_ENV is unset on local machines
-  const isDev =
-    process.env.NODE_ENV === "development" || process.env.ALLOW_INSECURE_LOCAL_AUTH === "1";
-
-  if (isDev) {
-    if (!fromEnv || fromEnv === DEFAULT_SECRET) {
-      console.warn(
-        "[persona-os] Using default LOCAL_SESSION_SECRET — set a real secret before any public deploy."
-      );
-    }
-    return fromEnv && fromEnv.length >= 8 ? fromEnv : DEFAULT_SECRET;
+  const fromDisk = readPersistedSecret();
+  if (fromDisk) {
+    cachedSecret = fromDisk;
+    return cachedSecret;
   }
 
-  // Production / preview without a proper secret: fail closed (no valid tokens)
-  console.error(
-    "[persona-os] LOCAL_SESSION_SECRET is missing or still the default. Auth tokens will not verify."
-  );
-  return "";
+  const generated = crypto.randomBytes(32).toString("hex");
+  const persisted = persistSecret(generated);
+  cachedSecret = generated;
+  if (persisted) {
+    console.warn(
+      "[persona-os] LOCAL_SESSION_SECRET not set — generated a random secret and persisted it to db/session-secret (gitignored). Sessions survive restarts; set LOCAL_SESSION_SECRET in .env.local to override."
+    );
+  } else {
+    console.warn(
+      "[persona-os] Session secret is ephemeral (could not write db/session-secret) — sessions will reset on restart."
+    );
+  }
+  return cachedSecret;
+}
+
+function getSecret(): string {
+  return ensureSessionSecret();
 }
 
 // ---- password hashing (round-3: salted SHA-256 -> scrypt) ------------------

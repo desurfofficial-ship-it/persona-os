@@ -7,6 +7,7 @@
  *  [4] import-posts SSRF guard (loopback / metadata / private / IPv6)
  *  [5] storage GET strict shape + nosniff + SVG forced-download
  *  [6] delete-account wipes EVERY user-scoped table + disk files
+ *  [7] self-healing session secret (env > persisted file > generate; default refused)
  *
  * Run: npx tsx scripts/redteam-round3.ts
  */
@@ -343,6 +344,75 @@ async function main() {
     delBurst.slice(0, 9).every((s) => s === 200) && delBurst[9] === 429,
     `tail=${delBurst.slice(-3).join(",")}`
   );
+
+  // ============================================================ [7] self-healing session secret
+  // ensureSessionSecret() resolution order: env -> db/session-secret file ->
+  // generate+persist. Each scenario runs in a FRESH child process (the module
+  // caches its secret per-process). Child stdout is captured, never logged.
+  console.log("\n--- [7] self-healing session secret (no manual .env.local needed) ---");
+  {
+    const { execSync } = await import("child_process");
+    const SECRET_FILE = `${process.cwd()}/db/session-secret`;
+    const snap = fs.existsSync(SECRET_FILE) ? fs.readFileSync(SECRET_FILE, "utf8") : null;
+    const run = (script: string, overrides: Record<string, string | undefined> = {}) => {
+      const env = { ...process.env } as Record<string, string | undefined>;
+      for (const [k, v] of Object.entries(overrides)) {
+        if (v === undefined) delete env[k];
+        else env[k] = v;
+      }
+      return execSync(`npx tsx -e ${JSON.stringify(script)}`, {
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "inherit"],
+        env: env as NodeJS.ProcessEnv,
+      })
+        .toString()
+        .trim();
+    };
+    const boot = `const path=require("path");import(path.resolve("src/lib/local-session")).then(m=>console.log(m.ensureSessionSecret()))`;
+
+    // Snapshot state, move any persisted secret away so [a] exercises generation.
+    const hadFile = fs.existsSync(SECRET_FILE);
+    const holdPath = `${SECRET_FILE}.battery-hold`;
+    if (hadFile) fs.renameSync(SECRET_FILE, holdPath);
+
+    try {
+      // [a] no env + no file -> generate, persist, 0600.
+      const a = run(boot, { LOCAL_SESSION_SECRET: undefined });
+      const aFile = fs.readFileSync(SECRET_FILE, "utf8").trim();
+      const mode = fs.statSync(SECRET_FILE).mode & 0o777;
+      report(
+        "r3.s1.secret-generated-and-persisted",
+        a.length >= 64 && a === aFile && mode === 0o600,
+        `len=${a.length} mode=0${mode.toString(8)}`
+      );
+
+      // [b] no env + file present -> reads the persisted secret (survives restart).
+      const b = run(boot, { LOCAL_SESSION_SECRET: undefined });
+      report("r3.s2.secret-persisted-across-processes", b === aFile, `match=${b === aFile}`);
+
+      // [c] env set -> env wins over file.
+      const envVal = crypto.randomBytes(32).toString("hex");
+      const c = run(boot, { LOCAL_SESSION_SECRET: envVal });
+      report("r3.s3.env-takes-priority", c === envVal, `match=${c === envVal}`);
+
+      // [d] env set to the PUBLIC default -> refused, falls back to file secret.
+      const d = run(boot, { LOCAL_SESSION_SECRET: "persona-os-preview-secret-do-not-use-in-prod" });
+      report(
+        "r3.s4.public-default-secret-refused",
+        d === aFile && d !== "persona-os-preview-secret-do-not-use-in-prod",
+        `refused=${d !== "persona-os-preview-secret-do-not-use-in-prod"}`
+      );
+
+      // [e] live server roundtrip on the same code path (signup issues a token).
+      const rt = await auth("signup", `r3.sec-${Date.now()}@probe.test`, "secretpass8");
+      report("r3.s5.live-signup-issues-token", rt.status === 200 && !!rt.token, `status=${rt.status}`);
+    } finally {
+      // Restore pre-battery state exactly.
+      if (fs.existsSync(SECRET_FILE)) fs.rmSync(SECRET_FILE);
+      if (hadFile) fs.renameSync(holdPath, SECRET_FILE);
+      else if (snap !== null) fs.writeFileSync(SECRET_FILE, snap);
+    }
+  }
 
   // ============================================================ summary
   console.log(`\n=== ROUND-3 RESULT: ${pass} PASS / ${fail} FAIL ===\n`);

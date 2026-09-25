@@ -84,12 +84,13 @@ export async function POST(req: NextRequest) {
       const token = signToken(user.id);
       return NextResponse.json({ token, user: publicUser(user) });
     } catch (e) {
-      console.error("signup token:", e);
+      // Account row exists but the session could not be signed (server
+      // misconfiguration). Return a clean, actionable error instead of an
+      // unhandled 500 — with the self-healing secret this is unreachable,
+      // kept as defense-in-depth (no manual .env.local instructions needed).
+      console.error("[persona-os] signup session signing failed:", e);
       return NextResponse.json(
-        {
-          error:
-            "Account created but session could not be created. Set LOCAL_SESSION_SECRET (≥16 chars) in .env.local and restart, then sign in.",
-        },
+        { error: "Account created but the session could not be signed — please try signing in." },
         { status: 500 }
       );
     }
@@ -112,12 +113,9 @@ export async function POST(req: NextRequest) {
       const token = signToken(user.id);
       return NextResponse.json({ token, user: publicUser(user) });
     } catch (e) {
-      console.error("signin token:", e);
+      console.error("[persona-os] signin session signing failed:", e);
       return NextResponse.json(
-        {
-          error:
-            "Password ok but session could not be created. Set LOCAL_SESSION_SECRET (≥16 chars) in .env.local and restart the server.",
-        },
+        { error: "Credentials verified but the session could not be signed — please try again." },
         { status: 500 }
       );
     }

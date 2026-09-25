@@ -1,16 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-/**
- * Local preview auth UI.
- * After success we hard-navigate to /dashboard so every client component
- * re-reads the token from localStorage (router.push alone can race with
- * useEffect auth guards and bounce you straight back to /login).
- */
-
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
@@ -22,51 +17,30 @@ export default function LoginPage() {
     setLoading(true);
     setMessage(null);
 
-    const trimmedEmail = email.trim();
-    if (!trimmedEmail) {
-      setMessage("Enter an email address");
-      setLoading(false);
-      return;
-    }
-    if (password.length < 8) {
-      setMessage("Password must be at least 8 characters");
-      setLoading(false);
-      return;
-    }
-
     try {
       if (isSignUp) {
         const { error, data } = await supabase.auth.signUp({
-          email: trimmedEmail,
+          email,
           password,
         });
         if (error) throw error;
-        if (!data?.session) {
-          throw new Error(
-            "Account created but no session returned. Check LOCAL_SESSION_SECRET on the server, then sign in."
-          );
+        // Preview backend confirms signups instantly — go straight in.
+        if (data?.session) {
+          router.push("/dashboard");
+          return;
         }
+        setMessage("Check your email for the confirmation link (or disable email confirm in Supabase for faster testing).");
       } else {
-        const { error, data } = await supabase.auth.signInWithPassword({
-          email: trimmedEmail,
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
           password,
         });
         if (error) throw error;
-        if (!data?.session) {
-          throw new Error("Sign in succeeded but no session was stored. Try again.");
-        }
+        router.push("/dashboard");
       }
-      // Full reload — avoids client-nav race with dashboard auth guards.
-      window.location.assign("/dashboard");
-      return;
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : typeof err === "object" && err && "message" in err
-            ? String((err as { message: unknown }).message)
-            : "Something went wrong";
-      setMessage(msg);
+    } catch (err: any) {
+      setMessage(err.message);
+    } finally {
       setLoading(false);
     }
   };
@@ -88,49 +62,39 @@ export default function LoginPage() {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="Email"
             required
-            autoComplete="email"
             className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
           />
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password (min 8 characters)"
+            placeholder="Password"
             required
             minLength={8}
-            autoComplete={isSignUp ? "new-password" : "current-password"}
             className="w-full px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-white"
           />
 
           {message && (
-            <div className="p-3 bg-red-900/40 border border-red-700 rounded-lg text-red-200 text-sm">
-              {message}
-            </div>
+            <p className="text-sm text-zinc-300 bg-zinc-900 p-3 rounded-lg">{message}</p>
           )}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 disabled:opacity-50"
+            className="w-full py-3 bg-white text-black font-medium rounded-lg hover:bg-zinc-200 transition disabled:opacity-50"
           >
-            {loading ? "Please wait…" : isSignUp ? "Create account" : "Sign in"}
+            {loading ? "Loading..." : isSignUp ? "Sign Up" : "Sign In"}
           </button>
         </form>
 
-        <button
-          type="button"
-          onClick={() => {
-            setIsSignUp(!isSignUp);
-            setMessage(null);
-          }}
-          className="w-full text-sm text-zinc-400 hover:text-white"
-        >
-          {isSignUp ? "Already have an account? Sign in" : "Need an account? Sign up"}
-        </button>
-
-        <p className="text-[11px] text-zinc-600 text-center leading-relaxed">
-          Local preview stores your session in this browser. Password must be at least 8
-          characters. No email confirmation required.
+        <p className="text-center text-sm text-zinc-500">
+          {isSignUp ? "Already have an account?" : "Need an account?"}{" "}
+          <button
+            onClick={() => setIsSignUp(!isSignUp)}
+            className="text-white underline"
+          >
+            {isSignUp ? "Sign in" : "Sign up"}
+          </button>
         </p>
       </div>
     </div>
