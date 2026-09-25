@@ -67,17 +67,26 @@ async function authed(
 const PASSWORD = "rt2-correct-horse-battery";
 async function obtainUser(tag: string): Promise<{ email: string; token: string; userId: string }> {
   const email = `rt2-${tag}-${Date.now()}@example.com`;
-  let res = await jsonFetch("/api/local-auth", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "signup", email, password: PASSWORD }),
-  });
-  if (res.status !== 200) {
-    res = await jsonFetch("/api/local-auth", {
+  const post = (action: string) =>
+    jsonFetch("/api/local-auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "signin", email, password: PASSWORD }),
+      body: JSON.stringify({ action, email, password: PASSWORD }),
     });
+  let res = await post("signup");
+  // Persistent limiter (10/min/IP, SQLite-backed): if the window is pre-loaded
+  // by preceding traffic, wait out the window ONCE and retry instead of
+  // failing the whole battery. The deliberate limiter spray in [4] uses
+  // jsonFetch directly and is unaffected.
+  if (res.status === 429) {
+    const ra = Number(
+      (res.body && (res.body as { retryAfterSec?: number }).retryAfterSec) || 60
+    );
+    await new Promise((resolve) => setTimeout(resolve, Math.min(ra, 75) * 1000 + 1000));
+    res = await post("signup");
+  }
+  if (res.status !== 200) {
+    res = await post("signin");
   }
   const token = res.body?.token || "";
   const userId = token.slice(0, token.indexOf("."));

@@ -53,13 +53,31 @@ async function api(path: string, init: RequestInit & { token?: string } = {}) {
 }
 
 async function auth(action: "signup" | "signin", email: string, password: string) {
-  const res = await fetch(`${BASE}/api/local-auth`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, email, password }),
-  });
-  const json = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
-  return { status: res.status, token: json.token || "", error: json.error || "" };
+  const attempt = async () => {
+    const res = await fetch(`${BASE}/api/local-auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, email, password }),
+    });
+    const json = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+    return {
+      status: res.status,
+      token: json.token || "",
+      error: json.error || "",
+      retryAfter: Number(res.headers.get("retry-after") || 0),
+    };
+  };
+  // The limiter is persistent (SQLite) and shared across processes — if the
+  // 10/min/IP window is pre-loaded (manual E2E checks, a prior battery run),
+  // an auth call here can come back 429 and, worse, strand a section that
+  // expects a created user row. Wait out the window ONCE and retry. Sections
+  // that deliberately test 429s use raw fetch()/api() and are unaffected.
+  let r = await attempt();
+  if (r.status === 429 && r.retryAfter > 0 && r.retryAfter <= 75) {
+    await new Promise((resolve) => setTimeout(resolve, (r.retryAfter + 1) * 1000));
+    r = await attempt();
+  }
+  return { status: r.status, token: r.token, error: r.error };
 }
 
 const stamp = Date.now().toString(36);

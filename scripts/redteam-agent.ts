@@ -29,13 +29,25 @@ async function api(path: string, init: RequestInit & { token?: string } = {}) {
 }
 
 async function signin(email: string, password: string): Promise<string> {
-  const res = await fetch(`${BASE}/api/local-auth`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "signin", email, password }),
-  });
-  const json = (await res.json()) as { token?: string; session?: { token?: string } };
-  return json.token || json.session?.token || "";
+  const attempt = async () => {
+    const res = await fetch(`${BASE}/api/local-auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "signin", email, password }),
+    });
+    const json = (await res.json()) as { token?: string; session?: { token?: string } };
+    return {
+      token: json.token || json.session?.token || "",
+      retryAfter: Number(res.headers.get("retry-after") || 0),
+    };
+  };
+  // Persistent limiter: wait out a pre-loaded window ONCE and retry.
+  let r = await attempt();
+  if (!r.token && r.retryAfter > 0 && r.retryAfter <= 75) {
+    await new Promise((resolve) => setTimeout(resolve, (r.retryAfter + 1) * 1000));
+    r = await attempt();
+  }
+  return r.token;
 }
 
 let pass = 0, fail = 0;
