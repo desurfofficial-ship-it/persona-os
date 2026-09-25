@@ -104,9 +104,10 @@ function mapRow(row: Record<string, unknown>, cols: Record<string, string>) {
 }
 
 interface Filter {
-  type: "eq" | "in" | "gte" | "lte" | "gt" | "lt" | "ne";
+  type: "eq" | "in" | "gte" | "lte" | "gt" | "lt" | "ne" | "not";
   column: string;
   value: unknown;
+  innerOp?: string;
 }
 
 function buildWhere(
@@ -128,6 +129,19 @@ function buildWhere(
       AND.push({ [camel]: { in: f.value } });
     } else if (f.type === "ne") {
       AND.push({ [camel]: { not: f.value } });
+    } else if (f.type === "not") {
+      // Postgrest negation: .not(col, op, value). Prisma's `not` accepts a
+      // value (eq/ne) or a condition object (ranges / is-null).
+      const inner = f.innerOp || "eq";
+      if (inner === "is") {
+        AND.push({ [camel]: { not: f.value } }); // not(col, "is", null) -> IS NOT NULL
+      } else if (inner === "eq" || inner === "ne") {
+        AND.push({ [camel]: { not: f.value } });
+      } else if (inner === "gte" || inner === "lte" || inner === "gt" || inner === "lt") {
+        AND.push({ [camel]: { not: { [inner]: f.value } } });
+      } else {
+        throw new Error(`Unsupported .not operator "${inner}"`);
+      }
     } else {
       // Range comparators (gte/lte/gt/lt). DateTime columns arrive as ISO
       // strings from the browser — convert so Prisma compares properly.
@@ -266,22 +280,30 @@ export async function POST(req: NextRequest) {
     }
 
     if (op === "insert") {
-      const data = coerce(table, mapKeys(payload.values || {}, cols));
-      data.userId = userId; // never trust client-supplied user_id
+      // Single row or batch (array) — both scoped to the authenticated user,
+      // never trusting client-supplied user_id.
+      const rawRows: Record<string, unknown>[] = Array.isArray(payload.values)
+        ? payload.values
+        : [payload.values || {}];
+      const datas = rawRows.map((r) => {
+        const d = coerce(table, mapKeys(r || {}, cols));
+        d.userId = userId;
+        return d;
+      });
 
-      // Upsert emulation: when the caller passes an onConflict column list,
-      // look up an existing row by those columns (scoped to the user) and
-      // update it instead of creating a duplicate.
+      // Upsert emulation (single row only): when the caller passes an
+      // onConflict column list, look up an existing row by those columns
+      // (scoped to the user) and update it instead of creating a duplicate.
       const onConflict =
         typeof payload.onConflict === "string" && payload.onConflict.trim().length > 0
           ? payload.onConflict.split(",").map((c) => c.trim()).filter(Boolean)
           : null;
-      if (onConflict && onConflict.length > 0) {
+      if (onConflict && onConflict.length > 0 && datas.length === 1) {
         const conflictWhere: Record<string, unknown> = { userId };
         let resolvable = true;
         for (const col of onConflict) {
           const camel = cols[col];
-          const v = camel ? data[camel] : undefined;
+          const v = camel ? datas[0][camel] : undefined;
           if (!camel || v === undefined) {
             resolvable = false;
             break;
@@ -291,17 +313,29 @@ export async function POST(req: NextRequest) {
         if (resolvable) {
           const existing = await delegate.findFirst({ where: conflictWhere });
           if (existing) {
-            const updated = await delegate.update({ where: { id: (existing as { id: string }).id }, data });
+            const updated = await delegate.update({ where: { id: (existing as { id: string }).id }, data: datas[0] });
             return NextResponse.json({ data: [mapRow(updated, cols)], error: null });
           }
         }
       }
 
-      const created = await delegate.create({ data });
-      let mapped = [mapRow(created, cols)];
-      if (wantsPersonaEmbed && created.personaId) {
-        const p = await db.persona.findFirst({ where: { id: created.personaId, userId } });
-        if (p) mapped[0] = { ...mapped[0], personas: { name: p.name } };
+      const createdList =
+        datas.length === 1
+          ? [await delegate.create({ data: datas[0] })]
+          : await db.$transaction(datas.map((d) => delegate.create({ data: d })));
+      const mapped = createdList.map((c) => mapRow(c, cols));
+      if (wantsPersonaEmbed) {
+        for (const c of createdList) {
+          if ((c as { personaId?: string }).personaId) {
+            const p = await db.persona.findFirst({
+              where: { id: (c as { personaId: string }).personaId, userId },
+            });
+            if (p) {
+              const hit = mapped[createdList.indexOf(c)] as { personas?: { name: string } };
+              if (hit) hit.personas = { name: p.name };
+            }
+          }
+        }
       }
       return NextResponse.json({ data: mapped, error: null });
     }

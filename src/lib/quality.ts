@@ -458,7 +458,7 @@ export function qualityGate(
   opts: {
     platform: PlatformId;
     type?: GenTypeLite;
-    persona?: { name?: string; forbidden_topics?: string[] };
+    persona?: { name?: string; forbidden_topics?: string[] | null };
     fingerprint?: unknown;
     forbidden?: string[];
     posted?: { content?: string }[];

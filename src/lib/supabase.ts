@@ -23,7 +23,7 @@ type MockUser = { id: string; email: string };
 type MockError = { message: string; status?: number } | null;
 type DbResponse<T = any> = { data: T; error: MockError; count?: number | null };
 
-type Filter = { type: "eq" | "in" | "gte" | "lte" | "gt" | "lt" | "ne"; column: string; value: unknown };
+type Filter = { type: "eq" | "in" | "gte" | "lte" | "gt" | "lt" | "ne" | "not"; column: string; value: unknown; innerOp?: string };
 
 interface SelectOptions {
   count?: "exact" | "planned" | "estimated";
@@ -86,7 +86,7 @@ class PostgrestQueryBuilder {
   constructor(
     private table: string,
     private op: "select" | "insert" | "update" | "delete",
-    private values?: Record<string, unknown>,
+    private values?: Record<string, unknown> | Record<string, unknown>[],
     private options?: SelectOptions
   ) {}
 
@@ -96,9 +96,9 @@ class PostgrestQueryBuilder {
     return this;
   }
 
-  insert(values: Record<string, unknown>): PostgrestQueryBuilder {
+  insert(values: Record<string, unknown> | Record<string, unknown>[]): PostgrestQueryBuilder {
     this.op = "insert";
-    this.values = values;
+    this.values = values as Record<string, unknown>;
     return this;
   }
 
@@ -147,6 +147,12 @@ class PostgrestQueryBuilder {
 
   ne(column: string, value: unknown): PostgrestQueryBuilder {
     this.filters.push({ type: "ne", column, value });
+    return this;
+  }
+
+  /** Postgrest negation: .not(col, op, value). Supports eq/ne/gt/gte/lt/lte/is. */
+  not(column: string, op: string, value: unknown): PostgrestQueryBuilder {
+    this.filters.push({ type: "not", column, value, innerOp: op });
     return this;
   }
 

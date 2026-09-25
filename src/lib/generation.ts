@@ -781,7 +781,7 @@ export async function runVariant(args: {
     original: gate.changed ? gate.original : undefined,
     rank: 0,
     voiceMatch,
-    voiceNote: voiceMatchNote(voiceMatch, fingerprint),
+    voiceNote: voiceMatchNote(voiceMatch),
     hookType: strategy.label,
     wordCount: content.split(/\s+/).filter(Boolean).length,
     why: strategy.directive.slice(0, 120),

@@ -320,7 +320,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
       "f/2.8 wasn't for bokeh here. It was 1/200s at dusk — the aperture bought me the shutter speed to freeze the laugh.",
       "Deleted 400 frames today. Keepers: 11. The delete key is the most underrated photography tool.",
     ],
-  },,
+  },
 
   {
     id: "soft-flex",
