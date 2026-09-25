@@ -540,3 +540,24 @@ Stage Summary:
 - Round-3 hardening is LIVE on origin/main (d9c5b97). Round-2 Known-left all closed: scrypt passwords (C->A-), persistent SQLite limiter, strict GET shape, ignoreBuildErrors=false. Round-3 new catches: import-posts SSRF (critical), SVG stored-XSS, delete-account orphaned rows, full route-limit coverage.
 - Grade trajectory: passwords C->A-, limiter architecture -> A, AI-abuse B+->A, plus a critical SSRF closed that predated all three rounds.
 - PAT rotation reminder re-issued (this PAT shared once in chat; previous ones 4+ times).
+
+---
+Task ID: 23-auth-hotfix-merged
+Agent: Super Z (main agent)
+Task: "I try signing up and this is what i got: Account created but session could not be created..." — fix every bug before reporting back.
+
+Work Log:
+- Root cause: sandbox reset wiped .env.local AND db/custom.db mid-session; server auto-restarted without any secrets. Two failure modes surfaced: (a) signup stranded ("account created, no session"), (b) WORSE — dev fallback silently signed tokens with the PUBLIC default secret (forgeable sessions on the preview; the secret ships in the public repo).
+- Fix 1 (src/lib/local-session.ts): ensureSessionSecret() — env var -> persisted db/session-secret (0600, gitignored) -> generate 32-byte random. Public default NEVER signs (refused with error). Sessions survive restarts; zero manual steps; closes the forgery hole.
+- Fix 2 (local-auth route): signToken wrapped both paths -> clean actionable 500 JSON, no unhandled exception stranding accounts.
+- Fix 3 (login page): client minLength 6 -> 8 (matches API).
+- Discovered PARALLEL TRACK on origin/main: 26 commits (Posts desk, series scheduling, viral playbooks...) by "Persona OS Cofounder", incl. d0c3c41 which produced the exact error message the user saw (it only re-worded the symptom, telling users to edit .env.local — not viable for a non-technical CEO). Rebased my hotfix onto it (ebba75b duplicate-dropped; conflicts resolved: route keeps my no-manual-step messages, login page takes their rewrite with hard redirect).
+- Merge fixes for parallel-track bugs: .not() implemented end-to-end in the supabase shim + local-db server (calendar page crashed without it); batch insert accepts arrays with per-row userId scoping + transaction (Posts desk batch was broken); templates.ts array-hole ',,' removed (undefined element crasher); voiceMatchNote arity; quality.ts persona type widened.
+- Environment rebuild: .env.local recreated with fresh LOCAL_SESSION_SECRET (OpenRouter key UNRECOVERABLE after wipe — needs user re-supply); demo user + persona reseeded.
+- Verified: tsc exit 0 full tree, eslint clean; live proof: cold boot WITHOUT .env.local -> signup 200 + secret file 0600 created -> restart -> token still valid; batteries on merged tree: round3 32/32 (+5 new self-heal checks), round2 25/25, agent 20/20; real-UI signup -> dashboard, zero page errors. Probe accounts cleaned.
+- Pushed 8be0afc..b9905bc via one-time PAT (output masked); tracking ref synced; zero residue (tree grep + pickaxe incl. PAT value itself).
+
+Stage Summary:
+- Signup/signin is now unbreakable by environment loss and unforgeable from source knowledge. The user's exact error class is closed at the root.
+- Critical coordination fact for the user: TWO development tracks are writing to this repo (mine: security hardening; theirs: product features). Both are now merged and green on one tree. Suggest the user clarify whether the parallel track is theirs (another agent session) to avoid future collisions.
+- OPEN ITEM: OPENROUTER_API_KEY lost with the wiped .env.local — AI generation returns key-missing errors until the user provides a fresh key (rotation was overdue anyway).
