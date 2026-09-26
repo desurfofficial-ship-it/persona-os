@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Persona OS — Ball Claim Loop · v19</title>
+<style>
+  /* === Design tokens (locked field-green palette) ============================ */
+  :root {
+    --pitch-dark:  #1B4332;
+    --pitch-mid:    #2D6A4F;
+    --pitch-light:  #40916C;
+    --cream:        #FFF8E8;
+    --bag-tan:      #C68D59;
+    --bag-shadow:   #8B5A2B;
+    --char-body:    #6F4E37;
+    --char-shadow:  #4A3225;
+    --char-pants:   #2C2C2C;
+    --char-pants-b: #1F1F1F;
+    --char-shoe:    #0A0A0A;
+    --char-skin:    #D4A574;
+    --char-skin-b:  #B8895C;
+    --hood-hole:    #0E0E0E;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    background: #050807;
+    min-height: 100vh;
+    font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    color: #6b6b6b;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 28px 20px;
+    gap: 18px;
+  }
+
+  .stage {
+    width: 100%;
+    max-width: 1200px;
+    aspect-ratio: 16 / 9;
+    border-radius: 16px;
+    overflow: hidden;
+    position: relative;
+    background: var(--pitch-dark);
+    box-shadow:
+      0 30px 80px rgba(0,0,0,0.55),
+      0 0 0 1px rgba(255,255,255,0.04);
+  }
+  .stage svg { display: block; width: 100%; height: 100%; }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #4a4a4a;
+  }
+  .meta span { display: inline-flex; align-items: center; gap: 7px; }
+  .meta .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #52B788;
+    box-shadow: 0 0 8px #52B788;
+  }
+
+  /* === Keyframes (one 8s loop, single timeline per element) ================== */
+
+  /* Whole character moves across the pitch */
+  @keyframes traverse {
+    0%   { transform: translate(-200px, 0); }
+    15%  { transform: translate(200px, 0);  }   /* arrive ball 1 */
+    25%  { transform: translate(200px, 0);  }   /* pause · pick 1 */
+    40%  { transform: translate(500px, 0);  }   /* arrive ball 2 */
+    50%  { transform: translate(500px, 0);  }   /* pause · pick 2 */
+    65%  { transform: translate(800px, 0);  }   /* arrive ball 3 */
+    75%  { transform: translate(800px, 0);  }   /* pause · pick 3 */
+    100% { transform: translate(1400px, 0); }   /* exit right */
+  }
+
+  /* Front leg — walk cycles + planted pick phase */
+  @keyframes leg-front-swing {
+    0%      { transform: rotate(0deg); }
+    1.875%  { transform: rotate(28deg); }
+    3.75%   { transform: rotate(0deg); }
+    5.625%  { transform: rotate(-28deg); }
+    7.5%    { transform: rotate(0deg); }
+    9.375%  { transform: rotate(28deg); }
+    11.25%  { transform: rotate(0deg); }
+    13.125% { transform: rotate(-28deg); }
+    15%     { transform: rotate(0deg); }
+    17.5%   { transform: rotate(-12deg); }
+    22.5%   { transform: rotate(-12deg); }
+    25%     { transform: rotate(0deg); }
+    26.875% { transform: rotate(28deg); }
+    28.75%  { transform: rotate(0deg); }
+    30.625% { transform: rotate(-28deg); }
+    32.5%   { transform: rotate(0deg); }
+    34.375% { transform: rotate(28deg); }
+    36.25%  { transform: rotate(0deg); }
+    38.125% { transform: rotate(-28deg); }
+    40%     { transform: rotate(0deg); }
+    42.5%   { transform: rotate(-12deg); }
+    47.5%   { transform: rotate(-12deg); }
+    50%     { transform: rotate(0deg); }
+    51.875% { transform: rotate(28deg); }
+    53.75%  { transform: rotate(0deg); }
+    55.625% { transform: rotate(-28deg); }
+    57.5%   { transform: rotate(0deg); }
+    59.375% { transform: rotate(28deg); }
+    61.25%  { transform: rotate(0deg); }
+    63.125% { transform: rotate(-28deg); }
+    65%     { transform: rotate(0deg); }
+    67.5%   { transform: rotate(-12deg); }
+    72.5%   { transform: rotate(-12deg); }
+    75%     { transform: rotate(0deg); }
+    76.875% { transform: rotate(28deg); }
+    78.75%  { transform: rotate(0deg); }
+    80.625% { transform: rotate(-28deg); }
+    82.5%   { transform: rotate(0deg); }
+    84.375% { transform: rotate(28deg); }
+    86.25%  { transform: rotate(0deg); }
+    88.125% { transform: rotate(-28deg); }
+    90%     { transform: rotate(0deg); }
+    91.875% { transform: rotate(28deg); }
+    93.75%  { transform: rotate(0deg); }
+    95.625% { transform: rotate(-28deg); }
+    97.5%   { transform: rotate(0deg); }
+    100%    { transform: rotate(0deg); }
+  }
+
+  /* Back leg = opposite phase of front leg */
+  @keyframes leg-back-swing {
+    0%      { transform: rotate(0deg); }
+    1.875%  { transform: rotate(-28deg); }
+    3.75%   { transform: rotate(0deg); }
+    5.625%  { transform: rotate(28deg); }
+    7.5%    { transform: rotate(0deg); }
+    9.375%  { transform: rotate(-28deg); }
+    11.25%  { transform: rotate(0deg); }
+    13.125% { transform: rotate(28deg); }
+    15%     { transform: rotate(0deg); }
+    17.5%   { transform: rotate(10deg); }
+    22.5%   { transform: rotate(10deg); }
+    25%     { transform: rotate(0deg); }
+    26.875% { transform: rotate(-28deg); }
+    28.75%  { transform: rotate(0deg); }
+    30.625% { transform: rotate(28deg); }
+    32.5%   { transform: rotate(0deg); }
+    34.375% { transform: rotate(-28deg); }
+    36.25%  { transform: rotate(0deg); }
+    38.125% { transform: rotate(28deg); }
+    40%     { transform: rotate(0deg); }
+    42.5%   { transform: rotate(10deg); }
+    47.5%   { transform: rotate(10deg); }
+    50%     { transform: rotate(0deg); }
+    51.875% { transform: rotate(-28deg); }
+    53.75%  { transform: rotate(0deg); }
+    55.625% { transform: rotate(28deg); }
+    57.5%   { transform: rotate(0deg); }
+    59.375% { transform: rotate(-28deg); }
+    61.25%  { transform: rotate(0deg); }
+    63.125% { transform: rotate(28deg); }
+    65%     { transform: rotate(0deg); }
+    67.5%   { transform: rotate(10deg); }
+    72.5%   { transform: rotate(10deg); }
+    75%     { transform: rotate(0deg); }
+    76.875% { transform: rotate(-28deg); }
+    78.75%  { transform: rotate(0deg); }
+    80.625% { transform: rotate(28deg); }
+    82.5%   { transform: rotate(0deg); }
+    84.375% { transform: rotate(-28deg); }
+    86.25%  { transform: rotate(0deg); }
+    88.125% { transform: rotate(28deg); }
+    90%     { transform: rotate(0deg); }
+    91.875% { transform: rotate(-28deg); }
+    93.75%  { transform: rotate(0deg); }
+    95.625% { transform: rotate(28deg); }
+    97.5%   { transform: rotate(0deg); }
+    100%    { transform: rotate(0deg); }
+  }
+
+  /* Body — bob during walk, bend FORWARD during pick (+deg = forward bend in SVG) */
+  @keyframes body-action {
+    0%      { transform: translateY(0) rotate(0deg); }
+    1.875%  { transform: translateY(-3px) rotate(0deg); }
+    3.75%   { transform: translateY(0) rotate(0deg); }
+    5.625%  { transform: translateY(-3px) rotate(0deg); }
+    7.5%    { transform: translateY(0) rotate(0deg); }
+    9.375%  { transform: translateY(-3px) rotate(0deg); }
+    11.25%  { transform: translateY(0) rotate(0deg); }
+    13.125% { transform: translateY(-3px) rotate(0deg); }
+    15%     { transform: translateY(0) rotate(0deg); }
+    17.5%   { transform: translateY(8px) rotate(18deg); }
+    22.5%   { transform: translateY(8px) rotate(18deg); }
+    25%     { transform: translateY(0) rotate(0deg); }
+    26.875% { transform: translateY(-3px) rotate(0deg); }
+    28.75%  { transform: translateY(0) rotate(0deg); }
+    30.625% { transform: translateY(-3px) rotate(0deg); }
+    32.5%   { transform: translateY(0) rotate(0deg); }
+    34.375% { transform: translateY(-3px) rotate(0deg); }
+    36.25%  { transform: translateY(0) rotate(0deg); }
+    38.125% { transform: translateY(-3px) rotate(0deg); }
+    40%     { transform: translateY(0) rotate(0deg); }
+    42.5%   { transform: translateY(8px) rotate(18deg); }
+    47.5%   { transform: translateY(8px) rotate(18deg); }
+    50%     { transform: translateY(0) rotate(0deg); }
+    51.875% { transform: translateY(-3px) rotate(0deg); }
+    53.75%  { transform: translateY(0) rotate(0deg); }
+    55.625% { transform: translateY(-3px) rotate(0deg); }
+    57.5%   { transform: translateY(0) rotate(0deg); }
+    59.375% { transform: translateY(-3px) rotate(0deg); }
+    61.25%  { transform: translateY(0) rotate(0deg); }
+    63.125% { transform: translateY(-3px) rotate(0deg); }
+    65%     { transform: translateY(0) rotate(0deg); }
+    67.5%   { transform: translateY(8px) rotate(18deg); }
+    72.5%   { transform: translateY(8px) rotate(18deg); }
+    75%     { transform: translateY(0) rotate(0deg); }
+    76.875% { transform: translateY(-3px) rotate(0deg); }
+    78.75%  { transform: translateY(0) rotate(0deg); }
+    80.625% { transform: translateY(-3px) rotate(0deg); }
+    82.5%   { transform: translateY(0) rotate(0deg); }
+    84.375% { transform: translateY(-3px) rotate(0deg); }
+    86.25%  { transform: translateY(0) rotate(0deg); }
+    88.125% { transform: translateY(-3px) rotate(0deg); }
+    90%     { transform: translateY(0) rotate(0deg); }
+    91.875% { transform: translateY(-3px) rotate(0deg); }
+    93.75%  { transform: translateY(0) rotate(0deg); }
+    95.625% { transform: translateY(-3px) rotate(0deg); }
+    97.5%   { transform: translateY(0) rotate(0deg); }
+    100%    { transform: translateY(0) rotate(0deg); }
+  }
+
+  /* Front arm — counter-swing during walk, reach FORWARD-DOWN during pick */
+  @keyframes arm-front-action {
+    0%      { transform: rotate(0deg); }
+    1.875%  { transform: rotate(-26deg); }
+    3.75%   { transform: rotate(0deg); }
+    5.625%  { transform: rotate(26deg); }
+    7.5%    { transform: rotate(0deg); }
+    9.375%  { transform: rotate(-26deg); }
+    11.25%  { transform: rotate(0deg); }
+    13.125% { transform: rotate(26deg); }
+    15%     { transform: rotate(0deg); }
+    17.5%   { transform: rotate(-50deg); }   /* reach forward-down toward ball */
+    18.5%   { transform: rotate(-50deg); }   /* hold (ball collected) */
+    20%     { transform: rotate(-30deg); }   /* begin lift toward sack */
+    22.5%   { transform: rotate(-10deg); }   /* hand near sack */
+    25%     { transform: rotate(0deg); }
+    26.875% { transform: rotate(-26deg); }
+    28.75%  { transform: rotate(0deg); }
+    30.625% { transform: rotate(26deg); }
+    32.5%   { transform: rotate(0deg); }
+    34.375% { transform: rotate(-26deg); }
+    36.25%  { transform: rotate(0deg); }
+    38.125% { transform: rotate(26deg); }
+    40%     { transform: rotate(0deg); }
+    42.5%   { transform: rotate(-50deg); }
+    43.5%   { transform: rotate(-50deg); }
+    45%     { transform: rotate(-30deg); }
+    47.5%   { transform: rotate(-10deg); }
+    50%     { transform: rotate(0deg); }
+    51.875% { transform: rotate(-26deg); }
+    53.75%  { transform: rotate(0deg); }
+    55.625% { transform: rotate(26deg); }
+    57.5%   { transform: rotate(0deg); }
+    59.375% { transform: rotate(-26deg); }
+    61.25%  { transform: rotate(0deg); }
+    63.125% { transform: rotate(26deg); }
+    65%     { transform: rotate(0deg); }
+    67.5%   { transform: rotate(-50deg); }
+    68.5%   { transform: rotate(-50deg); }
+    70%     { transform: rotate(-30deg); }
+    72.5%   { transform: rotate(-10deg); }
+    75%     { transform: rotate(0deg); }
+    76.875% { transform: rotate(-26deg); }
+    78.75%  { transform: rotate(0deg); }
+    80.625% { transform: rotate(26deg); }
+    82.5%   { transform: rotate(0deg); }
+    84.375% { transform: rotate(-26deg); }
+    86.25%  { transform: rotate(0deg); }
+    88.125% { transform: rotate(26deg); }
+    90%     { transform: rotate(0deg); }
+    91.875% { transform: rotate(-26deg); }
+    93.75%  { transform: rotate(0deg); }
+    95.625% { transform: rotate(26deg); }
+    97.5%   { transform: rotate(0deg); }
+    100%    { transform: rotate(0deg); }
+  }
+
+  /* Back arm — opposite swing, slight outward bend during picks (counter-balance) */
+  @keyframes arm-back-swing {
+    0%      { transform: rotate(0deg); }
+    1.875%  { transform: rotate(26deg); }
+    3.75%   { transform: rotate(0deg); }
+    5.625%  { transform: rotate(-26deg); }
+    7.5%    { transform: rotate(0deg); }
+    9.375%  { transform: rotate(26deg); }
+    11.25%  { transform: rotate(0deg); }
+    13.125% { transform: rotate(-26deg); }
+    15%     { transform: rotate(0deg); }
+    17.5%   { transform: rotate(15deg); }
+    22.5%   { transform: rotate(15deg); }
+    25%     { transform: rotate(0deg); }
+    26.875% { transform: rotate(26deg); }
+    28.75%  { transform: rotate(0deg); }
+    30.625% { transform: rotate(-26deg); }
+    32.5%   { transform: rotate(0deg); }
+    34.375% { transform: rotate(26deg); }
+    36.25%  { transform: rotate(0deg); }
+    38.125% { transform: rotate(-26deg); }
+    40%     { transform: rotate(0deg); }
+    42.5%   { transform: rotate(15deg); }
+    47.5%   { transform: rotate(15deg); }
+    50%     { transform: rotate(0deg); }
+    51.875% { transform: rotate(26deg); }
+    53.75%  { transform: rotate(0deg); }
+    55.625% { transform: rotate(-26deg); }
+    57.5%   { transform: rotate(0deg); }
+    59.375% { transform: rotate(26deg); }
+    61.25%  { transform: rotate(0deg); }
+    63.125% { transform: rotate(-26deg); }
+    65%     { transform: rotate(0deg); }
+    67.5%   { transform: rotate(15deg); }
+    72.5%   { transform: rotate(15deg); }
+    75%     { transform: rotate(0deg); }
+    76.875% { transform: rotate(26deg); }
+    78.75%  { transform: rotate(0deg); }
+    80.625% { transform: rotate(-26deg); }
+    82.5%   { transform: rotate(0deg); }
+    84.375% { transform: rotate(26deg); }
+    86.25%  { transform: rotate(0deg); }
+    88.125% { transform: rotate(-26deg); }
+    90%     { transform: rotate(0deg); }
+    91.875% { transform: rotate(26deg); }
+    93.75%  { transform: rotate(0deg); }
+    95.625% { transform: rotate(-26deg); }
+    97.5%   { transform: rotate(0deg); }
+    100%    { transform: rotate(0deg); }
+  }
+
+  /* Ground ball states — must include translate in keyframes (CSS transform
+     overrides SVG transform attr). Ball pops away when collected. */
+  @keyframes ball-1-state {
+    0%, 17.5%  { opacity: 1; transform: translate(200px, 510px) scale(1) translateY(0); }
+    19%        { opacity: 0; transform: translate(200px, 510px) scale(0.3) translateY(-30px); }
+    100%       { opacity: 0; transform: translate(200px, 510px) scale(0.3) translateY(-30px); }
+  }
+  @keyframes ball-2-state {
+    0%, 42.5%  { opacity: 1; transform: translate(500px, 510px) scale(1) translateY(0); }
+    44%        { opacity: 0; transform: translate(500px, 510px) scale(0.3) translateY(-30px); }
+    100%       { opacity: 0; transform: translate(500px, 510px) scale(0.3) translateY(-30px); }
+  }
+  @keyframes ball-3-state {
+    0%, 67.5%  { opacity: 1; transform: translate(800px, 510px) scale(1) translateY(0); }
+    69%        { opacity: 0; transform: translate(800px, 510px) scale(0.3) translateY(-30px); }
+    100%       { opacity: 0; transform: translate(800px, 510px) scale(0.3) translateY(-30px); }
+  }
+
+  /* Sack balls — pop into the bag as they're collected */
+  @keyframes sack-ball-1-state {
+    0%, 19%   { opacity: 0; transform: scale(0); }
+    21%       { opacity: 1; transform: scale(1); }
+    100%      { opacity: 1; transform: scale(1); }
+  }
+  @keyframes sack-ball-2-state {
+    0%, 44%   { opacity: 0; transform: scale(0); }
+    46%       { opacity: 1; transform: scale(1); }
+    100%      { opacity: 1; transform: scale(1); }
+  }
+  @keyframes sack-ball-3-state {
+    0%, 69%   { opacity: 0; transform: scale(0); }
+    71%       { opacity: 1; transform: scale(1); }
+    100%      { opacity: 1; transform: scale(1); }
+  }
+
+  /* Sack — must include translate in keyframes (CSS transform overrides SVG transform attr).
+     Pivot = strap attachment at sack-local (-15, -78). Bbox top-left = (-28, -78).
+     Offset to pivot from bbox top-left = (13, 0) → transform-origin: 13px 0px.
+     NOTE: Sack is INSIDE the body group, so body's rotation already moves the sack.
+     The sack's own keyframe only provides the BASE position (50, 360) + own swing rotation. */
+  @keyframes sack-swing {
+    0%      { transform: translate(50px, 360px) rotate(0deg); }
+    1.875%  { transform: translate(50px, 360px) rotate(3deg); }
+    3.75%   { transform: translate(50px, 360px) rotate(0deg); }
+    5.625%  { transform: translate(50px, 360px) rotate(-3deg); }
+    7.5%    { transform: translate(50px, 360px) rotate(0deg); }
+    9.375%  { transform: translate(50px, 360px) rotate(3deg); }
+    11.25%  { transform: translate(50px, 360px) rotate(0deg); }
+    13.125% { transform: translate(50px, 360px) rotate(-3deg); }
+    15%     { transform: translate(50px, 360px) rotate(0deg); }
+    /* Pick 1: body bends +18deg, sack adds own forward swing */
+    17.5%   { transform: translate(50px, 360px) rotate(8deg); }
+    22.5%   { transform: translate(50px, 360px) rotate(8deg); }
+    25%     { transform: translate(50px, 360px) rotate(0deg); }
+    26.875% { transform: translate(50px, 360px) rotate(3deg); }
+    28.75%  { transform: translate(50px, 360px) rotate(0deg); }
+    30.625% { transform: translate(50px, 360px) rotate(-3deg); }
+    32.5%   { transform: translate(50px, 360px) rotate(0deg); }
+    34.375% { transform: translate(50px, 360px) rotate(3deg); }
+    36.25%  { transform: translate(50px, 360px) rotate(0deg); }
+    38.125% { transform: translate(50px, 360px) rotate(-3deg); }
+    40%     { transform: translate(50px, 360px) rotate(0deg); }
+    /* Pick 2 */
+    42.5%   { transform: translate(50px, 360px) rotate(8deg); }
+    47.5%   { transform: translate(50px, 360px) rotate(8deg); }
+    50%     { transform: translate(50px, 360px) rotate(0deg); }
+    /* Walk phase 3: heavier sack (2 balls) — wider swing */
+    51.875% { transform: translate(50px, 360px) rotate(4deg); }
+    53.75%  { transform: translate(50px, 360px) rotate(0deg); }
+    55.625% { transform: translate(50px, 360px) rotate(-4deg); }
+    57.5%   { transform: translate(50px, 360px) rotate(0deg); }
+    59.375% { transform: translate(50px, 360px) rotate(4deg); }
+    61.25%  { transform: translate(50px, 360px) rotate(0deg); }
+    63.125% { transform: translate(50px, 360px) rotate(-4deg); }
+    65%     { transform: translate(50px, 360px) rotate(0deg); }
+    /* Pick 3 */
+    67.5%   { transform: translate(50px, 360px) rotate(8deg); }
+    72.5%   { transform: translate(50px, 360px) rotate(8deg); }
+    75%     { transform: translate(50px, 360px) rotate(0deg); }
+    /* Exit walk: heaviest (3 balls) — biggest swing */
+    76.875% { transform: translate(50px, 360px) rotate(5deg); }
+    78.75%  { transform: translate(50px, 360px) rotate(0deg); }
+    80.625% { transform: translate(50px, 360px) rotate(-5deg); }
+    82.5%   { transform: translate(50px, 360px) rotate(0deg); }
+    84.375% { transform: translate(50px, 360px) rotate(5deg); }
+    86.25%  { transform: translate(50px, 360px) rotate(0deg); }
+    88.125% { transform: translate(50px, 360px) rotate(-5deg); }
+    90%     { transform: translate(50px, 360px) rotate(0deg); }
+    91.875% { transform: translate(50px, 360px) rotate(5deg); }
+    93.75%  { transform: translate(50px, 360px) rotate(0deg); }
+    95.625% { transform: translate(50px, 360px) rotate(-5deg); }
+    97.5%   { transform: translate(50px, 360px) rotate(0deg); }
+    100%    { transform: translate(50px, 360px) rotate(0deg); }
+  }
+
+  /* === Element bindings ==================================================== */
+
+  #character     { animation: traverse 8s infinite linear; }
+
+  #leg-front,
+  #leg-back      { transform-box: fill-box; transform-origin: 50% 0%; }
+  #leg-front     { animation: leg-front-swing 8s infinite linear; }
+  #leg-back      { animation: leg-back-swing  8s infinite linear; }
+
+  #body          { transform-box: fill-box; transform-origin: 50% 100%;
+                   animation: body-action 8s infinite linear; }
+
+  #arm-front,
+  #arm-back      { transform-box: fill-box; transform-origin: 50% 0%; }
+  #arm-front     { animation: arm-front-action 8s infinite linear; }
+  #arm-back      { animation: arm-back-swing  8s infinite linear; }
+
+  #sack          { transform-box: fill-box; transform-origin: 13px 0px;
+                   animation: sack-swing 8s infinite linear; }
+
+  .ground-ball   { transform-box: fill-box; transform-origin: center; }
+  /* NOTE: the SVG transform attr on each <g class="ground-ball"> is overridden by the
+     CSS keyframe transforms above (which include the translate). The SVG transform
+     attr is kept as a fallback for non-animated renderers. */
+  #ball-1        { animation: ball-1-state 8s infinite linear; }
+  #ball-2        { animation: ball-2-state 8s infinite linear; }
+  #ball-3        { animation: ball-3-state 8s infinite linear; }
+
+  .sack-ball     { transform-box: fill-box; transform-origin: center; }
+  #sack-ball-1   { animation: sack-ball-1-state 8s infinite linear; }
+  #sack-ball-2   { animation: sack-ball-2-state 8s infinite linear; }
+  #sack-ball-3   { animation: sack-ball-3-state 8s infinite linear; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #character, #leg-front, #leg-back, #body, #arm-front, #arm-back,
+    #sack, #ball-1, #ball-2, #ball-3,
+    #sack-ball-1, #sack-ball-2, #sack-ball-3 { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+
+    <defs>
+      <!-- Pitch gradient -->
+      <linearGradient id="grassGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"   stop-color="#2D6A4F"/>
+        <stop offset="100%" stop-color="#1B4332"/>
+      </linearGradient>
+
+      <!-- Mesh pattern for the sack -->
+      <pattern id="meshPattern" x="0" y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+        <path d="M 0,0 L 10,10 M 10,0 L 0,10"
+              stroke="rgba(27,67,50,0.55)" stroke-width="1" fill="none"/>
+      </pattern>
+
+      <!-- Subtle ball shine -->
+      <radialGradient id="ballShine" cx="0.35" cy="0.35" r="0.7">
+        <stop offset="0%"   stop-color="#FFFFFF" stop-opacity="0.4"/>
+        <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+      </radialGradient>
+
+      <!-- Vignette -->
+      <radialGradient id="vignette" cx="0.5" cy="0.5" r="0.75">
+        <stop offset="55%" stop-color="#000000" stop-opacity="0"/>
+        <stop offset="100%" stop-color="#000000" stop-opacity="0.45"/>
+      </radialGradient>
+
+      <!-- Reusable football symbol -->
+      <symbol id="football" viewBox="-20 -20 40 40">
+        <circle r="18" fill="#FFF8E8" stroke="#1B4332" stroke-width="2"/>
+        <polygon points="0,-9 8.5,-2.8 5.3,7.5 -5.3,7.5 -8.5,-2.8" fill="#1B4332"/>
+        <line x1="-13" y1="-1" x2="-8.5" y2="-2.8" stroke="#1B4332" stroke-width="1.5"/>
+        <line x1="13"  y1="-1" x2="8.5"  y2="-2.8" stroke="#1B4332" stroke-width="1.5"/>
+        <line x1="-13" y1="-1" x2="-8.5" y2="3"    stroke="#1B4332" stroke-width="1.5"/>
+        <line x1="13"  y1="-1" x2="8.5"  y2="3"    stroke="#1B4332" stroke-width="1.5"/>
+        <line x1="-5.3" y1="7.5" x2="-3" y2="14"   stroke="#1B4332" stroke-width="1.5"/>
+        <line x1="5.3"  y1="7.5" x2="3"  y2="14"   stroke="#1B4332" stroke-width="1.5"/>
+        <ellipse cx="-5" cy="-7" rx="6" ry="4" fill="url(#ballShine)"/>
+      </symbol>
+    </defs>
+
+    <!-- === Background ====================================================== -->
+
+    <rect width="1200" height="675" fill="url(#grassGrad)"/>
+
+    <!-- Mowing stripes (subtle horizontal bands) -->
+    <g opacity="0.09">
+      <rect x="0" y="100" width="1200" height="50" fill="#000"/>
+      <rect x="0" y="200" width="1200" height="50" fill="#000"/>
+      <rect x="0" y="300" width="1200" height="50" fill="#000"/>
+      <rect x="0" y="400" width="1200" height="50" fill="#000"/>
+      <rect x="0" y="500" width="1200" height="50" fill="#000"/>
+    </g>
+
+    <!-- Pitch markings -->
+    <g stroke="#FFF8E8" stroke-width="3" fill="none" opacity="0.5" stroke-linecap="square">
+      <line x1="60"   y1="100" x2="1140" y2="100"/>
+      <line x1="60"   y1="575" x2="1140" y2="575"/>
+      <line x1="60"   y1="100" x2="60"   y2="575"/>
+      <line x1="1140" y1="100" x2="1140" y2="575"/>
+      <line x1="600"  y1="100" x2="600"  y2="575"/>
+      <circle cx="600"  cy="337" r="70"/>
+      <circle cx="600"  cy="337" r="3" fill="#FFF8E8" stroke="none"/>
+      <circle cx="180"  cy="337" r="2" fill="#FFF8E8" stroke="none"/>
+      <circle cx="1020" cy="337" r="2" fill="#FFF8E8" stroke="none"/>
+    </g>
+
+    <!-- === Ground balls =================================================== -->
+
+    <g id="ball-1" class="ground-ball" transform="translate(200, 510)">
+      <ellipse cx="0" cy="22" rx="20" ry="4" fill="rgba(0,0,0,0.35)"/>
+      <use href="#football" width="40" height="40" x="-20" y="-20"/>
+    </g>
+    <g id="ball-2" class="ground-ball" transform="translate(500, 510)">
+      <ellipse cx="0" cy="22" rx="20" ry="4" fill="rgba(0,0,0,0.35)"/>
+      <use href="#football" width="40" height="40" x="-20" y="-20"/>
+    </g>
+    <g id="ball-3" class="ground-ball" transform="translate(800, 510)">
+      <ellipse cx="0" cy="22" rx="20" ry="4" fill="rgba(0,0,0,0.35)"/>
+      <use href="#football" width="40" height="40" x="-20" y="-20"/>
+    </g>
+
+    <!-- === Character ====================================================== -->
+
+    <g id="character">
+
+      <!-- Ground shadow (under feet) -->
+      <ellipse cx="0" cy="555" rx="58" ry="6" fill="rgba(0,0,0,0.4)"/>
+
+      <!-- LEGS (drawn back-to-front) -->
+      <g id="legs">
+        <!-- Back leg -->
+        <g id="leg-back">
+          <rect x="-13" y="430" width="22" height="100" fill="#1F1F1F" rx="3"/>
+          <ellipse cx="-2" cy="535" rx="18" ry="9" fill="#0A0A0A"/>
+          <rect x="-15" y="528" width="22" height="6" fill="#1A1A1A" rx="2"/>
+          <line x1="-15" y1="532" x2="7" y2="532" stroke="#0A0A0A" stroke-width="1"/>
+        </g>
+        <!-- Front leg -->
+        <g id="leg-front">
+          <rect x="-9" y="430" width="22" height="100" fill="#2C2C2C" rx="3"/>
+          <ellipse cx="2" cy="535" rx="18" ry="9" fill="#1A1A1A"/>
+          <rect x="-11" y="528" width="22" height="6" fill="#2C2C2C" rx="2"/>
+          <line x1="-11" y1="532" x2="11" y2="532" stroke="#0A0A0A" stroke-width="1"/>
+        </g>
+      </g>
+
+      <!-- BODY (bobs during walk, bends during pick) -->
+      <g id="body">
+
+        <!-- Torso / hoodie -->
+        <path d="M -30,295 Q -34,285 -26,280 L 26,280 Q 34,285 30,295 L 34,430 L -34,430 Z"
+              fill="#6F4E37" stroke="#4A3225" stroke-width="2"/>
+        <!-- Hoodie zipper -->
+        <line x1="0" y1="290" x2="0" y2="425" stroke="#4A3225" stroke-width="1.5" opacity="0.65"/>
+        <!-- Pocket -->
+        <path d="M -22,398 L -22,420 L 22,420 L 22,398"
+              fill="none" stroke="#4A3225" stroke-width="1.5" opacity="0.5"/>
+        <!-- Drawstrings -->
+        <path d="M -6,290 Q -7,300 -8,310" stroke="#4A3225" stroke-width="1.5" fill="none"/>
+        <path d="M 6,290 Q 7,300 8,310"     stroke="#4A3225" stroke-width="1.5" fill="none"/>
+
+        <!-- Hood back -->
+        <ellipse cx="0" cy="240" rx="40" ry="44" fill="#6F4E37" stroke="#4A3225" stroke-width="2"/>
+        <!-- Hood opening (DARK = no face) -->
+        <ellipse cx="0" cy="250" rx="22" ry="28" fill="#0E0E0E"/>
+
+        <!-- SACK (mesh ball sack slung over right shoulder).
+             NOTE: SVG transform attr is overridden by CSS animation, so the
+             translate(50, 360) is repeated inside the @keyframes sack-swing.
+             Sack is INSIDE body group so body's rotation moves the sack naturally.
+             The sack's own keyframe just adds the swing rotation. -->
+        <g id="sack">
+          <!-- Strap from shoulder to sack -->
+          <path d="M -10,-10 Q -22,-50 -15,-78"
+                fill="none" stroke="#8B5A2B" stroke-width="5" stroke-linecap="round"/>
+
+          <!-- Sack body -->
+          <path d="M -25,-15 Q -32,15 -28,42 Q -15,52 0,54 Q 15,52 28,42 Q 32,15 25,-15 Q 0,-22 -25,-15 Z"
+                fill="#C68D59" stroke="#8B5A2B" stroke-width="2"/>
+          <!-- Mesh overlay -->
+          <path d="M -25,-15 Q -32,15 -28,42 Q -15,52 0,54 Q 15,52 28,42 Q 32,15 25,-15 Q 0,-22 -25,-15 Z"
+                fill="url(#meshPattern)"/>
+          <!-- Sack opening -->
+          <ellipse cx="0" cy="-15" rx="25" ry="6" fill="#8B5A2B"/>
+          <ellipse cx="0" cy="-15" rx="22" ry="4" fill="#5A3A1A"/>
+
+          <!-- Collected balls inside sack (pop in as collected) -->
+          <g id="sack-balls">
+            <circle id="sack-ball-1" class="sack-ball"
+                    cx="0"  cy="35" r="13"
+                    fill="#FFF8E8" stroke="#1B4332" stroke-width="1.5"/>
+            <circle id="sack-ball-2" class="sack-ball"
+                    cx="-7" cy="20" r="13"
+                    fill="#FFF8E8" stroke="#1B4332" stroke-width="1.5"/>
+            <circle id="sack-ball-3" class="sack-ball"
+                    cx="7"  cy="5"  r="13"
+                    fill="#FFF8E8" stroke="#1B4332" stroke-width="1.5"/>
+          </g>
+        </g>
+
+        <!-- ARMS -->
+        <g id="arms">
+          <!-- Back arm -->
+          <g id="arm-back">
+            <rect x="-38" y="295" width="18" height="80" fill="#5A3F2D" rx="9"/>
+            <circle cx="-29" cy="380" r="9" fill="#B8895C"/>
+          </g>
+          <!-- Front arm — reaches for balls -->
+          <g id="arm-front">
+            <rect x="20" y="295" width="18" height="80" fill="#6F4E37" rx="9"/>
+            <circle cx="29" cy="380" r="10" fill="#D4A574"/>
+            <!-- Grip line on hand -->
+            <path d="M 24,378 Q 29,372 34,378"
+                  fill="none" stroke="#8B5A2B" stroke-width="1" opacity="0.6"/>
+          </g>
+        </g>
+
+      </g>
+    </g>
+
+    <!-- === Overlays ======================================================= -->
+
+    <!-- Vignette -->
+    <rect x="0" y="0" width="1200" height="675" fill="url(#vignette)" pointer-events="none"/>
+
+    <!-- v19 badge -->
+    <g transform="translate(40, 40)">
+      <rect x="0" y="0" width="68" height="24" rx="4"
+            fill="rgba(255,248,231,0.10)"
+            stroke="rgba(255,248,231,0.45)" stroke-width="1"/>
+      <text x="34" y="16" font-family="monospace" font-size="11" font-weight="600"
+            fill="#FFF8E8" text-anchor="middle" letter-spacing="0.12em">v19</text>
+    </g>
+
+    <!-- Top-right brand label -->
+    <g transform="translate(1160, 50)">
+      <text x="0" y="0"  font-family="monospace" font-size="10"
+            fill="rgba(255,248,231,0.65)" text-anchor="end" letter-spacing="0.18em">PERSONA·OS</text>
+      <text x="0" y="14" font-family="monospace" font-size="9"
+            fill="rgba(255,248,231,0.35)" text-anchor="end" letter-spacing="0.12em">BALL·CLAIM·LOOP</text>
+    </g>
+
+  </svg>
+</div>
+
+<div class="meta">
+  <span><span class="dot"></span> Loop · 8.0s</span>
+  <span>3 balls claimed</span>
+  <span>Field-green palette</span>
+  <span>Hooded · no-face</span>
+  <span>Repo asset · persona-os</span>
+</div>
+
+</body>
+</html>
